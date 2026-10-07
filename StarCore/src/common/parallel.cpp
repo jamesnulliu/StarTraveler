@@ -21,10 +21,11 @@ ParallelExecutor::ParallelExecutor(unsigned threadCount)
 ParallelExecutor::~ParallelExecutor()
 {
     for (auto& worker : m_workers) {
-        worker.request_stop();
+        worker.request_stop();  // Wakes the stop_token-aware wait.
     }
-    m_wakeWorkers.notify_all();
-    // std::jthread joins on destruction.
+    // Join now: the workers use m_mutex/m_wakeWorkers, which must outlive
+    // them.
+    m_workers.clear();
 }
 
 void ParallelExecutor::run(std::size_t count, InvokeFn invoke, void* context)

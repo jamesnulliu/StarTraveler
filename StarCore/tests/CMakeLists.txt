@@ -11,6 +11,11 @@ target_link_libraries(
     Catch2::Catch2WithMain
 )
 
+# Tests feed constant axis-parallel rays (1/0 = inf is intended in slab tests)
+# and degenerate triangles; MSVC's constant propagation then reports C4723
+# "potential divide by 0" on paths that are guarded or IEEE-defined.
+target_compile_options(${TARGET_NAME} PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/wd4723>)
+
 include(Catch)
 # PRE_TEST: discover test cases when ctest runs instead of after every build.
 catch_discover_tests(${TARGET_NAME} DISCOVERY_MODE PRE_TEST)

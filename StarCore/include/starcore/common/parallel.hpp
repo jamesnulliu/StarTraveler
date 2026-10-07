@@ -57,8 +57,6 @@ private:
     void workerLoop(const std::stop_token& stopToken);
     void processIndices();
 
-    std::vector<std::jthread> m_workers;
-
     std::mutex m_mutex;
     std::condition_variable_any m_wakeWorkers;
     std::condition_variable m_jobDone;
@@ -71,6 +69,9 @@ private:
     void* m_context = nullptr;
     std::size_t m_count = 0;
     std::atomic<std::size_t> m_nextIndex{0};
+
+    // Declared last: destroyed (joined) before the synchronization members.
+    std::vector<std::jthread> m_workers;
 };
 
 }  // namespace starcore

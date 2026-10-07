@@ -4,16 +4,15 @@
 // Transform + LineShape + Stroke). Systems (renderers, serializer, editor)
 // operate on views over the components they care about.
 
-#include <array>
 #include <cstdint>
 #include <string>
-#include <string_view>
 #include <vector>
 
 #include <entt/entity/entity.hpp>
 
 #include "starcore/math/transform.hpp"
 #include "starcore/math/types.hpp"
+#include "starcore/raster/types.hpp"
 #include "starcore/scene/uuid.hpp"
 
 namespace starcore
@@ -86,35 +85,6 @@ struct MeshComponent
 // Points are in local space; shapes are projected with the camera and
 // rasterized in screen space by the algorithms in `starcore/raster`.
 
-enum class LinePattern : std::uint8_t
-{
-    Solid,
-    Dash,
-    Dot,
-};
-
-enum class LineAlgorithm : std::uint8_t
-{
-    Bresenham,
-    MidPoint,
-    Dda,
-};
-
-enum class EllipseAlgorithm : std::uint8_t
-{
-    // Sample the local-space ellipse and project it: correct under any
-    // rotation/perspective.
-    Parametric,
-    // Screen-space midpoint algorithm on the projected (axis-aligned) radii.
-    MidPoint,
-};
-
-enum class CurveType : std::uint8_t
-{
-    BSpline,
-    Bezier,
-};
-
 struct StrokeComponent
 {
     Vec4 color{1.0F};
@@ -167,6 +137,7 @@ struct PolygonShapeComponent
 /** @brief A single marker point (size/color from StrokeComponent). */
 struct PointShapeComponent
 {
+    Vec3 position{0.0F};  // Local space.
 };
 
 // Gameplay -----------------------------------------------------------------------------------------
@@ -180,55 +151,5 @@ struct PortalComponent
     Vec2 size{1.0F, 2.0F};
     Uuid linkedPortal{0};
 };
-
-// Enum <-> string (serialization, UI) -------------------------------------------------------------
-
-template <typename E>
-struct EnumNames;
-
-template <>
-struct EnumNames<LinePattern>
-{
-    static constexpr std::array kNames = {"Solid", "Dash", "Dot"};
-};
-
-template <>
-struct EnumNames<LineAlgorithm>
-{
-    static constexpr std::array kNames = {"Bresenham", "MidPoint", "DDA"};
-};
-
-template <>
-struct EnumNames<EllipseAlgorithm>
-{
-    static constexpr std::array kNames = {"Parametric", "MidPoint"};
-};
-
-template <>
-struct EnumNames<CurveType>
-{
-    static constexpr std::array kNames = {"BSpline", "Bezier"};
-};
-
-template <typename E>
-[[nodiscard]] constexpr auto enumToString(E value) -> std::string_view
-{
-    const auto index = static_cast<std::size_t>(value);
-    return index < EnumNames<E>::kNames.size() ? EnumNames<E>::kNames[index]
-                                                : "Unknown";
-}
-
-template <typename E>
-[[nodiscard]] constexpr auto enumFromString(std::string_view name, E& out)
-    -> bool
-{
-    for (std::size_t i = 0; i < EnumNames<E>::kNames.size(); ++i) {
-        if (EnumNames<E>::kNames[i] == name) {
-            out = static_cast<E>(i);
-            return true;
-        }
-    }
-    return false;
-}
 
 }  // namespace starcore

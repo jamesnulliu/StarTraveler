@@ -76,7 +76,11 @@ if(STARCORE_BUILD_RUNTIME)
     )
 endif()
 
-# Tests --------------------------------------------------------------------------------------------
+# Tests / examples ---------------------------------------------------------------------------------
 if(STARCORE_BUILD_TESTS)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tests)
+endif()
+
+if(STARCORE_BUILD_EXAMPLES)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/examples)
 endif()

@@ -4,6 +4,7 @@ cmake_minimum_required(VERSION 3.30)
 # Options (must be known before `project()`, they select vcpkg manifest features) -----------------
 option(STARCORE_BUILD_RUNTIME "Build StarCore::Runtime (window, input, Vulkan, ImGui)" ON)
 option(STARCORE_BUILD_TESTS   "Build C++ unit tests"                                 ON)
+option(STARCORE_BUILD_EXAMPLES "Build StarCore examples (e.g. starcore-render)"     ON)
 option(STARCORE_BUILD_PYTHON  "Build the Python extension module (starcore._core)"  OFF)
 include(CMakeDependentOption)
 cmake_dependent_option(

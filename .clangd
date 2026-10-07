@@ -1,0 +1,48 @@
+CompileFlags:
+  Add:
+    - -Wall
+    - -Wextra
+  Remove:
+    - -fconcepts-diagnostics-depth=*
+    - -fmodules*
+    - -fmodule-mapper*
+    - -fdeps-format*
+    - /MP
+
+Index:
+  Background: Build
+  StandardLibrary: Yes
+
+Diagnostics:
+  UnusedIncludes: None
+  MissingIncludes: None
+
+  ClangTidy:
+    Add: [
+      performance-*,
+      modernize-*,
+      clang-analyzer-*,
+      readability-*,
+    ]
+
+    Remove: [
+      readability-isolate-declaration,
+      readability-identifier-length,
+      readability-magic-numbers,
+      readability-function-cognitive-complexity,
+      modernize-avoid-c-arrays,
+      readability-math-missing-parentheses,
+      readability-uppercase-literal-suffix,
+    ]
+
+    CheckOptions:
+      readability-identifier-naming.VariableCase: aNy_CasE
+      readability-identifier-naming.ProtectedMemberCase: aNy_CasE
+      readability-identifier-naming.PrivateMemberCase: aNy_CasE
+      readability-identifier-naming.PublicMemberCase: aNy_CasE
+      readability-identifier-naming.NamespaceCase: lower_case
+      readability-identifier-naming.EnumCase: aNy_CasE
+      readability-identifier-naming.ClassCase: CamelCase
+      readability-identifier-naming.StructCase: aNy_CasE
+      readability-identifier-naming.FunctionCase: aNy_CasE
+      readability-identifier-naming.ClassMethodCase: aNy_CasE

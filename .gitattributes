@@ -1,0 +1,13 @@
+* text=auto eol=lf
+
+# Windows batch files must keep CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Binary assets
+*.png binary
+*.jpg binary
+*.hdr binary
+*.exr binary
+*.ttf binary
+*.spv binary

@@ -1,0 +1,46 @@
+{
+    "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+    "name": "startraveler",
+    "version": "0.1.0",
+    "builtin-baseline": "f451d04d496aa089e294a1a2d799a269788d47ba",
+    "dependencies": [
+        "cli11",
+        "entt",
+        "glm",
+        {
+            "name": "spdlog",
+            "default-features": false
+        },
+        "stb",
+        "yaml-cpp"
+    ],
+    "default-features": [
+        "runtime",
+        "tests"
+    ],
+    "features": {
+        "runtime": {
+            "description": "Window, input, Vulkan and ImGui runtime (StarCore::Runtime, StarTraveler)",
+            "dependencies": [
+                "glfw3",
+                {
+                    "name": "imgui",
+                    "features": [
+                        "docking-experimental",
+                        "glfw-binding",
+                        "vulkan-binding"
+                    ]
+                },
+                "vk-bootstrap",
+                "vulkan",
+                "vulkan-memory-allocator"
+            ]
+        },
+        "tests": {
+            "description": "C++ unit tests",
+            "dependencies": [
+                "catch2"
+            ]
+        }
+    }
+}

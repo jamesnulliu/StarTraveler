@@ -1,0 +1,29 @@
+# CMake build/install trees
+/build/
+/install/
+/out/
+CMakeUserPresets.json
+compile_commands.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+/dist/
+.pytest_cache/
+.ruff_cache/
+# Extension module copied into the package by editable/in-place builds
+/src/starcore/_core*.pyd
+/src/starcore/_core*.so
+
+# IDEs / tools
+.vs/
+.idea/
+.cache/
+*.user
+
+# Runtime output
+imgui.ini
+/logs/
+/renders/

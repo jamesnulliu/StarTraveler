@@ -1,6 +1,6 @@
 {
     "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
-    "name": "startraveler",
+    "name": "starcore",
     "version": "0.1.0",
     "builtin-baseline": "f451d04d496aa089e294a1a2d799a269788d47ba",
     "dependencies": [
@@ -20,7 +20,7 @@
     ],
     "features": {
         "runtime": {
-            "description": "Window, input, Vulkan and ImGui runtime (StarCore::Runtime, StarTraveler)",
+            "description": "Window, input, Vulkan and ImGui runtime (StarCore::Runtime)",
             "dependencies": [
                 "glfw3",
                 {

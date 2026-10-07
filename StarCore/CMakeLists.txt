@@ -1,14 +1,50 @@
 # ==================================================================================================
-# StarCore -- the render engine.
+# StarCore -- the render engine. Builds standalone (this is also what `pip install StarCore/`
+# drives through scikit-build-core) or as a subdirectory of a workspace (the repository root).
 #
 #   StarCore::Core     Headless: math, scene/ECS, CPU path tracer, 2D raster, serialization.
 #                      No window / GPU dependencies, so Python bindings and tests can use it.
 #   StarCore::Runtime  Window, input, Vulkan context, ImGui, texture presentation, app/layers.
+#   starcore._core     Python extension module (python/), see STARCORE_BUILD_PYTHON.
 # ==================================================================================================
 
+# Minimum required CMake version
+cmake_minimum_required(VERSION 3.30)
+
+# Options, C++ standard and vcpkg; a no-op when a workspace already included it.
+include(${CMAKE_CURRENT_LIST_DIR}/cmake/starcore-setup.cmake)
+
+# Project name and version (also the Python package version, see pyproject.toml)
+project(
+    StarCore
+    VERSION 0.1.0
+    DESCRIPTION "StarCore render engine"
+    LANGUAGES C CXX
+)
+
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# All libraries have an alias with this namespace.
+set(PROJECT_NAMESPACE "StarCore::")
+
+if(PROJECT_IS_TOP_LEVEL)
+    # All executables (tests, examples) end up in one directory per configuration.
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin)
+endif()
+
+# Compiler configurations for cpp, e.g., g++, clang++, msvc(cl), etc.:
+include(${PROJECT_SOURCE_DIR}/cmake/compilers/cxx-compiler-configs.cmake)
+
+# Libraries managed by vcpkg:
+include(${PROJECT_SOURCE_DIR}/cmake/libraries/dependencies.cmake)
+
+if(STARCORE_BUILD_TESTS)
+    enable_testing()
+endif()
+
 configure_file(
-    ${CMAKE_CURRENT_SOURCE_DIR}/include/starcore/common/version.hpp.in
-    ${CMAKE_CURRENT_BINARY_DIR}/include/starcore/common/version.hpp
+    ${PROJECT_SOURCE_DIR}/include/starcore/common/version.hpp.in
+    ${PROJECT_BINARY_DIR}/include/starcore/common/version.hpp
     @ONLY
 )
 
@@ -17,7 +53,7 @@ set(CORE_MODULES common math scene render raster)
 set(CORE_SOURCES)
 foreach(MODULE IN LISTS CORE_MODULES)
     file(GLOB_RECURSE MODULE_SOURCES CONFIGURE_DEPENDS
-        ${CMAKE_CURRENT_SOURCE_DIR}/src/${MODULE}/*.cpp)
+        ${PROJECT_SOURCE_DIR}/src/${MODULE}/*.cpp)
     list(APPEND CORE_SOURCES ${MODULE_SOURCES})
 endforeach()
 
@@ -29,8 +65,8 @@ set_target_properties(StarCoreCore PROPERTIES
     POSITION_INDEPENDENT_CODE ON
 )
 target_include_directories(StarCoreCore PUBLIC
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-    $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include>
     $<INSTALL_INTERFACE:include>
 )
 target_compile_features(StarCoreCore PUBLIC cxx_std_${STARCORE_CXX_STANDARD})
@@ -56,7 +92,7 @@ if(STARCORE_BUILD_RUNTIME)
     set(RUNTIME_SOURCES)
     foreach(MODULE IN LISTS RUNTIME_MODULES)
         file(GLOB_RECURSE MODULE_SOURCES CONFIGURE_DEPENDS
-            ${CMAKE_CURRENT_SOURCE_DIR}/src/${MODULE}/*.cpp)
+            ${PROJECT_SOURCE_DIR}/src/${MODULE}/*.cpp)
         list(APPEND RUNTIME_SOURCES ${MODULE_SOURCES})
     endforeach()
 
@@ -76,11 +112,15 @@ if(STARCORE_BUILD_RUNTIME)
     )
 endif()
 
-# Tests / examples ---------------------------------------------------------------------------------
+# Tests / examples / Python ------------------------------------------------------------------------
 if(STARCORE_BUILD_TESTS)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tests)
+    add_subdirectory(${PROJECT_SOURCE_DIR}/tests)
 endif()
 
 if(STARCORE_BUILD_EXAMPLES)
-    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/examples)
+    add_subdirectory(${PROJECT_SOURCE_DIR}/examples)
+endif()
+
+if(STARCORE_BUILD_PYTHON)
+    add_subdirectory(${PROJECT_SOURCE_DIR}/python)
 endif()

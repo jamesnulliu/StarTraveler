@@ -1,7 +1,8 @@
-# CMake build/install trees
+# CMake build/install trees (StarCore/build: scikit-build-core)
 /build/
 /install/
 /out/
+/StarCore/build/
 CMakeUserPresets.json
 compile_commands.json
 
@@ -10,12 +11,13 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 .venv/
-/dist/
+dist/
 .pytest_cache/
 .ruff_cache/
-# Extension module copied into the package by editable/in-place builds
-/src/starcore/_core*.pyd
-/src/starcore/_core*.so
+# Extension module and stub copied into the package by in-tree CMake builds
+/StarCore/python/starcore/_core*.pyd
+/StarCore/python/starcore/_core*.so
+/StarCore/python/starcore/_core.pyi
 
 # IDEs / tools
 .vs/

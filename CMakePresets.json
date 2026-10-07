@@ -58,6 +58,16 @@
             }
         },
         {
+            "name": "msvc-python",
+            "displayName": "MSVC + Python bindings (in-tree, uses .venv)",
+            "description": "Builds starcore._core into StarCore/python/starcore for `pytest` without installing",
+            "inherits": "msvc",
+            "cacheVariables": {
+                "STARCORE_BUILD_PYTHON": "ON",
+                "Python_EXECUTABLE": "${sourceDir}/.venv/Scripts/python.exe"
+            }
+        },
+        {
             "name": "msvc-vs2022",
             "displayName": "MSVC - Visual Studio 2022 (MSBuild)",
             "inherits": "msvc",
@@ -110,6 +120,7 @@
         { "name": "msvc-debug",          "configurePreset": "msvc",        "configuration": "Debug" },
         { "name": "msvc-release",        "configurePreset": "msvc",        "configuration": "Release" },
         { "name": "msvc-relwithdebinfo", "configurePreset": "msvc",        "configuration": "RelWithDebInfo" },
+        { "name": "msvc-python-release", "configurePreset": "msvc-python", "configuration": "Release" },
         { "name": "msvc-vs2022-debug",   "configurePreset": "msvc-vs2022", "configuration": "Debug" },
         { "name": "msvc-vs2022-release", "configurePreset": "msvc-vs2022", "configuration": "Release" },
         { "name": "msvc-ninja-debug",    "configurePreset": "msvc-ninja",  "configuration": "Debug" },

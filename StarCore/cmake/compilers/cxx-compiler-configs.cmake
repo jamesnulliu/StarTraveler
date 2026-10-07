@@ -1,39 +1,30 @@
 # ==================================================================================================
 # @file cxx-compiler-configs.cmake
-# @brief C++ standard and compiler/linker options for StarTraveler targets.
+# @brief Compiler/linker options for first-party targets (StarCore and the projects built on it).
 #
 # Options are NOT appended to global CMAKE_CXX_FLAGS; they live on the INTERFACE target
 # `${PROJECT_NAMESPACE}CompileOptions`, which every first-party target links PRIVATE-ly.
-# Third-party code (vcpkg ports, imgui, ...) is therefore not affected by our warning level.
+# Third-party code (vcpkg ports, imgui, nanobind, ...) is therefore not affected by our warning
+# level. The C++ standard itself is set in `../starcore-setup.cmake`.
 #
 # @note Values SHOULD be set BEFORE including this file:
-#         - `STARCORE_CXX_STANDARD`: 23 (default) or 26 (experimental: MSVC maps it to
-#           /std:c++latest; C++26 library features must be guarded by feature-test macros).
+#         - `PROJECT_NAMESPACE`: Namespace of the alias target, e.g. "StarCore::".
 #         - `STARCORE_WARNINGS_AS_ERRORS`: Treat warnings as errors. Default: OFF.
 #         - `STACK_SIZE`: Stack size (bytes) of executables. Default: 8388608 (8 MiB).
 #         - `STDOUT_IS_TERMINAL`: Colored diagnostics. Default: OFF.
 # ==================================================================================================
 
+include_guard(GLOBAL)
 include(${CMAKE_CURRENT_LIST_DIR}/../utils/common.cmake)
 
 set_default_values(
-    STARCORE_CXX_STANDARD         23
     STARCORE_WARNINGS_AS_ERRORS   OFF
     STACK_SIZE                    8388608
-    # Header units / C++20 modules are not used (yet); skip dependency scanning.
-    CMAKE_CXX_SCAN_FOR_MODULES    OFF
+    STDOUT_IS_TERMINAL            OFF
 )
 
-if(NOT STARCORE_CXX_STANDARD MATCHES "^(23|26)$")
-    log_fatal("STARCORE_CXX_STANDARD must be 23 or 26, got: \"${STARCORE_CXX_STANDARD}\"")
-endif()
-
-set(CMAKE_CXX_STANDARD          ${STARCORE_CXX_STANDARD})
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS        OFF)
-
 log_info("C++ compiler: ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
-log_info("STARCORE_CXX_STANDARD: ${STARCORE_CXX_STANDARD}")
+log_info("C++ standard: ${CMAKE_CXX_STANDARD}")
 log_info("STARCORE_WARNINGS_AS_ERRORS: ${STARCORE_WARNINGS_AS_ERRORS}")
 log_info("STACK_SIZE: ${STACK_SIZE}")
 
@@ -78,10 +69,9 @@ target_compile_definitions(${_OPTIONS_TARGET} INTERFACE
 )
 
 if(STDOUT_IS_TERMINAL)
-    add_compile_options(
+    target_compile_options(${_OPTIONS_TARGET} INTERFACE
         $<$<CXX_COMPILER_ID:GNU>:-fdiagnostics-color=always>
         $<$<CXX_COMPILER_ID:Clang>:-fcolor-diagnostics>
-        $<$<CXX_COMPILER_ID:MSVC>:/FC>
     )
 endif()
 

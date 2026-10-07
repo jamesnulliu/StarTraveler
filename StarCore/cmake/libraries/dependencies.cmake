@@ -4,9 +4,10 @@
 #
 # @note Values MUST be set BEFORE including this file:
 #         - `STARCORE_BUILD_RUNTIME`, `STARCORE_BUILD_TESTS`: Which optional parts are built.
-#           They must match the vcpkg manifest features selected in the root CMakeLists.txt.
+#           They select the vcpkg manifest features, see `../starcore-setup.cmake`.
 # ==================================================================================================
 
+include_guard(GLOBAL)
 include(${CMAKE_CURRENT_LIST_DIR}/../utils/common.cmake)
 
 # Core (headless) ----------------------------------------------------------------------------------

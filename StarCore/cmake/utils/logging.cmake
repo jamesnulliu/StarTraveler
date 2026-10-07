@@ -6,7 +6,7 @@
 #
 # @note Values SHOULD be set BEFORE including this file:
 #         - `STDOUT_IS_TERMINAL`: Whether stdout is a terminal (enables colors). Default: OFF.
-#         - `LOG_PREFIX`: Prefix of every log line. Default: "startraveler".
+#         - `LOG_PREFIX`: Prefix of every log line. Default: "starcore".
 # ==================================================================================================
 
 string(ASCII 27 Esc)
@@ -32,7 +32,7 @@ else()
 endif()
 
 if(NOT DEFINED LOG_PREFIX)
-    set(LOG_PREFIX "startraveler")
+    set(LOG_PREFIX "starcore")
 endif()
 
 function(log_info msg)

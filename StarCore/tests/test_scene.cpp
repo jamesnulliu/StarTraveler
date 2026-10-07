@@ -96,6 +96,28 @@ TEST_CASE("Destroying an entity destroys its children", "[scene]")
     REQUIRE(scene.entityCount() == 2);
 }
 
+TEST_CASE("copyEntity duplicates data components across scenes", "[scene]")
+{
+    Scene source;
+    Entity original = source.createEntity("Arc");
+    original.get<TransformComponent>().translation = {1.0F, 2.0F, 3.0F};
+    original.add<ArcShapeComponent>(ArcShapeComponent{2.0F, 0.5F, 1.0F});
+    original.add<StrokeComponent>(StrokeComponent{.thickness = 5});
+    Entity child = source.createEntity("Child");
+    source.setParent(child, original);
+
+    Scene target;
+    Entity copy = target.copyEntity(original);
+    REQUIRE(copy.scene() == &target);
+    REQUIRE(copy.uuid() != original.uuid());
+    REQUIRE(copy.name() == "Arc");
+    REQUIRE(copy.get<TransformComponent>().translation == Vec3{1.0F, 2.0F, 3.0F});
+    REQUIRE(copy.get<ArcShapeComponent>().radius == 2.0F);
+    REQUIRE(copy.get<StrokeComponent>().thickness == 5);
+    REQUIRE(target.childrenOf(copy).empty());  // Hierarchy is not copied.
+    REQUIRE(target.entityCount() == 1);
+}
+
 TEST_CASE("Scene YAML round-trip", "[scene][serializer]")
 {
     Scene scene;

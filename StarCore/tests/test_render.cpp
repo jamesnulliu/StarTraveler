@@ -133,6 +133,22 @@ TEST_CASE("RenderScene and closest-hit queries", "[render][trace]")
     }
 }
 
+TEST_CASE("hashRenderScene ignores non-traced changes", "[render][trace]")
+{
+    Scene scene;
+    Entity ball = makeSphereScene(scene);
+    Entity line = scene.createEntity("Line");
+    line.add<LineShapeComponent>();
+
+    const auto base = hashRenderScene(buildRenderScene(scene));
+    line.patch<LineShapeComponent>([](auto& l) { l.end.x = 5.0F; });
+    line.patch<NameComponent>([](auto& n) { n.name = "Renamed"; });
+    REQUIRE(hashRenderScene(buildRenderScene(scene)) == base);
+
+    ball.patch<SphereComponent>([](auto& s) { s.radius = 3.0F; });
+    REQUIRE(hashRenderScene(buildRenderScene(scene)) != base);
+}
+
 TEST_CASE("tracePath sees emission and sky", "[render][trace]")
 {
     Scene scene;

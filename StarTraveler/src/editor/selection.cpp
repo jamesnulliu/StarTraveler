@@ -230,9 +230,20 @@ void Selection::update(EditorContext& context,
     }
 
     // Grab the entity: it follows the mouse in the plane at the grab depth.
+    // Use the depth of the visible geometry (its handles), not of the origin,
+    // which may lie elsewhere; otherwise the shape moves faster or slower
+    // than the mouse (parallax).
     const Mat4 world = picked.worldTransform();
     const Vec3 origin = Vec3(world[3]);
-    float depth = context.camera.depthOf(origin);
+    Vec3 grabPoint = origin;
+    if (const auto points = handles(picked); !points.empty()) {
+        grabPoint = Vec3(0.0F);
+        for (const Vec3& p : points) {
+            grabPoint += p;
+        }
+        grabPoint /= static_cast<float>(points.size());
+    }
+    float depth = context.camera.depthOf(grabPoint);
     if (depth <= context.camera.nearClip()) {
         depth = context.drawDepth;
     }

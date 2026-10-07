@@ -1,14 +1,23 @@
 set(TARGET_NAME "StarTraveler")
 
-file(GLOB_RECURSE CXX_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
+# Game logic as a library, so the executable and the tests share it.
+file(GLOB_RECURSE LIB_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
+list(REMOVE_ITEM LIB_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp)
 
-add_executable(${TARGET_NAME} ${CXX_SOURCES})
+add_library(StarTravelerLib STATIC ${LIB_SOURCES})
+target_include_directories(StarTravelerLib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(
+    StarTravelerLib
+    PUBLIC
+        ${PROJECT_NAMESPACE}Runtime
+    PRIVATE
+        ${PROJECT_NAMESPACE}CompileOptions
+)
 
-target_include_directories(${TARGET_NAME} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-
+add_executable(${TARGET_NAME} ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp)
 target_link_libraries(
     ${TARGET_NAME} PRIVATE
-    ${PROJECT_NAMESPACE}Runtime
+    StarTravelerLib
     ${PROJECT_NAMESPACE}CompileOptions
     CLI11::CLI11
 )
@@ -25,3 +34,7 @@ add_custom_command(
             ${PROJECT_SOURCE_DIR}/assets $<TARGET_FILE_DIR:${TARGET_NAME}>/assets
     COMMENT "Copying assets next to ${TARGET_NAME}"
 )
+
+if(STARCORE_BUILD_TESTS)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tests)
+endif()

@@ -174,6 +174,7 @@ using Matrix4Array = nb::ndarray<nb::numpy, float, nb::shape<4, 4>>;
 using RgbaArray = nb::ndarray<nb::numpy, std::uint8_t, nb::shape<-1, -1, 4>>;
 using IdArray = nb::ndarray<nb::numpy, std::uint32_t, nb::shape<-1, -1>>;
 
+using Matrix4Input = nb::ndarray<const float, nb::shape<4, 4>, nb::c_contig, nb::device::cpu>;
 using RgbaInput = nb::ndarray<const std::uint8_t, nb::shape<-1, -1, 4>, nb::c_contig,
                               nb::device::cpu>;
 using IdInput = nb::ndarray<const std::uint32_t, nb::shape<-1, -1>, nb::c_contig,
@@ -189,6 +190,19 @@ inline auto toArray(const Mat4& matrix) -> Matrix4Array
         }
     }
     return makeArray<float, nb::shape<4, 4>>(std::move(values), {4, 4});
+}
+
+/** @brief Row-major 4x4 array -> glm matrix. */
+inline auto fromArray(const Matrix4Input& array) -> Mat4
+{
+    Mat4 matrix{1.0F};
+    for (std::size_t row = 0; row < 4; ++row) {
+        for (std::size_t column = 0; column < 4; ++column) {
+            matrix[static_cast<glm::length_t>(column)][static_cast<glm::length_t>(row)] =
+                array(row, column);
+        }
+    }
+    return matrix;
 }
 
 /** @brief RGBA8 image -> uint8 array of shape (height, width, 4). */
@@ -231,7 +245,9 @@ inline auto fromArray(const IdInput& array) -> IdImage
 }
 
 void bindMath(nb::module_& m);
+void bindAsset(nb::module_& m);  // Meshes (before the components that use them).
 void bindScene(nb::module_& m);
+void bindModel(nb::module_& m);  // Models (after the components they contain).
 void bindRender(nb::module_& m);
 void bindRaster(nb::module_& m);
 

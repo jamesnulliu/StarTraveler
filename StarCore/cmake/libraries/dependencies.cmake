@@ -16,6 +16,7 @@ find_package(EnTT     CONFIG REQUIRED)  # EnTT::EnTT
 find_package(spdlog   CONFIG REQUIRED)  # spdlog::spdlog (std::format backend)
 find_package(yaml-cpp CONFIG REQUIRED)  # yaml-cpp::yaml-cpp
 find_package(CLI11    CONFIG REQUIRED)  # CLI11::CLI11
+find_package(fastgltf CONFIG REQUIRED)  # fastgltf::fastgltf (glTF 2.0 models)
 find_package(Stb             REQUIRED)  # Stb_INCLUDE_DIR
 
 add_library(starcore_stb INTERFACE)

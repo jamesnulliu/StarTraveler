@@ -22,10 +22,7 @@ const Vec3 kSecondColor{1.0F, 0.5F, 0.0F};
 
 auto makeQuad(Vec2 size) -> MeshComponent
 {
-    const float x = size.x * 0.5F;
-    const float y = size.y * 0.5F;
-    return MeshComponent{{{-x, -y, 0}, {x, -y, 0}, {x, y, 0}, {-x, y, 0}},
-                         {0, 1, 2, 0, 2, 3}};
+    return MeshComponent{.mesh = primitives::quad(size).build()};
 }
 
 }  // namespace

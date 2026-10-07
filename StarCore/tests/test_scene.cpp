@@ -145,7 +145,8 @@ TEST_CASE("Scene YAML round-trip", "[scene][serializer]")
     scene.setParent(curve, group);
 
     Entity mesh = scene.createEntity("Triangle");
-    mesh.add<MeshComponent>(MeshComponent{{{0, 0, 0}, {1, 0, 0}, {0, 1, 0}}, {0, 1, 2}});
+    mesh.add<MeshComponent>(MeshComponent{
+        .mesh = makeMesh({{0, 0, 0}, {1, 0, 0}, {0, 1, 0}}, {0, 1, 2}).value()});
 
     const std::string yaml = serializeScene(scene);
 
@@ -171,7 +172,7 @@ TEST_CASE("Scene YAML round-trip", "[scene][serializer]")
     REQUIRE(curve2.get<TransformComponent>().translation ==
             curve.get<TransformComponent>().translation);
 
-    REQUIRE(loaded.findEntity(mesh.uuid()).get<MeshComponent>().indices.size() == 3);
+    REQUIRE(loaded.findEntity(mesh.uuid()).get<MeshComponent>().mesh->indices.size() == 3);
     REQUIRE(loaded.findEntity(group.uuid()).get<StrokeComponent>().thickness == 9);
 
     // Serializing again yields the same document.

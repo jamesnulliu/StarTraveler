@@ -64,9 +64,9 @@ auto tracePath(const RenderScene& scene, Ray ray,
             throughput /= survival;
         }
 
-        // Offset along the normal (which faces the incoming side, where the
-        // scattered ray leaves) to avoid self-intersection.
-        ray = Ray{hit->position + hit->normal * kRayOffset, direction};
+        // Offset along the geometric normal (which faces the incoming side,
+        // where the scattered ray leaves) to avoid self-intersection.
+        ray = Ray{hit->position + hit->geometricNormal * kRayOffset, direction};
     }
     return radiance;
 }

@@ -6,6 +6,7 @@
     "dependencies": [
         "cli11",
         "entt",
+        "fastgltf",
         "glm",
         {
             "name": "spdlog",

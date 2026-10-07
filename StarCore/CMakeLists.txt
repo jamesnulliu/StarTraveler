@@ -2,7 +2,8 @@
 # StarCore -- the render engine. Builds standalone (this is also what `pip install StarCore/`
 # drives through scikit-build-core) or as a subdirectory of a workspace (the repository root).
 #
-#   StarCore::Core     Headless: math, scene/ECS, CPU path tracer, 2D raster, serialization.
+#   StarCore::Core     Headless: math, assets (meshes, models), scene/ECS, CPU path tracer,
+#                      2D raster, serialization.
 #                      No window / GPU dependencies, so Python bindings and tests can use it.
 #   StarCore::Runtime  Window, input, Vulkan context, ImGui, texture presentation, app/layers.
 #   starcore._core     Python extension module (python/), see STARCORE_BUILD_PYTHON.
@@ -49,7 +50,7 @@ configure_file(
 )
 
 # StarCore::Core -----------------------------------------------------------------------------------
-set(CORE_MODULES common math scene render raster)
+set(CORE_MODULES common math asset scene render raster)
 set(CORE_SOURCES)
 foreach(MODULE IN LISTS CORE_MODULES)
     file(GLOB_RECURSE MODULE_SOURCES CONFIGURE_DEPENDS
@@ -84,6 +85,7 @@ target_link_libraries(StarCoreCore
         ${PROJECT_NAMESPACE}CompileOptions
         ${PROJECT_NAMESPACE}Stb
         yaml-cpp::yaml-cpp
+        fastgltf::fastgltf
 )
 
 # StarCore::Runtime --------------------------------------------------------------------------------

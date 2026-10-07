@@ -8,10 +8,12 @@
 
 #include <nanobind/stl/filesystem.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 #include <nanobind/typing.h>
 
+#include <starcore/asset/model.hpp>
 #include <starcore/scene/entity.hpp>
 #include <starcore/scene/serializer.hpp>
 
@@ -166,24 +168,32 @@ void bindComponents(nb::module_& m)
             .def(
                 "__init__",
                 [](MaterialComponent* self, Vec3 albedo, float roughness, float metallic,
-                   Vec3 emissionColor, float emissionPower) {
-                    new (self) MaterialComponent{albedo, roughness, metallic, emissionColor,
-                                                 emissionPower};
+                   Vec3 emissionColor, float emissionPower, float transmission, float ior,
+                   bool thinWalled) {
+                    new (self) MaterialComponent{albedo,        roughness,    metallic,
+                                                 emissionColor, emissionPower, transmission,
+                                                 ior,           thinWalled};
                 },
                 nb::kw_only(), "albedo"_a = d.albedo, "roughness"_a = d.roughness,
                 "metallic"_a = d.metallic, "emission_color"_a = d.emissionColor,
-                "emission_power"_a = d.emissionPower)
+                "emission_power"_a = d.emissionPower, "transmission"_a = d.transmission,
+                "ior"_a = d.ior, "thin_walled"_a = d.thinWalled)
             .def_rw("albedo", &MaterialComponent::albedo)
             .def_rw("roughness", &MaterialComponent::roughness)
             .def_rw("metallic", &MaterialComponent::metallic)
             .def_rw("emission_color", &MaterialComponent::emissionColor)
             .def_rw("emission_power", &MaterialComponent::emissionPower)
+            .def_rw("transmission", &MaterialComponent::transmission,
+                    "Transmitted fraction of the non-metallic part (glass).")
+            .def_rw("ior", &MaterialComponent::ior)
+            .def_rw("thin_walled", &MaterialComponent::thinWalled,
+                    "A sheet (no refraction) instead of a closed volume.")
             .def_prop_ro("emission", &MaterialComponent::emission,
                          "emission_color * emission_power")
             .def("__repr__", [](nb::handle self) {
                 return describe("Material", self,
                                 {"albedo", "roughness", "metallic", "emission_color",
-                                 "emission_power"});
+                                 "emission_power", "transmission", "ior", "thin_walled"});
             });
     }
     nb::class_<SphereComponent>(m, "Sphere", "Sphere centered at the entity origin.")
@@ -195,19 +205,25 @@ void bindComponents(nb::module_& m)
         .def("__repr__",
              [](nb::handle self) { return describe("Sphere", self, {"radius"}); });
 
-    nb::class_<MeshComponent>(m, "Mesh", "Triangle list in local space (double-sided).")
+    nb::class_<MeshComponent>(m, "Mesh", "A shared MeshData in local space (double-sided).")
         .def(
             "__init__",
-            [](MeshComponent* self, std::vector<Vec3> positions,
-               std::vector<std::uint32_t> indices) {
-                new (self) MeshComponent{std::move(positions), std::move(indices)};
+            [](MeshComponent* self, MeshHandle mesh) {
+                new (self) MeshComponent{std::move(mesh), {}};
             },
-            "positions"_a = std::vector<Vec3>{}, "indices"_a = std::vector<std::uint32_t>{})
-        .def_rw("positions", &MeshComponent::positions)
-        .def_rw("indices", &MeshComponent::indices)
-        .def("__repr__", [](const MeshComponent& mesh) {
-            return std::format("Mesh({} vertices, {} triangles)", mesh.positions.size(),
-                               mesh.indices.size() / 3);
+            "mesh"_a)
+        .def_rw("mesh", &MeshComponent::mesh)
+        .def_prop_ro(
+            "source_path",
+            [](const MeshComponent& c) -> std::optional<std::string> {
+                return c.source.empty() ? std::nullopt : std::optional(c.source.path);
+            },
+            "Model file the mesh was loaded from (None: stored inline in scene files).")
+        .def_prop_ro("source_index",
+                     [](const MeshComponent& c) { return c.source.meshIndex; })
+        .def("__repr__", [](const MeshComponent& c) {
+            return std::format("Mesh({} triangles{})", c.mesh ? c.mesh->triangleCount() : 0,
+                               c.source.empty() ? "" : ", from " + c.source.path);
         });
 
     {
@@ -546,15 +562,23 @@ void bindSceneClass(nb::module_& m)
         .def_prop_ro("version", &Scene::version,
                      "Increases whenever the scene changes (through the API).")
         .def("mark_dirty", &Scene::markDirty)
-        .def("to_yaml", [](const Scene& scene) { return serializeScene(scene); })
+        .def(
+            "to_yaml",
+            [](const Scene& scene, const std::filesystem::path& baseDirectory) {
+                return serializeScene(scene, baseDirectory);
+            },
+            "base_directory"_a = std::filesystem::path{},
+            "Scene document; model paths are written relative to `base_directory`.")
         .def(
             "load_yaml",
-            [](Scene& scene, const std::string& yaml) {
-                if (auto loaded = deserializeScene(yaml, scene); !loaded) {
+            [](Scene& scene, const std::string& yaml, const std::filesystem::path& baseDirectory,
+               AssetLibrary* assets) {
+                if (auto loaded = deserializeScene(yaml, scene, baseDirectory, assets); !loaded) {
                     throw std::runtime_error(loaded.error());
                 }
             },
-            "yaml"_a, "Replace the contents with a scene document (RuntimeError on errors).")
+            "yaml"_a, "base_directory"_a = std::filesystem::path{}, "assets"_a = nb::none(),
+            "Replace the contents with a scene document (RuntimeError on errors).")
         .def(
             "save",
             [](const Scene& scene, const std::filesystem::path& path) {
@@ -565,12 +589,31 @@ void bindSceneClass(nb::module_& m)
             "path"_a)
         .def(
             "load",
-            [](Scene& scene, const std::filesystem::path& path) {
-                if (auto loaded = loadScene(path, scene); !loaded) {
+            [](Scene& scene, const std::filesystem::path& path, AssetLibrary* assets) {
+                if (auto loaded = loadScene(path, scene, assets); !loaded) {
                     throw std::runtime_error(loaded.error());
                 }
             },
-            "path"_a);
+            "path"_a, "assets"_a = nb::none(),
+            "Load a scene file; referenced models are cached in `assets` when given.")
+        .def(
+            "instantiate",
+            [](Scene& scene, const Model& model, const std::string& sourcePath,
+               const std::optional<PyEntity>& parent) {
+                auto roots = instantiateModel(scene, model, sourcePath,
+                                              unwrapOptional(scene, parent));
+                if (!roots) {
+                    throw std::runtime_error(roots.error());
+                }
+                std::vector<PyEntity> result;
+                for (const Entity root : *roots) {
+                    result.push_back(*wrap(scene, root));
+                }
+                return result;
+            },
+            "model"_a, "source_path"_a = "", "parent"_a = nb::none(),
+            "Create entities for the model's node tree; returns the root entities. With "
+            "`source_path`, scene files reference the model file instead of copying meshes.");
 }
 
 }  // namespace

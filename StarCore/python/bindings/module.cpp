@@ -34,7 +34,9 @@ NB_MODULE(_core, m)
         "critical or off.");
 
     starcore::python::bindMath(m);
+    starcore::python::bindAsset(m);
     starcore::python::bindScene(m);
+    starcore::python::bindModel(m);
     starcore::python::bindRender(m);
     starcore::python::bindRaster(m);
 }

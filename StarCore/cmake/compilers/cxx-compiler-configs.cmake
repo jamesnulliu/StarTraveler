@@ -51,6 +51,9 @@ elseif(CMAKE_CXX_COMPILER_ID MATCHES "^(GNU|Clang|AppleClang)$")
     target_compile_options(${_OPTIONS_TARGET} INTERFACE
         -Wall -Wextra -Wpedantic -Wshadow -Wnon-virtual-dtor -Woverloaded-virtual
         -Wimplicit-fallthrough
+        # Designated initializers that rely on default member initializers
+        # (`Foo{.a = 1}`) are intended; GCC flags every omitted member.
+        -Wno-missing-field-initializers
         $<$<BOOL:${STARCORE_WARNINGS_AS_ERRORS}>:-Werror>
     )
     if(WIN32)

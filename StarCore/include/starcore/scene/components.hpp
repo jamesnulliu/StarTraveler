@@ -10,6 +10,7 @@
 
 #include <entt/entity/entity.hpp>
 
+#include "starcore/asset/mesh.hpp"
 #include "starcore/math/transform.hpp"
 #include "starcore/math/types.hpp"
 #include "starcore/raster/types.hpp"
@@ -54,13 +55,23 @@ struct HierarchyComponent
 
 // Ray-traced geometry ------------------------------------------------------------------------------
 
+/**
+ * @brief Metallic-roughness material (same parameters as glTF 2.0 with the
+ *        KHR_materials_{emissive_strength, transmission, ior, volume} extensions).
+ */
 struct MaterialComponent
 {
-    Vec3 albedo{0.8F};
-    float roughness = 1.0F;
+    Vec3 albedo{0.8F};       // Base color: diffuse albedo, or the reflectance of metals.
+    float roughness = 1.0F;  // Perceptual roughness; GGX alpha = roughness^2.
     float metallic = 0.0F;
     Vec3 emissionColor{0.0F};
     float emissionPower = 0.0F;
+    // Fraction of the non-metallic part that is transmitted (glass). A
+    // thin-walled surface is a sheet (no refraction, e.g. a window pane);
+    // otherwise the mesh encloses a volume with index of refraction `ior`.
+    float transmission = 0.0F;
+    float ior = 1.5F;
+    bool thinWalled = false;
 
     [[nodiscard]] auto emission() const -> Vec3
     {
@@ -74,11 +85,30 @@ struct SphereComponent
     float radius = 1.0F;
 };
 
-/** @brief Triangle list in local space (rendered double-sided). */
+/** @brief Where a mesh was loaded from: mesh `meshIndex` of a model file. */
+struct MeshSource
+{
+    std::string path;  // Absolute, '/' separators; empty = created in code.
+    std::uint32_t meshIndex = 0;
+
+    [[nodiscard]] auto empty() const noexcept -> bool
+    {
+        return path.empty();
+    }
+
+    auto operator==(const MeshSource&) const -> bool = default;
+};
+
+/**
+ * @brief A shared triangle mesh in local space (rendered double-sided).
+ *
+ * Meshes with a source are saved as references to their model file; meshes
+ * created in code are stored inline in scene files.
+ */
 struct MeshComponent
 {
-    std::vector<Vec3> positions;
-    std::vector<std::uint32_t> indices;
+    MeshHandle mesh;
+    MeshSource source;
 };
 
 // 2D overlay shapes --------------------------------------------------------------------------------

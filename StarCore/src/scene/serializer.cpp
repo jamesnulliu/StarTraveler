@@ -6,6 +6,7 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include "starcore/asset/model.hpp"
 #include "starcore/scene/entity.hpp"
 #include "starcore/scene/serializer.hpp"
 
@@ -100,7 +101,72 @@ auto read(const YAML::Node& node, const T& fallback) -> T
     return node ? node.as<T>() : fallback;
 }
 
-void writeEntity(YAML::Emitter& out, const Scene& scene, entt::entity entity)
+auto vec3Sequence(std::span<const Vec3> values) -> YAML::Node
+{
+    YAML::Node node(YAML::NodeType::Sequence);
+    for (const Vec3& value : values) {
+        node.push_back(value);
+    }
+    return node;
+}
+
+/** @brief State shared by the entity readers/writers of one document. */
+struct DocumentContext
+{
+    std::filesystem::path baseDirectory;  // For relative model paths.
+    AssetLibrary* assets = nullptr;
+};
+
+auto writeMesh(const MeshComponent& component, const DocumentContext& context) -> YAML::Node
+{
+    YAML::Node node;
+    if (!component.source.empty()) {
+        // A model reference: relative to the scene file when possible.
+        const std::filesystem::path model(component.source.path);
+        std::filesystem::path relative;
+        if (!context.baseDirectory.empty()) {
+            relative = model.lexically_relative(
+                std::filesystem::absolute(context.baseDirectory).lexically_normal());
+        }
+        node["Model"] = (relative.empty() ? model : relative).generic_string();
+        node["Index"] = component.source.meshIndex;
+        return node;
+    }
+    const MeshData& mesh = *component.mesh;
+    node["Positions"] = vec3Sequence(mesh.positions);
+    if (!mesh.normals.empty()) {
+        node["Normals"] = vec3Sequence(mesh.normals);
+    }
+    node["Indices"] = mesh.indices;
+    node["Indices"].SetStyle(YAML::EmitterStyle::Flow);
+    return node;
+}
+
+auto readMesh(const YAML::Node& node, const DocumentContext& context) -> MeshComponent
+{
+    if (const auto model = node["Model"]) {
+        std::filesystem::path path(model.as<std::string>());
+        if (path.is_relative() && !context.baseDirectory.empty()) {
+            path = context.baseDirectory / path;
+        }
+        const MeshSource source{normalizeAssetPath(path), read(node["Index"], 0U)};
+        auto mesh = context.assets->loadMesh(source);
+        if (!mesh) {
+            throw std::runtime_error(mesh.error());
+        }
+        return MeshComponent{.mesh = *std::move(mesh), .source = source};
+    }
+    auto mesh = makeMesh(read(node["Positions"], std::vector<Vec3>{}),
+                         read(node["Indices"], std::vector<std::uint32_t>{}),
+                         read(node["Normals"], std::vector<Vec3>{}));
+    if (!mesh) {
+        throw std::runtime_error(std::format("invalid mesh: {}", mesh.error()));
+    }
+    return MeshComponent{.mesh = *std::move(mesh)};
+}
+
+void writeEntity(YAML::Emitter& out, const Scene& scene, entt::entity entity,
+                 const DocumentContext& context)
 {
     const auto& registry = scene.registry();
     out << YAML::BeginMap;
@@ -128,6 +194,11 @@ void writeEntity(YAML::Emitter& out, const Scene& scene, entt::entity entity)
         node["Metallic"] = m->metallic;
         node["EmissionColor"] = m->emissionColor;
         node["EmissionPower"] = m->emissionPower;
+        if (m->transmission > 0.0F) {
+            node["Transmission"] = m->transmission;
+            node["Ior"] = m->ior;
+            node["ThinWalled"] = m->thinWalled;
+        }
         out << YAML::Key << "Material" << YAML::Value << node;
     }
     if (const auto* s = registry.try_get<SphereComponent>(entity)) {
@@ -135,15 +206,9 @@ void writeEntity(YAML::Emitter& out, const Scene& scene, entt::entity entity)
         node["Radius"] = s->radius;
         out << YAML::Key << "Sphere" << YAML::Value << node;
     }
-    if (const auto* mesh = registry.try_get<MeshComponent>(entity)) {
-        YAML::Node node;
-        node["Positions"] = YAML::Node(YAML::NodeType::Sequence);
-        for (const Vec3& p : mesh->positions) {
-            node["Positions"].push_back(p);
-        }
-        node["Indices"] = mesh->indices;
-        node["Indices"].SetStyle(YAML::EmitterStyle::Flow);
-        out << YAML::Key << "Mesh" << YAML::Value << node;
+    if (const auto* mesh = registry.try_get<MeshComponent>(entity);
+        mesh != nullptr && mesh->mesh) {
+        out << YAML::Key << "Mesh" << YAML::Value << writeMesh(*mesh, context);
     }
     if (const auto* s = registry.try_get<StrokeComponent>(entity)) {
         YAML::Node node;
@@ -208,7 +273,8 @@ void writeEntity(YAML::Emitter& out, const Scene& scene, entt::entity entity)
 }
 
 void readEntity(const YAML::Node& node, Scene& scene,
-                std::vector<std::pair<entt::entity, Uuid>>& parentLinks)
+                std::vector<std::pair<entt::entity, Uuid>>& parentLinks,
+                const DocumentContext& context)
 {
     const Uuid id{node["Id"].as<std::uint64_t>()};
     Entity entity = scene.createEntity(id, read<std::string>(node["Name"], "Entity"));
@@ -229,14 +295,15 @@ void readEntity(const YAML::Node& node, Scene& scene,
         material.metallic = read(m["Metallic"], material.metallic);
         material.emissionColor = read(m["EmissionColor"], material.emissionColor);
         material.emissionPower = read(m["EmissionPower"], material.emissionPower);
+        material.transmission = read(m["Transmission"], material.transmission);
+        material.ior = read(m["Ior"], material.ior);
+        material.thinWalled = read(m["ThinWalled"], material.thinWalled);
     }
     if (const auto s = node["Sphere"]) {
         entity.add<SphereComponent>(read(s["Radius"], 1.0F));
     }
     if (const auto m = node["Mesh"]) {
-        auto& mesh = entity.add<MeshComponent>();
-        mesh.positions = read(m["Positions"], std::vector<Vec3>{});
-        mesh.indices = read(m["Indices"], std::vector<std::uint32_t>{});
+        entity.add<MeshComponent>(readMesh(m, context));
     }
     if (const auto s = node["Stroke"]) {
         auto& stroke = entity.add<StrokeComponent>();
@@ -286,8 +353,10 @@ void readEntity(const YAML::Node& node, Scene& scene,
 
 }  // namespace
 
-auto serializeScene(const Scene& scene) -> std::string
+auto serializeScene(const Scene& scene, const std::filesystem::path& baseDirectory)
+    -> std::string
 {
+    const DocumentContext context{.baseDirectory = baseDirectory};
     YAML::Emitter out;
     out.SetFloatPrecision(9);  // Round-trips every float exactly.
     out << YAML::BeginMap;
@@ -308,17 +377,21 @@ auto serializeScene(const Scene& scene) -> std::string
 
     out << YAML::Key << "Entities" << YAML::Value << YAML::BeginSeq;
     for (const auto entity : ordered) {
-        writeEntity(out, scene, entity);
+        writeEntity(out, scene, entity, context);
     }
     out << YAML::EndSeq;
     out << YAML::EndMap;
     return out.c_str();
 }
 
-auto deserializeScene(std::string_view yaml, Scene& scene)
+auto deserializeScene(std::string_view yaml, Scene& scene,
+                      const std::filesystem::path& baseDirectory, AssetLibrary* assets)
     -> std::expected<void, std::string>
 {
     scene.clear();
+    AssetLibrary temporaryAssets;
+    const DocumentContext context{.baseDirectory = baseDirectory,
+                                  .assets = assets != nullptr ? assets : &temporaryAssets};
     try {
         const YAML::Node root = YAML::Load(std::string(yaml));
         if (!root["StarCoreScene"]) {
@@ -337,7 +410,7 @@ auto deserializeScene(std::string_view yaml, Scene& scene)
 
         std::vector<std::pair<entt::entity, Uuid>> parentLinks;
         for (const auto& node : root["Entities"]) {
-            readEntity(node, scene, parentLinks);
+            readEntity(node, scene, parentLinks, context);
         }
 
         // Link hierarchies without touching the (already local) transforms.
@@ -372,11 +445,11 @@ auto saveScene(const Scene& scene, const std::filesystem::path& path)
         return std::unexpected(
             std::format("cannot open \"{}\" for writing", path.string()));
     }
-    file << serializeScene(scene);
+    file << serializeScene(scene, std::filesystem::absolute(path).parent_path());
     return {};
 }
 
-auto loadScene(const std::filesystem::path& path, Scene& scene)
+auto loadScene(const std::filesystem::path& path, Scene& scene, AssetLibrary* assets)
     -> std::expected<void, std::string>
 {
     std::ifstream file(path, std::ios::binary);
@@ -386,7 +459,8 @@ auto loadScene(const std::filesystem::path& path, Scene& scene)
     }
     std::stringstream buffer;
     buffer << file.rdbuf();
-    return deserializeScene(buffer.str(), scene);
+    return deserializeScene(buffer.str(), scene, std::filesystem::absolute(path).parent_path(),
+                            assets);
 }
 
 }  // namespace starcore

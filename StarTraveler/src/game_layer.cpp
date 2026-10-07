@@ -80,22 +80,12 @@ auto componentHeader(const char* label, bool removable) -> std::pair<bool, bool>
 
 auto cubeMesh() -> MeshComponent
 {
-    MeshComponent mesh;
-    for (int i = 0; i < 8; ++i) {
-        mesh.positions.emplace_back((i & 1) != 0 ? 0.5F : -0.5F,
-                                    (i & 2) != 0 ? 0.5F : -0.5F,
-                                    (i & 4) != 0 ? 0.5F : -0.5F);
-    }
-    mesh.indices = {0, 1, 3, 0, 3, 2, 4, 6, 7, 4, 7, 5, 0, 4, 5, 0, 5, 1,
-                    2, 3, 7, 2, 7, 6, 0, 2, 6, 0, 6, 4, 1, 5, 7, 1, 7, 3};
-    return mesh;
+    return MeshComponent{.mesh = primitives::box(Vec3(0.5F)).build()};
 }
 
 auto planeMesh(float size) -> MeshComponent
 {
-    const float h = size * 0.5F;
-    return MeshComponent{{{-h, 0, -h}, {h, 0, -h}, {h, 0, h}, {-h, 0, h}},
-                         {0, 1, 2, 0, 2, 3}};
+    return MeshComponent{.mesh = primitives::plane(Vec2(size)).build()};
 }
 
 }  // namespace
@@ -128,7 +118,7 @@ void GameLayer::newScene()
 
 void GameLayer::openScene(const std::filesystem::path& path)
 {
-    if (auto loaded = loadScene(path, m_scene); !loaded) {
+    if (auto loaded = loadScene(path, m_scene, &m_assets); !loaded) {
         m_status = loaded.error();
         SC_ERROR("{}", loaded.error());
         return;
@@ -725,9 +715,14 @@ void GameLayer::drawInspectorPanel()
     }
     if (auto* mesh = entity.tryGet<MeshComponent>()) {
         const auto [open, remove] = componentHeader("Mesh", true);
-        if (open) {
-            ImGui::Text("%zu vertices, %zu triangles", mesh->positions.size(),
-                        mesh->indices.size() / 3);
+        if (open && mesh->mesh) {
+            ImGui::Text("%zu vertices, %zu triangles%s", mesh->mesh->positions.size(),
+                        mesh->mesh->triangleCount(),
+                        mesh->mesh->normals.empty() ? " (flat)" : "");
+            if (!mesh->source.empty()) {
+                ImGui::TextWrapped("From %s (mesh %u)", mesh->source.path.c_str(),
+                                   mesh->source.meshIndex);
+            }
         }
         if (remove) {
             entity.remove<MeshComponent>();

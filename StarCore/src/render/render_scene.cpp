@@ -1,6 +1,7 @@
 #include <cstddef>
 #include <span>
 #include <type_traits>
+#include <unordered_map>
 
 #include <glm/geometric.hpp>
 #include <glm/matrix.hpp>
@@ -15,6 +16,8 @@ namespace starcore
 namespace
 {
 
+constexpr std::uint32_t kNone = ~0U;
+
 auto toRenderMaterial(const MaterialComponent* material) -> RenderMaterial
 {
     RenderMaterial result;
@@ -27,15 +30,13 @@ auto toRenderMaterial(const MaterialComponent* material) -> RenderMaterial
     return result;
 }
 
-void addInstance(RenderScene& out, std::uint32_t geometryIndex,
-                 const Mat4& objectToWorld, const MaterialComponent* material,
-                 entt::entity entity)
+void addInstance(RenderScene& out, std::uint32_t geometryIndex, const Mat4& objectToWorld,
+                 const MaterialComponent* material, entt::entity entity)
 {
     RenderInstance instance;
     instance.objectToWorld = objectToWorld;
     instance.worldToObject = glm::inverse(objectToWorld);
-    instance.worldBounds =
-        out.geometries[geometryIndex].localBounds.transformed(objectToWorld);
+    instance.worldBounds = out.geometries[geometryIndex].localBounds.transformed(objectToWorld);
     instance.geometryIndex = geometryIndex;
     instance.materialIndex = static_cast<std::uint32_t>(out.materials.size());
     instance.entityId = entt::to_integral(entity);
@@ -43,7 +44,25 @@ void addInstance(RenderScene& out, std::uint32_t geometryIndex,
     out.instances.push_back(instance);
 }
 
+/** @brief The ray in an instance's object space (direction NOT renormalized: same t). */
+auto toObjectSpace(const RenderInstance& instance, const Ray& ray) -> Ray
+{
+    return {Vec3(instance.worldToObject * Vec4(ray.origin, 1.0F)),
+            Vec3(instance.worldToObject * Vec4(ray.direction, 0.0F))};
+}
+
 }  // namespace
+
+auto RenderScene::triangleCount() const -> std::size_t
+{
+    std::size_t count = 0;
+    for (const RenderGeometry& geometry : geometries) {
+        if (geometry.mesh) {
+            count += geometry.mesh->triangleCount();
+        }
+    }
+    return count;
+}
 
 auto buildRenderScene(const Scene& scene) -> RenderScene
 {
@@ -59,8 +78,7 @@ auto buildRenderScene(const Scene& scene) -> RenderScene
         .localBounds = Aabb{Vec3(-1.0F), Vec3(1.0F)},
     });
 
-    for (const auto [entity, sphere] :
-         registry.view<const SphereComponent>().each()) {
+    for (const auto [entity, sphere] : registry.view<const SphereComponent>().each()) {
         Mat4 objectToWorld = scene.worldTransform(entity);
         objectToWorld[0] *= sphere.radius;
         objectToWorld[1] *= sphere.radius;
@@ -69,42 +87,32 @@ auto buildRenderScene(const Scene& scene) -> RenderScene
                     registry.try_get<MaterialComponent>(entity), entity);
     }
 
-    for (const auto [entity, mesh] :
-         registry.view<const MeshComponent>().each()) {
-        const std::size_t triangleCount = mesh.indices.size() / 3;
-        if (triangleCount == 0 || mesh.positions.empty()) {
+    // Each MeshData becomes one geometry (BLAS), shared by all its instances.
+    std::unordered_map<const MeshData*, std::uint32_t> meshGeometries;
+    for (const auto [entity, component] : registry.view<const MeshComponent>().each()) {
+        if (!component.mesh || component.mesh->triangleCount() == 0) {
             continue;
         }
-        RenderGeometry geometry;
-        geometry.kind = GeometryKind::Triangles;
-        geometry.firstIndex = static_cast<std::uint32_t>(out.indices.size());
-        geometry.indexCount = static_cast<std::uint32_t>(triangleCount * 3);
-
-        const auto baseVertex = static_cast<std::uint32_t>(out.positions.size());
-        for (const Vec3& position : mesh.positions) {
-            out.positions.push_back(position);
-            geometry.localBounds.expand(position);
+        const auto [it, inserted] = meshGeometries.try_emplace(
+            component.mesh.get(), static_cast<std::uint32_t>(out.geometries.size()));
+        if (inserted) {
+            out.geometries.push_back(RenderGeometry{
+                .kind = GeometryKind::Triangles,
+                .mesh = component.mesh,
+                .localBounds = component.mesh->bounds,
+            });
         }
-        bool valid = true;
-        for (std::size_t i = 0; i < triangleCount * 3; ++i) {
-            if (mesh.indices[i] >= mesh.positions.size()) {
-                valid = false;
-                break;
-            }
-            out.indices.push_back(baseVertex + mesh.indices[i]);
-        }
-        if (!valid) {
-            // Drop malformed meshes instead of reading out of bounds.
-            out.indices.resize(geometry.firstIndex);
-            out.positions.resize(baseVertex);
-            continue;
-        }
-
-        const auto geometryIndex = static_cast<std::uint32_t>(out.geometries.size());
-        out.geometries.push_back(geometry);
-        addInstance(out, geometryIndex, scene.worldTransform(entity),
+        addInstance(out, it->second, scene.worldTransform(entity),
                     registry.try_get<MaterialComponent>(entity), entity);
     }
+
+    std::vector<Aabb> instanceBounds;
+    instanceBounds.reserve(out.instances.size());
+    for (const RenderInstance& instance : out.instances) {
+        instanceBounds.push_back(instance.worldBounds);
+    }
+    // Instance tests are expensive (transform + BLAS): keep TLAS leaves small.
+    out.tlas = Bvh::build(instanceBounds, {.maxLeafSize = 2});
     return out;
 }
 
@@ -145,66 +153,125 @@ private:
 auto hashRenderScene(const RenderScene& scene) -> std::uint64_t
 {
     Fnv1a hash;
-    hash.add(std::span<const Vec3>(scene.positions));
-    hash.add(std::span<const std::uint32_t>(scene.indices));
-    hash.add(std::span<const RenderGeometry>(scene.geometries));
+    for (const RenderGeometry& geometry : scene.geometries) {
+        // Meshes are immutable: their identity (plus size/bounds against
+        // address reuse) stands for their contents.
+        hash.add(geometry.kind);
+        hash.add(reinterpret_cast<std::uintptr_t>(geometry.mesh.get()));
+        hash.add(geometry.mesh ? geometry.mesh->triangleCount() : std::size_t{0});
+        hash.add(geometry.localBounds);
+    }
     hash.add(std::span<const RenderInstance>(scene.instances));
     hash.add(std::span<const RenderMaterial>(scene.materials));
     hash.add(scene.skyColor);
     return hash.value();
 }
 
-auto traceClosestHit(const RenderScene& scene, const Ray& ray, float tMin,
-                     float tMax) -> std::optional<SurfaceHit>
+auto traceClosestHit(const RenderScene& scene, const Ray& ray, float tMin, float tMax,
+                     std::uint32_t mask) -> std::optional<SurfaceHit>
 {
-    const Vec3 inverseDirection = 1.0F / ray.direction;
-    std::optional<SurfaceHit> closest;
-    Vec3 closestObjectNormal{0.0F};
+    struct Candidate
+    {
+        std::uint32_t instance = kNone;
+        std::uint32_t triangle = kNone;
+        float t = 0.0F;
+        float u = 0.0F;
+        float v = 0.0F;
+        Vec3 objectPoint{0.0F};
+    };
+    Candidate best;
 
-    for (std::uint32_t i = 0; i < scene.instances.size(); ++i) {
-        const RenderInstance& instance = scene.instances[i];
-        if (!intersectAabb(ray, inverseDirection, instance.worldBounds, tMin,
-                           tMax)) {
-            continue;
+    scene.tlas.traverse(ray, tMin, tMax, [&](std::uint32_t instanceIndex, float& closest) {
+        const RenderInstance& instance = scene.instances[instanceIndex];
+        if ((instance.mask & mask) == 0) {
+            return;
         }
-        // Object-space ray; the direction is NOT renormalized so that t is
-        // the same in both spaces.
-        const Ray local{Vec3(instance.worldToObject * Vec4(ray.origin, 1.0F)),
-                        Vec3(instance.worldToObject * Vec4(ray.direction, 0.0F))};
+        const Ray local = toObjectSpace(instance, ray);
         const RenderGeometry& geometry = scene.geometries[instance.geometryIndex];
-
         if (geometry.kind == GeometryKind::Sphere) {
-            if (const auto t = intersectSphere(local, Vec3(0.0F), 1.0F, tMin, tMax)) {
-                tMax = *t;
-                closest = SurfaceHit{.t = *t, .instanceIndex = i};
-                closestObjectNormal = local.at(*t);
+            if (const auto t = intersectSphere(local, Vec3(0.0F), 1.0F, tMin, closest)) {
+                closest = *t;
+                best = Candidate{instanceIndex, kNone, *t, 0.0F, 0.0F, local.at(*t)};
             }
-            continue;
+            return;
         }
-
-        const std::uint32_t end = geometry.firstIndex + geometry.indexCount;
-        for (std::uint32_t k = geometry.firstIndex; k < end; k += 3) {
-            const Vec3& v0 = scene.positions[scene.indices[k]];
-            const Vec3& v1 = scene.positions[scene.indices[k + 1]];
-            const Vec3& v2 = scene.positions[scene.indices[k + 2]];
-            if (const auto hit = intersectTriangle(local, v0, v1, v2, tMin, tMax)) {
-                tMax = hit->t;
-                closest = SurfaceHit{.t = hit->t, .instanceIndex = i};
-                closestObjectNormal = glm::cross(v1 - v0, v2 - v0);
+        const MeshData& mesh = *geometry.mesh;
+        mesh.bvh.traverse(local, tMin, closest, [&](std::uint32_t triangle, float& t) {
+            if (const auto hit = intersectTriangle(local, mesh.vertex(triangle, 0),
+                                                   mesh.vertex(triangle, 1),
+                                                   mesh.vertex(triangle, 2), tMin, t)) {
+                t = hit->t;
+                best = Candidate{instanceIndex, triangle, hit->t, hit->u, hit->v, Vec3(0.0F)};
             }
+        });
+    });
+
+    if (best.instance == kNone) {
+        return std::nullopt;
+    }
+
+    const RenderInstance& instance = scene.instances[best.instance];
+    const RenderGeometry& geometry = scene.geometries[instance.geometryIndex];
+    Vec3 objectGeometric = best.objectPoint;  // Unit sphere: normal = point.
+    Vec3 objectShading = best.objectPoint;
+    if (geometry.kind == GeometryKind::Triangles) {
+        const MeshData& mesh = *geometry.mesh;
+        const Vec3& v0 = mesh.vertex(best.triangle, 0);
+        objectGeometric = glm::cross(mesh.vertex(best.triangle, 1) - v0,
+                                     mesh.vertex(best.triangle, 2) - v0);
+        objectShading = objectGeometric;
+        if (!mesh.normals.empty()) {
+            const std::uint32_t* corner = &mesh.indices[std::size_t{best.triangle} * 3];
+            objectShading = (1.0F - best.u - best.v) * mesh.normals[corner[0]] +
+                            best.u * mesh.normals[corner[1]] + best.v * mesh.normals[corner[2]];
         }
     }
 
-    if (closest.has_value()) {
-        const RenderInstance& instance = scene.instances[closest->instanceIndex];
-        // Normals transform with the inverse transpose.
-        Vec3 normal = glm::normalize(
-            Mat3(glm::transpose(instance.worldToObject)) * closestObjectNormal);
-        closest->position = ray.at(closest->t);
-        closest->frontFace = glm::dot(ray.direction, normal) < 0.0F;
-        closest->normal = closest->frontFace ? normal : -normal;
+    // Normals transform with the inverse transpose.
+    const Mat3 normalMatrix = Mat3(glm::transpose(instance.worldToObject));
+    Vec3 geometric = glm::normalize(normalMatrix * objectGeometric);
+    Vec3 shading = normalMatrix * objectShading;
+    const float shadingLength = glm::length(shading);
+    shading = shadingLength > 0.0F ? shading / shadingLength : geometric;
+
+    SurfaceHit hit;
+    hit.t = best.t;
+    hit.position = ray.at(best.t);
+    hit.instanceIndex = best.instance;
+    hit.frontFace = glm::dot(ray.direction, geometric) < 0.0F;
+    if (!hit.frontFace) {
+        geometric = -geometric;
+        shading = -shading;
     }
-    return closest;
+    // Interpolated normals may face away from the ray near silhouettes.
+    if (glm::dot(shading, ray.direction) >= 0.0F) {
+        shading = geometric;
+    }
+    hit.geometricNormal = geometric;
+    hit.normal = shading;
+    return hit;
+}
+
+auto traceAnyHit(const RenderScene& scene, const Ray& ray, float tMin, float tMax,
+                 std::uint32_t mask) -> bool
+{
+    return scene.tlas.traverseAny(ray, tMin, tMax, [&](std::uint32_t instanceIndex) {
+        const RenderInstance& instance = scene.instances[instanceIndex];
+        if ((instance.mask & mask) == 0) {
+            return false;
+        }
+        const Ray local = toObjectSpace(instance, ray);
+        const RenderGeometry& geometry = scene.geometries[instance.geometryIndex];
+        if (geometry.kind == GeometryKind::Sphere) {
+            return intersectSphere(local, Vec3(0.0F), 1.0F, tMin, tMax).has_value();
+        }
+        const MeshData& mesh = *geometry.mesh;
+        return mesh.bvh.traverseAny(local, tMin, tMax, [&](std::uint32_t triangle) {
+            return intersectTriangle(local, mesh.vertex(triangle, 0), mesh.vertex(triangle, 1),
+                                     mesh.vertex(triangle, 2), tMin, tMax)
+                .has_value();
+        });
+    });
 }
 
 }  // namespace starcore

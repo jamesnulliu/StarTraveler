@@ -7,6 +7,7 @@
 #include <string>
 
 #include <starcore/app/layer.hpp>
+#include <starcore/asset/model.hpp>
 #include <starcore/common/image.hpp>
 #include <starcore/render/camera.hpp>
 #include <starcore/render/path_tracer.hpp>
@@ -99,6 +100,7 @@ private:
 
     starcore::Scene m_scene;
     std::filesystem::path m_scenePath;
+    starcore::AssetLibrary m_assets;  // Models referenced by scenes, shared across loads.
 
     starcore::Camera m_camera{45.0F, 0.1F, 1000.0F};
     starcore::FlyCameraController m_cameraController;

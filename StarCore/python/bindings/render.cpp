@@ -63,7 +63,8 @@ void bindTracer(nb::module_& m)
                             "geometries, materials).")
         .def_prop_ro("instance_count", [](const RenderScene& s) { return s.instances.size(); })
         .def_prop_ro("geometry_count", [](const RenderScene& s) { return s.geometries.size(); })
-        .def_prop_ro("triangle_count", [](const RenderScene& s) { return s.indices.size() / 3; })
+        .def_prop_ro("triangle_count", &RenderScene::triangleCount,
+                     "Triangles of the distinct meshes (BLAS), not counting instancing.")
         .def_ro("sky_color", &RenderScene::skyColor)
         .def_rw("scene_version", &RenderScene::sceneVersion)
         .def(
@@ -83,12 +84,20 @@ void bindTracer(nb::module_& m)
     nb::class_<SurfaceHit>(m, "SurfaceHit")
         .def_ro("t", &SurfaceHit::t)
         .def_ro("position", &SurfaceHit::position)
-        .def_ro("normal", &SurfaceHit::normal, "Unit normal facing the incoming ray.")
+        .def_ro("normal", &SurfaceHit::normal,
+                "Shading normal (interpolated), unit length, facing the incoming ray.")
+        .def_ro("geometric_normal", &SurfaceHit::geometricNormal,
+                "Face normal, unit length, facing the incoming ray.")
         .def_ro("front_face", &SurfaceHit::frontFace)
         .def_ro("instance_index", &SurfaceHit::instanceIndex);
 
+    m.attr("ALL_INSTANCES") = kAllInstances;
     m.def("trace_closest_hit", &traceClosestHit, "render_scene"_a, "ray"_a, "t_min"_a = 0.0F,
-          "t_max"_a = kInfinity, "Closest hit in (t_min, t_max), or None.");
+          "t_max"_a = kInfinity, "mask"_a = kAllInstances,
+          "Closest hit in (t_min, t_max) among instances whose mask intersects `mask`, or None.");
+    m.def("trace_any_hit", &traceAnyHit, "render_scene"_a, "ray"_a, "t_min"_a = 0.0F,
+          "t_max"_a = kInfinity, "mask"_a = kAllInstances,
+          "Whether anything is hit in (t_min, t_max) (shadow rays).");
 
     {
         const PathTracerSettings d{};

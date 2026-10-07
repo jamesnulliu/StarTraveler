@@ -98,13 +98,14 @@ TEST_CASE("RenderScene and closest-hit queries", "[render][trace]")
     Entity triangle = scene.createEntity("Triangle");
     triangle.get<TransformComponent>().translation = {10.0F, 0.0F, 0.0F};
     triangle.add<MeshComponent>(MeshComponent{
-        {{-1, -1, 0}, {1, -1, 0}, {0, 1, 0}}, {0, 1, 2}});
+        .mesh = makeMesh({{-1, -1, 0}, {1, -1, 0}, {0, 1, 0}}, {0, 1, 2}).value()});
 
-    Entity broken = scene.createEntity("Broken");
-    broken.add<MeshComponent>(MeshComponent{{{0, 0, 0}}, {0, 1, 2}});
+    REQUIRE_FALSE(makeMesh({{0, 0, 0}}, {0, 1, 2}).has_value());  // Index out of range.
+    Entity empty = scene.createEntity("Empty");
+    empty.add<MeshComponent>();  // No mesh: skipped.
 
     const RenderScene renderScene = buildRenderScene(scene);
-    REQUIRE(renderScene.instances.size() == 2);  // Broken mesh dropped.
+    REQUIRE(renderScene.instances.size() == 2);
     REQUIRE(renderScene.sceneVersion == scene.version());
 
     SECTION("sphere hit honors radius and non-uniform scale")

@@ -1,10 +1,12 @@
 #pragma once
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 
 #include <glm/common.hpp>
 
+#include "starcore/common/enum_names.hpp"
 #include "starcore/math/types.hpp"
 
 namespace starcore
@@ -68,6 +70,12 @@ enum class ToneMapper : std::uint8_t
     None,      // Clamp only.
     Reinhard,  // c / (1 + c)
     Aces,      // Narkowicz 2015 ACES filmic fit.
+};
+
+template <>
+struct EnumNames<ToneMapper>
+{
+    static constexpr std::array kNames = {"None", "Reinhard", "ACES"};
 };
 
 [[nodiscard]] inline auto toneMap(Vec3 color, ToneMapper mapper) -> Vec3

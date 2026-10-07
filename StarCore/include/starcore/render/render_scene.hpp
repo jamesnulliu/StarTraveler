@@ -75,6 +75,14 @@ struct RenderScene
  */
 [[nodiscard]] auto buildRenderScene(const Scene& scene) -> RenderScene;
 
+/**
+ * @brief Hash of everything that affects ray tracing (geometry, instances,
+ *        materials, sky), excluding sceneVersion. Assign it to sceneVersion
+ *        to keep accumulating while only non-traced data (2D shapes, names)
+ *        changes.
+ */
+[[nodiscard]] auto hashRenderScene(const RenderScene& scene) -> std::uint64_t;
+
 struct SurfaceHit
 {
     float t = 0.0F;

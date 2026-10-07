@@ -88,6 +88,41 @@ void Scene::destroyEntity(Entity entity)
     ++m_version;
 }
 
+namespace
+{
+
+// Data components duplicated by Scene::copyEntity (identity and hierarchy
+// are handled separately).
+using CopiedComponents =
+    ComponentList<MaterialComponent, SphereComponent, MeshComponent,
+                  StrokeComponent, LineShapeComponent, EllipseShapeComponent,
+                  ArcShapeComponent, CurveShapeComponent, PolygonShapeComponent,
+                  PointShapeComponent, PortalComponent>;
+
+template <typename... Components>
+void copyComponents(Entity source, Entity target,
+                    ComponentList<Components...> /*unused*/)
+{
+    (
+        [&] {
+            if (const auto* component = source.tryGet<Components>()) {
+                target.addOrReplace<Components>(*component);
+            }
+        }(),
+        ...);
+}
+
+}  // namespace
+
+auto Scene::copyEntity(Entity source) -> Entity
+{
+    Entity copy = createEntity(source.name());
+    copy.get<TransformComponent>() = source.get<TransformComponent>();
+    copyComponents(source, copy, CopiedComponents{});
+    ++m_version;
+    return copy;
+}
+
 void Scene::destroyRecursive(entt::entity handle)
 {
     if (const auto* hierarchy = m_registry.try_get<HierarchyComponent>(handle)) {

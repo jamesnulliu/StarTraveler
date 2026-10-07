@@ -44,6 +44,13 @@ public:
     /** @brief Destroy an entity and, recursively, its children. */
     void destroyEntity(Entity entity);
 
+    /**
+     * @brief Copy an entity (from this or another scene) into this scene
+     *        with a new id: name, local transform and every data component
+     *        (not the hierarchy; the copy is a root entity).
+     */
+    auto copyEntity(Entity source) -> Entity;
+
     /** @brief Destroy all entities and reset the environment. */
     void clear();
 

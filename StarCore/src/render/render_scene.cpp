@@ -1,3 +1,7 @@
+#include <cstddef>
+#include <span>
+#include <type_traits>
+
 #include <glm/geometric.hpp>
 #include <glm/matrix.hpp>
 
@@ -102,6 +106,52 @@ auto buildRenderScene(const Scene& scene) -> RenderScene
                     registry.try_get<MaterialComponent>(entity), entity);
     }
     return out;
+}
+
+namespace
+{
+
+/** @brief FNV-1a over the raw bytes of trivially copyable data. */
+class Fnv1a
+{
+public:
+    template <typename T>
+    void add(std::span<const T> values)
+    {
+        static_assert(std::is_trivially_copyable_v<T>);
+        const auto bytes = std::as_bytes(values);
+        for (const std::byte b : bytes) {
+            m_hash = (m_hash ^ static_cast<std::uint64_t>(b)) * 1099511628211ULL;
+        }
+    }
+
+    template <typename T>
+    void add(const T& value)
+    {
+        add(std::span<const T>(&value, 1));
+    }
+
+    [[nodiscard]] auto value() const -> std::uint64_t
+    {
+        return m_hash;
+    }
+
+private:
+    std::uint64_t m_hash = 14695981039346656037ULL;
+};
+
+}  // namespace
+
+auto hashRenderScene(const RenderScene& scene) -> std::uint64_t
+{
+    Fnv1a hash;
+    hash.add(std::span<const Vec3>(scene.positions));
+    hash.add(std::span<const std::uint32_t>(scene.indices));
+    hash.add(std::span<const RenderGeometry>(scene.geometries));
+    hash.add(std::span<const RenderInstance>(scene.instances));
+    hash.add(std::span<const RenderMaterial>(scene.materials));
+    hash.add(scene.skyColor);
+    return hash.value();
 }
 
 auto traceClosestHit(const RenderScene& scene, const Ray& ray, float tMin,

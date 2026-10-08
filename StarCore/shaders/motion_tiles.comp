@@ -1,0 +1,40 @@
+#version 460
+// Motion blur, tile pass: the largest blur (half-motion vector) in each 16x16
+// tile of the motion image.
+
+#extension GL_GOOGLE_include_directive : require
+
+#include "motion_blur.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform readonly image2D motion;
+layout(set = 0, binding = 1, rgba32f) uniform writeonly image2D tiles;
+
+layout(push_constant) uniform Params
+{
+    float shutter;
+    float maxRadius;  // Pixels.
+}
+params;
+
+void main()
+{
+    ivec2 tile = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(tile, imageSize(tiles)))) {
+        return;
+    }
+    ivec2 size = imageSize(motion);
+    ivec2 first = tile * kMotionTile;
+    ivec2 last = min(first + kMotionTile, size);
+    vec2 largest = vec2(0.0);
+    for (int y = first.y; y < last.y; ++y) {
+        for (int x = first.x; x < last.x; ++x) {
+            vec2 v = halfBlur(imageLoad(motion, ivec2(x, y)), params.shutter, params.maxRadius);
+            if (dot(v, v) > dot(largest, largest)) {
+                largest = v;
+            }
+        }
+    }
+    imageStore(tiles, tile, vec4(largest, 0.0, 0.0));
+}

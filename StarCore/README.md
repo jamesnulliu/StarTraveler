@@ -4,14 +4,15 @@ A small render engine with two frontends: C++ (`StarCore::Core`,
 `StarCore::Gpu`, `StarCore::Runtime`) and Python (the `starcore` package).
 
 - `StarCore::Core` -- headless: math, BVH, mesh/model assets (glTF), ECS scene
-  and YAML serialization, CPU path tracer, 2D raster algorithms, collision
-  detection.
+  and YAML serialization, CPU path tracer, particle system, 2D raster
+  algorithms, collision detection.
 - `StarCore::Gpu` -- headless Vulkan (context, buffers, compute and graphics
   pipelines) and `GpuRenderer`: the CPU path tracer ported to compute shaders
   with ray queries (`shaders/`), on BLAS/TLAS acceleration structures; plain
   progressive path tracing, the hybrid pipeline (rasterized first hits,
   reprojection across frames, SVGF denoising) for real time, or pure
-  rasterization (no ray tracing hardware needed).
+  rasterization (no ray tracing hardware needed); particles, bloom, motion
+  blur and a vignette on top.
 - `StarCore::Runtime` -- GLFW window, Dear ImGui, textures, application and
   layers.
 - `starcore` -- nanobind bindings of `StarCore::Core`; images are numpy arrays.

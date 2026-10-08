@@ -221,6 +221,51 @@ void Image::destroy() noexcept
     m_height = 0;
 }
 
+// Sampler -----------------------------------------------------------------------------------------
+
+Sampler::Sampler(Context& context) : m_context(&context)
+{
+    VkSamplerCreateInfo info{};
+    info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    info.magFilter = VK_FILTER_LINEAR;
+    info.minFilter = VK_FILTER_LINEAR;
+    info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    info.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    info.maxLod = 0.0F;
+    check(vkCreateSampler(context.device(), &info, nullptr, &m_sampler));
+}
+
+Sampler::~Sampler()
+{
+    destroy();
+}
+
+Sampler::Sampler(Sampler&& other) noexcept
+    : m_context(std::exchange(other.m_context, nullptr)),
+      m_sampler(std::exchange(other.m_sampler, VK_NULL_HANDLE))
+{
+}
+
+auto Sampler::operator=(Sampler&& other) noexcept -> Sampler&
+{
+    if (this != &other) {
+        destroy();
+        m_context = std::exchange(other.m_context, nullptr);
+        m_sampler = std::exchange(other.m_sampler, VK_NULL_HANDLE);
+    }
+    return *this;
+}
+
+void Sampler::destroy() noexcept
+{
+    if (m_sampler != VK_NULL_HANDLE) {
+        vkDestroySampler(m_context->device(), m_sampler, nullptr);
+    }
+    m_sampler = VK_NULL_HANDLE;
+}
+
 // Barriers ----------------------------------------------------------------------------------------
 
 void transitionImage(VkCommandBuffer commandBuffer, VkImage image, VkImageLayout oldLayout,

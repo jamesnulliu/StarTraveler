@@ -98,6 +98,11 @@ public:
     {
         return m_glassVisibility;
     }
+    /** @brief D32, reversed (near / view depth) of the primary layer. */
+    [[nodiscard]] auto depth() const noexcept -> const vulkan::Image&
+    {
+        return m_depth;
+    }
 
 private:
     void draw(VkCommandBuffer commandBuffer, VkBuffer uniforms, const GpuScene& scene,

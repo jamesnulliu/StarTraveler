@@ -213,6 +213,33 @@ struct PointShapeComponent
     Vec3 position{0.0F};  // Local space.
 };
 
+// Particles ----------------------------------------------------------------------------------------
+
+/** @brief How particles move and look over their life (see ParticleSystem). */
+struct ParticleSettings
+{
+    Vec2 lifetime{0.4F, 0.8F};  // Seconds, uniform in [x, y].
+    Vec2 speed{2.0F, 4.0F};     // Units per second, uniform in [x, y].
+    float spread = 0.15F;       // Half angle of the emission cone (radians; pi: any direction).
+    Vec2 size{0.06F, 0.0F};     // Sprite radius at birth and at death (linear in between).
+    Vec3 startColor{4.0F, 2.0F, 0.6F};  // Emitted radiance at birth...
+    Vec3 endColor{0.0F};                // ... and at death (linear in between).
+    float drag = 0.0F;                  // Fraction of the velocity lost per second.
+    Vec3 acceleration{0.0F};            // E.g. gravity.
+};
+
+/**
+ * @brief Emits particles from its entity's origin along its local -Z (e.g.
+ *        engine exhaust); particles live in world space.
+ */
+struct ParticleEmitterComponent
+{
+    ParticleSettings particles;
+    float rate = 60.0F;           // Particles per second.
+    bool inheritVelocity = true;  // Add the entity's own velocity.
+    bool enabled = true;
+};
+
 // Gameplay -----------------------------------------------------------------------------------------
 
 /**

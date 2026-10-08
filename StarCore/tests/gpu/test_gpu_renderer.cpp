@@ -895,3 +895,136 @@ TEST_CASE("GPU raster: runs without ray queries", "[gpu][raster]")
     CHECK(std::ranges::contains(
         ids.pixels(), static_cast<std::uint32_t>(entt::to_integral(test.cube.handle()))));
 }
+
+// Effects --------------------------------------------------------------------------------------------
+
+namespace
+{
+
+/**
+ * @brief Sum of the squared differences of horizontally adjacent pixels (a
+ *        step blurred over n pixels keeps its absolute sum but has 1/n of this).
+ */
+auto horizontalContrast(const ColorImage& image) -> double
+{
+    double sum = 0.0;
+    for (std::uint32_t y = 0; y < image.height(); ++y) {
+        for (std::uint32_t x = 0; x + 1 < image.width(); ++x) {
+            for (int c = 0; c < 3; ++c) {
+                const int step = channel(image.at(x + 1, y), c) - channel(image.at(x, y), c);
+                sum += step * step;
+            }
+        }
+    }
+    return sum;
+}
+
+auto countPixels(const ColorImage& image, int channelIndex) -> std::size_t
+{
+    return static_cast<std::size_t>(std::ranges::count_if(
+        image.pixels(), [&](std::uint32_t pixel) { return channel(pixel, channelIndex) > 0; }));
+}
+
+}  // namespace
+
+TEST_CASE("GPU effects: bloom spreads bright light around it", "[gpu][effects]")
+{
+    const GpuTest gpu(false);
+    Scene scene;
+    scene.environment().skyColor = Vec3(0.0F);
+    Entity sun = scene.createEntity("Sun");
+    sun.add<SphereComponent>(1.0F);  // About 12 pixels in radius.
+    sun.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(0.0F), .emissionColor = Vec3(1.0F), .emissionPower = 20.0F});
+    const RenderScene renderScene = buildRenderScene(scene);
+    const Camera camera = makeCamera(128, 96);
+    GpuRenderOptions glowing = kRaster;
+    glowing.effects.bloom = true;
+    glowing.effects.bloomStrength = 0.2F;
+    auto render = [&](const GpuRenderOptions& options) {
+        auto renderer = gpu.makeRenderer(128, 96);
+        renderer->render(renderScene, camera, {}, options);
+        return renderer->readImage();
+    };
+    const ColorImage sharp = render(kRaster);
+    const ColorImage glow = render(glowing);
+    REQUIRE(channel(sharp.at(84, 48), 0) == 0);  // Outside the sphere.
+    CHECK(channel(glow.at(84, 48), 0) > 0);
+    CHECK(channel(glow.at(84, 48), 0) > channel(glow.at(124, 48), 0));  // Fading away.
+    CHECK(channel(glow.at(64, 48), 0) == 255);
+}
+
+TEST_CASE("GPU effects: motion blur smears what moves, not what rests", "[gpu][effects]")
+{
+    const GpuTest gpu(false);
+    Scene scene;
+    unshadowedScene(scene);
+    const RenderScene renderScene = buildRenderScene(scene);
+    const Camera first = makeCamera(128, 96);
+    Camera moved = first;
+    moved.setPosition(first.position() + Vec3(1.0F, 0.0F, 0.0F));  // About 12 pixels at the ball.
+    GpuRenderOptions blurred = kRaster;
+    blurred.effects.motionBlur = true;
+    blurred.effects.shutter = 1.0F;
+    auto twoFrames = [&](const GpuRenderOptions& options, const Camera& second) {
+        auto renderer = gpu.makeRenderer(128, 96);
+        renderer->render(renderScene, first, {}, options);
+        renderer->render(renderScene, second, {}, options);
+        return renderer->readImage();
+    };
+    CHECK(meanDifference(twoFrames(kRaster, first), twoFrames(blurred, first)) == 0.0F);
+    const double sharp = horizontalContrast(twoFrames(kRaster, moved));
+    const double smeared = horizontalContrast(twoFrames(blurred, moved));
+    INFO("horizontal contrast: sharp " << sharp << ", blurred " << smeared);
+    CHECK(smeared < 0.5 * sharp);
+}
+
+TEST_CASE("GPU effects: particles glow, hide behind surfaces and streak", "[gpu][effects]")
+{
+    const GpuTest gpu(false);
+    Scene scene;  // A black ball on a black sky.
+    scene.environment().skyColor = Vec3(0.0F);
+    Entity ball = scene.createEntity("Ball");
+    ball.add<SphereComponent>(1.0F);
+    ball.add<MaterialComponent>(MaterialComponent{.albedo = Vec3(0.0F)});
+    const RenderScene renderScene = buildRenderScene(scene);
+    const Camera camera = makeCamera(128, 96);
+    auto particle = [](Vec3 position, Vec3 color, Vec3 moved = Vec3(0.0F)) {
+        return RenderParticle{.position = position,
+                              .size = 0.05F,
+                              .previousPosition = position - moved,
+                              .color = Vec4(color, 1.0F)};
+    };
+    auto render = [&](std::span<const RenderParticle> particles, const GpuRenderOptions& options) {
+        auto renderer = gpu.makeRenderer(128, 96);
+        renderer->render(renderScene, camera, {}, options, particles);
+        return renderer->readImage();
+    };
+
+    const RenderParticle still[] = {
+        particle({0.0F, 0.0F, 3.0F}, {50.0F, 0.0F, 0.0F}),   // In front of the ball.
+        particle({0.0F, 0.0F, -3.0F}, {0.0F, 50.0F, 0.0F}),  // Behind it.
+        particle({3.0F, 1.0F, 0.0F}, {0.0F, 0.0F, 50.0F}),   // Beside it.
+    };
+    const ColorImage image = render(still, kRaster);
+    const Vec2 front = *camera.worldToScreen({0.0F, 0.0F, 3.0F});
+    CHECK(channel(image.at(static_cast<std::uint32_t>(front.x), static_cast<std::uint32_t>(front.y)),
+                  0) == 255);
+    CHECK(countPixels(image, 1) == 0);
+    const Vec2 side = *camera.worldToScreen({3.0F, 1.0F, 0.0F});
+    CHECK(channel(image.at(static_cast<std::uint32_t>(side.x), static_cast<std::uint32_t>(side.y)),
+                  2) > 200);
+    // Not part of the accumulated image: a frame without them has none.
+    CHECK(countPixels(render({}, kRaster), 0) == 0);
+
+    // A particle that moved a unit since the last frame streaks (with motion blur).
+    GpuRenderOptions blurred = kRaster;
+    blurred.effects.motionBlur = true;
+    blurred.effects.shutter = 1.0F;
+    const RenderParticle moving[] = {particle({0.0F, 0.0F, 3.0F}, {50.0F, 0.0F, 0.0F},
+                                              {1.0F, 0.0F, 0.0F})};
+    const std::size_t dot = countPixels(render(std::span(still).first(1), blurred), 0);
+    const std::size_t streak = countPixels(render(moving, blurred), 0);
+    INFO("lit pixels: still " << dot << ", moving " << streak);
+    CHECK(streak > 3 * dot);
+}

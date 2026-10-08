@@ -1,0 +1,46 @@
+#version 460
+// Bloom, first downsample: the frame (radiance plus particles, times the
+// exposure) to half resolution, a 4x4 box per texel with Karis' weights
+// (1 / (1 + luminance)) so single bright pixels do not flicker into the glow.
+
+#extension GL_GOOGLE_include_directive : require
+
+#include "common.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform readonly image2D radiance;
+layout(set = 0, binding = 1, rgba16f) uniform readonly image2D particles;
+layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D target;
+
+layout(push_constant) uniform Params
+{
+    float exposure;
+    uint particles;  // Add the particle image.
+}
+params;
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(pixel, imageSize(target)))) {
+        return;
+    }
+    ivec2 last = imageSize(radiance) - 1;
+    vec3 sum = vec3(0.0);
+    float weights = 0.0;
+    for (int y = -1; y <= 2; ++y) {
+        for (int x = -1; x <= 2; ++x) {
+            ivec2 source = clamp(2 * pixel + ivec2(x, y), ivec2(0), last);
+            vec3 color = imageLoad(radiance, source).rgb;
+            if (params.particles != 0u) {
+                color += imageLoad(particles, source).rgb;
+            }
+            color *= params.exposure;
+            float weight = 1.0 / (1.0 + dot(color, vec3(0.2126, 0.7152, 0.0722)));
+            sum += color * weight;
+            weights += weight;
+        }
+    }
+    imageStore(target, pixel, vec4(sum / weights, 0.0));
+}

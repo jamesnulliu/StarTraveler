@@ -51,6 +51,8 @@ auto main(int argc, char** argv) -> int
                  "Path trace on the CPU (default: on the GPU if it supports ray queries)");
     cli.add_flag("--raster", options.raster,
                  "Start with ray tracing off: rasterize on the GPU (no rays, no shadows)");
+    cli.add_flag("--cruise", options.cruise,
+                 "Fly forward at full thrust (smoke tests, screenshots of the effects)");
     cli.add_flag("--validation", validation,
                  "Enable Vulkan validation layers (configure with STARCORE_VULKAN_VALIDATION=ON)");
     cli.add_flag("--no-vsync", noVsync, "Present without vsync");

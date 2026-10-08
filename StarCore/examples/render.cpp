@@ -41,6 +41,10 @@ struct GpuOptions
     bool temporal = true;
     starcore::Vec3 move{0.0F};  // Camera translation per frame.
     bool validation = false;
+    // Effects (EffectSettings).
+    bool bloom = false;
+    bool motionBlur = false;
+    float vignette = 0.0F;
 };
 
 /** @brief Render `frames` frames on the GPU; nullopt (logged) if it cannot. */
@@ -65,6 +69,9 @@ auto renderOnGpu([[maybe_unused]] const starcore::RenderScene& scene,
     if (gpuOptions.raster) {
         options.pipeline = starcore::GpuPipeline::Raster;
     }
+    options.effects.bloom = gpuOptions.bloom;
+    options.effects.motionBlur = gpuOptions.motionBlur;
+    options.effects.vignette = gpuOptions.vignette;
     auto context = starcore::vulkan::Context::create(
         {.applicationName = "starcore-render", .enableValidation = gpuOptions.validation});
     if (!context) {
@@ -143,8 +150,12 @@ auto main(int argc, char** argv) -> int
                    "Hybrid: Final, Noisy, Albedo, Lighting, Glass, Variance, Motion, History");
     app.add_flag("--no-spatial", noSpatial, "Hybrid: no spatial filter");
     app.add_flag("--no-temporal", noTemporal, "Hybrid: no reprojection");
-    app.add_option("--move", move, "Hybrid: camera translation per frame x y z")->expected(3);
+    app.add_option("--move", move, "GPU: camera translation per frame x y z")->expected(3);
     app.add_flag("--validation", gpuOptions.validation, "GPU: Vulkan validation layers");
+    app.add_flag("--bloom", gpuOptions.bloom, "GPU: glow around bright light");
+    app.add_flag("--motion-blur", gpuOptions.motionBlur,
+                 "GPU (hybrid, raster): blur along the motion, see --move");
+    app.add_option("--vignette", gpuOptions.vignette, "GPU: darker corners, 0-1");
     app.add_option("--camera", cameraPosition, "Camera position x y z")->expected(3);
     app.add_option("--look-at", cameraLookAt, "Camera target x y z")->expected(3);
     CLI11_PARSE(app, argc, argv);

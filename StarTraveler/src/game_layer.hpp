@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <starcore/app/layer.hpp>
 #include <starcore/asset/model.hpp>
@@ -21,6 +22,7 @@
 #include "editor/tools.hpp"
 #include "gameplay/portals.hpp"
 #include "gameplay/ship.hpp"
+#include "gameplay/space_dust.hpp"
 
 namespace startraveler
 {
@@ -37,6 +39,8 @@ struct GameOptions
     bool cpuRenderer = false;
     // Start with ray tracing off (the GPU's raster pipeline).
     bool raster = false;
+    // Fly the ship forward at full thrust (smoke tests, screenshots of the effects).
+    bool cruise = false;
 };
 
 struct RenderOptions
@@ -57,8 +61,19 @@ struct RenderOptions
     float gpuBudgetMs = 8.0F;
     // GPU: the hybrid pipeline (rasterized first hits, reprojection and
     // denoising) by default; plain path tracing converges to the reference.
-    starcore::GpuRenderOptions gpuRender{.pipeline = starcore::GpuPipeline::Hybrid};
+    // Bloom, motion blur and a vignette.
+    starcore::GpuRenderOptions gpuRender{
+        .pipeline = starcore::GpuPipeline::Hybrid,
+        .effects = {.bloom = true,
+                    .bloomStrength = 0.05F,
+                    .motionBlur = true,
+                    .shutter = 0.5F,
+                    .vignette = 0.25F},
+    };
     starcore::PathTracerSettings tracer{.fireflyClamp = 8.0F};
+    // GPU: draw particles (engine exhaust, sparks) and the space dust.
+    bool particles = true;
+    bool spaceDust = true;
 };
 
 enum class ViewMode : std::uint8_t
@@ -108,6 +123,8 @@ private:
     void buildDefaultLayoutIfNeeded();
     void handleShortcuts();
     void updateCamera();
+    /** @brief Particles (exhaust, sparks) and the space dust around the camera. */
+    void updateParticles(float deltaSeconds);
     void updateViewportSize(starcore::UVec2 size);
     void handleViewportInput();
     [[nodiscard]] auto usingGpu() const -> bool;
@@ -145,6 +162,10 @@ private:
     starcore::Entity m_ship;
     ViewMode m_viewMode = ViewMode::Pilot;
     float m_collisionFlash = 0.0F;  // Seconds left of the collision indicator.
+
+    starcore::ParticleSystem m_particles;
+    SpaceDust m_dust;
+    std::vector<starcore::RenderParticle> m_frameParticles;  // Drawn this frame.
 
     starcore::Camera m_camera{45.0F, 0.1F, 1000.0F};
     starcore::FlyCameraController m_cameraController;

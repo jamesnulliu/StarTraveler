@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <expected>
 #include <memory>
+#include <span>
 #include <string>
 
 #include <vulkan/vulkan.h>
@@ -12,6 +13,7 @@
 #include "starcore/common/image.hpp"
 #include "starcore/gpu/gpu_scene.hpp"
 #include "starcore/render/camera.hpp"
+#include "starcore/render/particles.hpp"
 #include "starcore/render/path_tracer.hpp"
 #include "starcore/render/render_scene.hpp"
 #include "starcore/vulkan/pipeline.hpp"
@@ -23,6 +25,7 @@ namespace starcore
 namespace gpu
 {
 class HybridRenderer;
+class PostProcess;
 class RasterRenderer;
 class VisibilityPass;
 }  // namespace gpu
@@ -93,11 +96,32 @@ struct DenoiserSettings
     auto operator==(const DenoiserSettings&) const -> bool = default;
 };
 
+/**
+ * @brief Image effects applied after any pipeline (all off: exactly the
+ *        tone-mapped image, as the CPU path tracer's).
+ */
+struct EffectSettings
+{
+    // Glow around bright light: blurs of growing radius mixed into the image.
+    bool bloom = false;
+    float bloomStrength = 0.06F;  // Fraction of the glow in the result.
+    // Smear along each pixel's motion over the frame, as a camera's shutter
+    // would (Hybrid and Raster: they have motion vectors).
+    bool motionBlur = false;
+    float shutter = 0.5F;   // Fraction of the frame the shutter is open.
+    float maxBlur = 48.0F;  // Pixels.
+    // Darker corners (0: none, 1: black).
+    float vignette = 0.0F;
+
+    auto operator==(const EffectSettings&) const -> bool = default;
+};
+
 struct GpuRenderOptions
 {
     GpuPipeline pipeline = GpuPipeline::PathTracing;
     DenoiserSettings denoiser;
     HybridView view = HybridView::Final;
+    EffectSettings effects;
 
     auto operator==(const GpuRenderOptions&) const -> bool = default;
 };
@@ -112,10 +136,12 @@ struct GpuRenderOptions
  * number streams), so both converge to the same image. The Hybrid pipeline
  * rasterizes the first hits, traces paths from there with the same estimator
  * and reuses samples across frames while the view moves (see
- * GpuRenderOptions). The Raster pipeline traces nothing. Each render()
- * records and submits one frame without waiting for it; at most
- * kFramesInFlight frames are queued. The output image is read by later work
- * on the same queue (the UI pass) or copied back with readImage().
+ * GpuRenderOptions). The Raster pipeline traces nothing. Every pipeline
+ * writes linear radiance; a last stage draws particles over it, applies the
+ * effects (EffectSettings) and tone maps. Each render() records and submits
+ * one frame without waiting for it; at most kFramesInFlight frames are
+ * queued. The output image is read by later work on the same queue (the UI
+ * pass) or copied back with readImage().
  *
  * The scene is uploaded incrementally: render scenes kept up to date by a
  * RenderSceneBuilder upload only the instances that changed.
@@ -155,10 +181,13 @@ public:
      * when only the camera or instance transforms change, earlier samples are
      * reprojected.
      *
+     * @param particles Drawn over the image (Hybrid and Raster: tested
+     *        against the depth of their rasterized surfaces); not accumulated.
      * @pre rayTracing() || !tracesRays(options.pipeline)
      */
     void render(const RenderScene& scene, const Camera& camera,
-                const PathTracerSettings& settings, const GpuRenderOptions& options = {});
+                const PathTracerSettings& settings, const GpuRenderOptions& options = {},
+                std::span<const RenderParticle> particles = {});
 
     [[nodiscard]] auto width() const noexcept -> std::uint32_t
     {
@@ -244,6 +273,7 @@ private:
     std::unique_ptr<gpu::VisibilityPass> m_visibility;
     std::unique_ptr<gpu::HybridRenderer> m_hybrid;
     std::unique_ptr<gpu::RasterRenderer> m_raster;
+    std::unique_ptr<gpu::PostProcess> m_post;
 
     VkCommandPool m_commandPool = VK_NULL_HANDLE;
     // Per frame slot: frame start, tracing start and end, frame end.
@@ -252,6 +282,7 @@ private:
     std::uint64_t m_frameNumber = 0;  // Submitted frames.
 
     vulkan::Image m_accumulation;  // RGBA32F: rgb = sum of samples, a = count.
+    vulkan::Image m_radiance;      // RGBA32F: the frame, linear (pipelines -> post).
     vulkan::Image m_output;        // RGBA8, tone mapped.
     vulkan::Image m_entityIds;     // R32_UINT.
 

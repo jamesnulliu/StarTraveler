@@ -1,0 +1,137 @@
+#version 460
+// Post-processing, last pass of every GPU pipeline: the frame's radiance
+// (linear, before exposure) with motion blur, the particles, bloom and a
+// vignette, tone mapped into the RGBA8 output. With every effect off it is
+// exactly the tone-mapped radiance (what the pipelines wrote before).
+
+#extension GL_GOOGLE_include_directive : require
+
+#include "common.glsl"
+#include "motion_blur.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform readonly image2D radiance;
+layout(set = 0, binding = 1, rgba16f) uniform readonly image2D particles;
+layout(set = 0, binding = 2, rgba32f) uniform readonly image2D motion;  // motion_blur.glsl
+layout(set = 0, binding = 3) uniform sampler2D bloom;  // Sum of the bloom levels.
+layout(set = 0, binding = 4, rgba8) uniform writeonly image2D outputImage;
+// Per motion tile: the largest blur nearby (motion_neighbors.comp).
+layout(set = 0, binding = 5, rgba32f) uniform readonly image2D neighborBlur;
+
+layout(push_constant) uniform Params
+{
+    float exposure;
+    uint toneMapper;
+    uint flags;
+    float bloomStrength;   // Fraction of the glow in the result.
+    float bloomScale;      // 1 / bloom levels (their sum to an average).
+    float shutter;         // Motion blur: fraction of the frame's motion.
+    float maxRadius;       // Of the blur, pixels.
+    float vignette;        // Darkening of the corners (0: none).
+}
+params;
+
+const uint kRaw = 1u;  // A debug image: clamped, not tone mapped, no effects.
+const uint kSrgb = 2u;
+const uint kParticles = 4u;
+const uint kMotionBlur = 8u;
+const uint kBloom = 16u;
+const int kBlurTaps = 15;  // Odd: the middle one is the pixel itself.
+
+/** 1 if depth a is in front of depth b (or about as far), 0 well behind it. */
+float inFront(float a, float b)
+{
+    return clamp(1.0 - (a - b) / (0.05 * min(a, b) + 1e-4), 0.0, 1.0);
+}
+
+/** How much a blur of `radius` reaching `distance` away covers there. */
+float cone(float distance, float radius)
+{
+    return clamp(1.0 - distance / radius, 0.0, 1.0);
+}
+
+float cylinder(float distance, float radius)
+{
+    return 1.0 - smoothstep(0.95 * radius, 1.05 * radius, distance);
+}
+
+/** Interleaved gradient noise (Jimenez): breaks up the banding of the taps. */
+float gradientNoise(ivec2 pixel)
+{
+    return fract(52.9829189 * fract(dot(vec2(pixel), vec2(0.06711056, 0.00583715))));
+}
+
+/**
+ * The reconstruction filter: gather along the largest blur nearby; a tap
+ * counts if its blur reaches this pixel and it is in front, if this pixel's
+ * blur reaches it and this pixel is in front, or if both are blurred alike.
+ * A cockpit at rest so neither smears into the world rushing by nor takes it
+ * in, while a moving object smears over a still background.
+ */
+vec3 motionBlur(ivec2 pixel, ivec2 size, vec3 center)
+{
+    vec2 neighborhood = imageLoad(neighborBlur, pixel / kMotionTile).xy;
+    if (length(neighborhood) < 0.5) {
+        return center;
+    }
+    vec4 motionX = imageLoad(motion, pixel);
+    float radiusX = max(length(halfBlur(motionX, params.shutter, params.maxRadius)), 0.5);
+    float weight = 1.0 / radiusX;
+    vec3 sum = center * weight;
+    float jitter = gradientNoise(pixel) - 0.5;
+    for (int i = 0; i < kBlurTaps; ++i) {
+        if (i == kBlurTaps / 2) {
+            continue;
+        }
+        float t = mix(-1.0, 1.0, (float(i) + jitter + 1.0) / float(kBlurTaps + 1));
+        ivec2 tap =
+            clamp(ivec2(floor(vec2(pixel) + 0.5 + neighborhood * t)), ivec2(0), size - 1);
+        vec4 motionY = imageLoad(motion, tap);
+        float radiusY = max(length(halfBlur(motionY, params.shutter, params.maxRadius)), 0.5);
+        float distance = length(vec2(tap - pixel));
+        float alpha = inFront(motionY.w, motionX.w) * cone(distance, radiusY) +
+                      inFront(motionX.w, motionY.w) * cone(distance, radiusX) +
+                      cylinder(distance, radiusY) * cylinder(distance, radiusX) * 2.0;
+        weight += alpha;
+        sum += alpha * imageLoad(radiance, tap).rgb;
+    }
+    return sum / weight;
+}
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(outputImage);
+    if (any(greaterThanEqual(pixel, size))) {
+        return;
+    }
+    vec3 color = imageLoad(radiance, pixel).rgb;
+    vec3 display;
+    if ((params.flags & kRaw) != 0u) {
+        display = clamp(color, 0.0, 1.0);
+    } else {
+        if ((params.flags & kMotionBlur) != 0u) {
+            color = motionBlur(pixel, size, color);
+        }
+        // Particles are drawn as streaks already.
+        if ((params.flags & kParticles) != 0u) {
+            color += imageLoad(particles, pixel).rgb;
+        }
+        color *= params.exposure;
+        vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
+        if ((params.flags & kBloom) != 0u) {
+            color = mix(color, texture(bloom, uv).rgb * params.bloomScale, params.bloomStrength);
+        }
+        if (params.vignette > 0.0) {
+            color *= 1.0 - params.vignette * smoothstep(0.25, 0.75, length(uv - 0.5));
+        }
+        display = toneMap(color, params.toneMapper);
+    }
+    if ((params.flags & kSrgb) != 0u) {
+        display = linearToSrgb(display);
+    }
+    // Quantize like packRgba8 (round half up) whatever rounding the GPU uses for UNORM stores.
+    vec3 quantized = floor(clamp(display, 0.0, 1.0) * 255.0 + 0.5);
+    imageStore(outputImage, pixel, vec4((quantized + 0.25) / 255.0, 1.0));
+}

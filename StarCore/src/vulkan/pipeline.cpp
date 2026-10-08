@@ -151,6 +151,15 @@ GraphicsPipeline::GraphicsPipeline(Context& context, const GraphicsPipelineConfi
     for (VkPipelineColorBlendAttachmentState& attachment : blendAttachments) {
         attachment.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
                                     VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+        if (config.additiveBlending) {
+            attachment.blendEnable = VK_TRUE;
+            attachment.srcColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            attachment.dstColorBlendFactor = VK_BLEND_FACTOR_ONE;
+            attachment.colorBlendOp = VK_BLEND_OP_ADD;
+            attachment.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            attachment.dstAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+            attachment.alphaBlendOp = VK_BLEND_OP_ADD;
+        }
     }
     VkPipelineColorBlendStateCreateInfo colorBlend{};
     colorBlend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
@@ -229,19 +238,31 @@ auto DescriptorWrites::uniformBuffer(std::uint32_t binding, VkBuffer buffer)
     return this->buffer(binding, buffer, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER);
 }
 
-auto DescriptorWrites::storageImage(std::uint32_t binding, VkImageView view,
-                                    VkImageLayout layout) -> DescriptorWrites&
+auto DescriptorWrites::image(std::uint32_t binding, VkImageView view, VkSampler sampler,
+                             VkImageLayout layout, VkDescriptorType type) -> DescriptorWrites&
 {
     SC_VERIFY(m_images.size() < m_images.capacity(), "DescriptorWrites capacity exceeded");
-    m_images.push_back({VK_NULL_HANDLE, view, layout});
+    m_images.push_back({sampler, view, layout});
     VkWriteDescriptorSet write{};
     write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     write.dstBinding = binding;
     write.descriptorCount = 1;
-    write.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+    write.descriptorType = type;
     write.pImageInfo = &m_images.back();
     m_writes.push_back(write);
     return *this;
+}
+
+auto DescriptorWrites::storageImage(std::uint32_t binding, VkImageView view,
+                                    VkImageLayout layout) -> DescriptorWrites&
+{
+    return image(binding, view, VK_NULL_HANDLE, layout, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE);
+}
+
+auto DescriptorWrites::sampledImage(std::uint32_t binding, VkImageView view, VkSampler sampler,
+                                    VkImageLayout layout) -> DescriptorWrites&
+{
+    return image(binding, view, sampler, layout, VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER);
 }
 
 auto DescriptorWrites::accelerationStructure(std::uint32_t binding,

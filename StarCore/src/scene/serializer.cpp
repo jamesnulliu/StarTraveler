@@ -285,6 +285,22 @@ void writeEntity(YAML::Emitter& out, const Scene& scene, entt::entity entity,
         node["LinkedPortal"] = p->linkedPortal.value();
         out << YAML::Key << "Portal" << YAML::Value << node;
     }
+    if (const auto* e = registry.try_get<ParticleEmitterComponent>(entity)) {
+        const ParticleSettings& s = e->particles;
+        YAML::Node node;
+        node["Rate"] = e->rate;
+        node["InheritVelocity"] = e->inheritVelocity;
+        node["Enabled"] = e->enabled;
+        node["Lifetime"] = s.lifetime;
+        node["Speed"] = s.speed;
+        node["Spread"] = s.spread;
+        node["Size"] = s.size;
+        node["StartColor"] = s.startColor;
+        node["EndColor"] = s.endColor;
+        node["Drag"] = s.drag;
+        node["Acceleration"] = s.acceleration;
+        out << YAML::Key << "ParticleEmitter" << YAML::Value << node;
+    }
     out << YAML::EndMap;
 }
 
@@ -374,6 +390,22 @@ void readEntity(const YAML::Node& node, Scene& scene,
         auto& portal = entity.add<PortalComponent>();
         portal.size = read(p["Size"], portal.size);
         portal.linkedPortal = Uuid{read<std::uint64_t>(p["LinkedPortal"], 0)};
+    }
+    if (const auto e = node["ParticleEmitter"]) {
+        ParticleEmitterComponent emitter;
+        ParticleSettings& s = emitter.particles;
+        emitter.rate = read(e["Rate"], emitter.rate);
+        emitter.inheritVelocity = read(e["InheritVelocity"], emitter.inheritVelocity);
+        emitter.enabled = read(e["Enabled"], emitter.enabled);
+        s.lifetime = read(e["Lifetime"], s.lifetime);
+        s.speed = read(e["Speed"], s.speed);
+        s.spread = read(e["Spread"], s.spread);
+        s.size = read(e["Size"], s.size);
+        s.startColor = read(e["StartColor"], s.startColor);
+        s.endColor = read(e["EndColor"], s.endColor);
+        s.drag = read(e["Drag"], s.drag);
+        s.acceleration = read(e["Acceleration"], s.acceleration);
+        entity.add<ParticleEmitterComponent>(emitter);
     }
 }
 

@@ -128,6 +128,30 @@ private:
     std::uint32_t m_height = 0;
 };
 
+/** @brief Bilinear sampler, coordinates clamped to the edge (no mipmaps). */
+class Sampler
+{
+public:
+    Sampler() = default;
+    explicit Sampler(Context& context);
+    ~Sampler();
+    Sampler(Sampler&& other) noexcept;
+    auto operator=(Sampler&& other) noexcept -> Sampler&;
+    Sampler(const Sampler&) = delete;
+    auto operator=(const Sampler&) -> Sampler& = delete;
+
+    [[nodiscard]] auto handle() const noexcept -> VkSampler
+    {
+        return m_sampler;
+    }
+
+private:
+    void destroy() noexcept;
+
+    Context* m_context = nullptr;
+    VkSampler m_sampler = VK_NULL_HANDLE;
+};
+
 /** @brief Layout transition of a whole image (old layout UNDEFINED discards it). */
 void transitionImage(VkCommandBuffer commandBuffer, VkImage image, VkImageLayout oldLayout,
                      VkImageLayout newLayout, VkPipelineStageFlags srcStage,

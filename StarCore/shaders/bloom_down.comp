@@ -1,0 +1,35 @@
+#version 460
+// Bloom, further downsamples: the 13-tap filter of Jimenez's "Next generation
+// post processing in Call of Duty: Advanced Warfare" (bilinear taps of the
+// previous level, a 6x6 footprint without the aliasing of a 2x2 box).
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform sampler2D source;
+layout(set = 0, binding = 1, rgba16f) uniform writeonly image2D target;
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(pixel, imageSize(target)))) {
+        return;
+    }
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(imageSize(target));
+    vec2 t = 1.0 / vec2(textureSize(source, 0));
+    vec3 a = texture(source, uv + t * vec2(-2.0, -2.0)).rgb;
+    vec3 b = texture(source, uv + t * vec2(0.0, -2.0)).rgb;
+    vec3 c = texture(source, uv + t * vec2(2.0, -2.0)).rgb;
+    vec3 d = texture(source, uv + t * vec2(-2.0, 0.0)).rgb;
+    vec3 e = texture(source, uv).rgb;
+    vec3 f = texture(source, uv + t * vec2(2.0, 0.0)).rgb;
+    vec3 g = texture(source, uv + t * vec2(-2.0, 2.0)).rgb;
+    vec3 h = texture(source, uv + t * vec2(0.0, 2.0)).rgb;
+    vec3 i = texture(source, uv + t * vec2(2.0, 2.0)).rgb;
+    vec3 j = texture(source, uv + t * vec2(-1.0, -1.0)).rgb;
+    vec3 k = texture(source, uv + t * vec2(1.0, -1.0)).rgb;
+    vec3 l = texture(source, uv + t * vec2(-1.0, 1.0)).rgb;
+    vec3 m = texture(source, uv + t * vec2(1.0, 1.0)).rgb;
+    vec3 color = e * 0.125 + (a + c + g + i) * 0.03125 + (b + d + f + h) * 0.0625 +
+                 (j + k + l + m) * 0.125;
+    imageStore(target, pixel, vec4(color, 0.0));
+}

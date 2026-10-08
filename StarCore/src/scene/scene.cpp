@@ -24,7 +24,7 @@ using TrackedComponents =
                   SphereComponent, MeshComponent, StrokeComponent,
                   LineShapeComponent, EllipseShapeComponent, ArcShapeComponent,
                   CurveShapeComponent, PolygonShapeComponent,
-                  PointShapeComponent, PortalComponent, NameComponent>;
+                  PointShapeComponent, PortalComponent, ParticleEmitterComponent, NameComponent>;
 
 template <auto Callback, typename Instance, typename... Components>
 void connectAll(entt::registry& registry, Instance& instance,
@@ -99,7 +99,7 @@ using CopiedComponents =
                   MeshComponent,
                   StrokeComponent, LineShapeComponent, EllipseShapeComponent,
                   ArcShapeComponent, CurveShapeComponent, PolygonShapeComponent,
-                  PointShapeComponent, PortalComponent>;
+                  PointShapeComponent, PortalComponent, ParticleEmitterComponent>;
 
 template <typename... Components>
 void copyComponents(Entity source, Entity target,

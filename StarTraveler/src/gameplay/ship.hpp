@@ -57,6 +57,8 @@ struct ShipInput
 struct ShipEvents
 {
     bool collided = false;
+    starcore::Vec3 contactPoint{0.0F};   // Where the hull touched (if collided).
+    starcore::Vec3 contactNormal{0.0F};  // Away from what it touched.
     bool teleported = false;
 };
 
@@ -71,8 +73,9 @@ public:
     /**
      * @brief Create the ship (a transient entity tree) at a pose: hull
      *        collider on kShipLayer, the model's "Cockpit" root on
-     *        kCockpitLayer and its "Hull" root on kShipLayer, and a small
-     *        emissive sphere lighting the cabin.
+     *        kCockpitLayer and its "Hull" root on kShipLayer, a small
+     *        emissive sphere lighting the cabin and particle emitters at the
+     *        engines (their exhaust follows the thrust).
      */
     auto spawn(starcore::Scene& scene, starcore::AssetLibrary& assets,
                const std::filesystem::path& model, starcore::Vec3 position, float yaw,

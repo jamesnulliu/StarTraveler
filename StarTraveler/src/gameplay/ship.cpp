@@ -19,6 +19,25 @@ namespace
 
 constexpr float kMaxPitch = 89.0F;
 const Vec3 kCabinLightPosition{0.0F, 0.62F, 0.55F};
+// The nozzles of cockpit.glb's engines (tools/build_cockpit.py), exhaust along +Z.
+const Vec3 kNozzles[] = {{-0.62F, -0.8F, 3.75F}, {0.62F, -0.8F, 3.75F}};
+constexpr float kIdleExhaust = 30.0F;  // Particles per second and engine.
+constexpr float kFullExhaust = 400.0F;
+
+/** @brief Hot, fast and short-lived blue exhaust. */
+auto exhaust() -> ParticleEmitterComponent
+{
+    return ParticleEmitterComponent{
+        .particles = {.lifetime = {0.25F, 0.45F},
+                      .speed = {7.0F, 10.0F},
+                      .spread = 0.08F,
+                      .size = {0.16F, 0.02F},
+                      .startColor = {1.2F, 2.4F, 6.0F},
+                      .endColor = {0.05F, 0.1F, 0.4F},
+                      .drag = 0.5F},
+        .rate = kIdleExhaust,
+    };
+}
 
 }  // namespace
 
@@ -82,6 +101,18 @@ auto ShipSystem::spawn(Scene& scene, AssetLibrary& assets, const std::filesystem
     light.add<MaterialComponent>(MaterialComponent{
         .albedo = Vec3(0.0F), .emissionColor = {1.0F, 0.9F, 0.8F}, .emissionPower = 40.0F});
     scene.setLayer(light, kCockpitLayer);
+
+    // Exhaust: emitters look down their -Z, the engines blow along the ship's +Z.
+    for (const Vec3& nozzle : kNozzles) {
+        Entity engine = scene.createEntity("Engine exhaust");
+        scene.setParent(engine, ship);
+        engine.patch<TransformComponent>([&](TransformComponent& t) {
+            t = TransformComponent{.translation = nozzle,
+                                   .rotation = glm::angleAxis(kPi, Vec3{0.0F, 1.0F, 0.0F})};
+        });
+        engine.add<ParticleEmitterComponent>(exhaust());
+        scene.setLayer(engine, kShipLayer);
+    }
     return ship;
 }
 
@@ -128,7 +159,20 @@ auto ShipSystem::update(Scene& scene, Entity ship, const PhysicsWorld& physics,
         }
     }
     events.collided = moved.collided;
+    if (moved.collided && !moved.normals.empty()) {
+        events.contactNormal = moved.normals.front();
+        events.contactPoint = moved.position - moved.normals.front() * settings.radius;
+    }
     Vec3 end = moved.position;
+
+    // Exhaust follows the forward thrust (the emitters are the ship's children).
+    const float exhaust =
+        kIdleExhaust + (kFullExhaust - kIdleExhaust) * std::max(0.0F, thrust.z) * boost;
+    for (const entt::entity child : scene.childrenOf(ship)) {
+        if (auto* emitter = scene.registry().try_get<ParticleEmitterComponent>(child)) {
+            emitter->rate = exhaust;  // Not traced: no need to bump the scene version.
+        }
+    }
 
     // Portals keep the pose relative to the portal pair.
     if (const auto crossing = PortalSystem::findCrossing(scene, start, end)) {

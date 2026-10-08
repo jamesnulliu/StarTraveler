@@ -4,7 +4,8 @@
 // the sphere lights -- but without shadows, so no ray is traced; the nearest
 // thin transmissive surface in front (the glass layer) is blended over what it
 // covers, as the preview does with its first layer. Jittered frames are
-// averaged while nothing changes (anti-aliasing), then tone mapped.
+// averaged while nothing changes (anti-aliasing); post.comp tone maps the
+// mean. Also writes the motion vectors of the nearest surface (motion blur).
 
 #extension GL_GOOGLE_include_directive : require
 
@@ -18,8 +19,16 @@ layout(set = 0, binding = 3, rg32ui) uniform readonly uimage2D visibility;
 layout(set = 0, binding = 7, rg32ui) uniform readonly uimage2D glassVisibility;
 // rgb = sum of the frames' radiance, a = frame count.
 layout(set = 0, binding = 8, rgba32f) uniform image2D accumulation;
-layout(set = 0, binding = 9, rgba8) uniform writeonly image2D outputImage;
+layout(set = 0, binding = 9, rgba32f) uniform writeonly image2D radianceImage;  // Their mean.
 layout(set = 0, binding = 10, r32ui) uniform writeonly uimage2D entityIds;
+// xy: where the surface was a frame ago minus where it is (pixels), z: its view
+// depth then, w: now (as the hybrid's).
+layout(set = 0, binding = 11, rgba32f) uniform writeonly image2D motion;
+// GpuScene::previousTransformBuffer().
+layout(set = 0, binding = 12, std430) readonly buffer PreviousTransforms
+{
+    InstanceTransform previousTransforms[];
+};
 
 /** Irradiance at a hit: shadePreview's (path.glsl) without shadows. */
 vec3 irradianceAt(SurfaceHit hit, vec3 direction)
@@ -44,9 +53,9 @@ vec3 irradianceAt(SurfaceHit hit, vec3 direction)
 }
 
 /** The hit of the camera ray with the surface of a visibility buffer texel. */
-bool surfaceHit(uvec2 ids, vec3 origin, vec3 direction, out SurfaceHit hit)
+bool surfaceHit(uvec2 ids, vec3 origin, vec3 direction, out SurfaceHit hit, out vec3 objectPoint)
 {
-    vec3 objectPoint;
+    objectPoint = vec3(0.0);
     return ids.x != 0u && reconstructHit(ids.x - 1u, ids.y, origin, direction, hit, objectPoint);
 }
 
@@ -60,10 +69,22 @@ void main()
     vec3 direction = cameraDirection(vec2(pixel) + frameData.viewport.zw);
 
     SurfaceHit primary;
-    bool hasPrimary = surfaceHit(imageLoad(visibility, pixel).xy, origin, direction, primary);
+    vec3 primaryPoint;
+    bool hasPrimary =
+        surfaceHit(imageLoad(visibility, pixel).xy, origin, direction, primary, primaryPoint);
     SurfaceHit pane;
-    bool hasPane = surfaceHit(imageLoad(glassVisibility, pixel).xy, origin, direction, pane) &&
-                   (!hasPrimary || pane.t < primary.t);
+    vec3 panePoint;
+    bool hasPane =
+        surfaceHit(imageLoad(glassVisibility, pixel).xy, origin, direction, pane, panePoint) &&
+        (!hasPrimary || pane.t < primary.t);
+    // w: the view depth (motion blur).
+    imageStore(motion, pixel,
+               hasPrimary ? vec4(screenMotion(primary.instanceIndex,
+                                              previousTransforms[primary.instanceIndex].objectToWorld,
+                                              primaryPoint)
+                                     .xyz,
+                                 primary.t * dot(direction, frameData.cameraForward.xyz))
+                          : vec4(0.0, 0.0, 0.0, kFar));
 
     vec3 radiance = frameData.skyColor.rgb;
     uint entityId = kNoEntityId;
@@ -86,15 +107,7 @@ void main()
     bool reset = (frameData.history.y & kHistoryReset) != 0u;
     vec4 accumulated = (reset ? vec4(0.0) : imageLoad(accumulation, pixel)) + vec4(radiance, 1.0);
     imageStore(accumulation, pixel, accumulated);
-
-    vec3 display =
-        toneMap(accumulated.rgb / accumulated.a * frameData.cameraRight.w, frameData.options.w);
-    if ((frameData.options.x & kFlagSrgb) != 0u) {
-        display = linearToSrgb(display);
-    }
-    // Quantize like packRgba8 (round half up) whatever rounding the GPU uses for UNORM stores.
-    vec3 quantized = floor(clamp(display, 0.0, 1.0) * 255.0 + 0.5);
-    imageStore(outputImage, pixel, vec4((quantized + 0.25) / 255.0, 1.0));
+    imageStore(radianceImage, pixel, vec4(accumulated.rgb / accumulated.a, 1.0));
     if ((frameData.options.x & kFlagWriteIds) != 0u) {
         imageStore(entityIds, pixel, uvec4(entityId));
     }

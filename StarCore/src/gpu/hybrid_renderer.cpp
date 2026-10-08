@@ -105,6 +105,11 @@ HybridRenderer::HybridRenderer(vulkan::Context& context)
 
 HybridRenderer::~HybridRenderer() = default;
 
+auto HybridRenderer::motion() const -> const vulkan::Image&
+{
+    return m_images->primaryMotion;
+}
+
 void HybridRenderer::resize(std::uint32_t width, std::uint32_t height)
 {
     m_images.reset();
@@ -152,13 +157,13 @@ void HybridRenderer::resize(std::uint32_t width, std::uint32_t height)
 
 void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& frame,
                             const GpuScene& scene, VisibilityPass& visibility,
-                            const vulkan::Image& output, const vulkan::Image& entityIds)
+                            const vulkan::Image& radiance, const vulkan::Image& entityIds)
 {
     Images& images = *m_images;
     const std::uint32_t current = m_current;
     const std::uint32_t previous = 1 - current;
-    const std::uint32_t width = output.width();
-    const std::uint32_t height = output.height();
+    const std::uint32_t width = radiance.width();
+    const std::uint32_t height = radiance.height();
     const PathTracerSettings& settings = frame.settings;
     const DenoiserSettings& denoiser = frame.options.denoiser;
     const RenderScene& renderScene = *frame.scene;
@@ -331,7 +336,7 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
             .storageImage(12, images.noisyGlass.view())
             .storageImage(13, images.frameEmission.view())
             .storageImage(14, images.primaryMotion.view())
-            .storageImage(15, output.view());
+            .storageImage(15, radiance.view());
         m_composite.bind(commandBuffer);
         m_composite.pushDescriptors(commandBuffer, writes.writes());
         vkCmdDispatch(commandBuffer, groupsX, groupsY, 1);

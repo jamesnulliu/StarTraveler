@@ -4,7 +4,7 @@
 //      transmissive surface in front of it, per pixel;
 //   2. shade (raster.comp): preview lighting without shadows, the glass
 //      blended over, averaged over jittered frames while nothing changes,
-//      tone mapped into GpuRenderer's output image.
+//      into GpuRenderer's radiance image; and motion vectors.
 
 #include <array>
 #include <cstdint>
@@ -25,7 +25,8 @@ struct RasterFrame
 {
     const RenderScene* scene = nullptr;
     const Camera* camera = nullptr;
-    PathTracerSettings settings;  // Instance mask, exposure, tone mapper, sRGB.
+    const Camera* previousCamera = nullptr;  // For motion vectors.
+    PathTracerSettings settings;             // The instance mask.
     std::uint32_t frameSlot = 0;
     // Frames averaged before this one (0: start over, sampling pixel centers).
     std::uint32_t accumulated = 0;
@@ -37,19 +38,29 @@ class RasterRenderer
 public:
     explicit RasterRenderer(vulkan::Context& context);
 
+    /** @brief (Re)create the motion image. */
+    void resize(std::uint32_t width, std::uint32_t height);
+
     /**
      * @brief Record a frame: `accumulation` (RGBA32F) sums the frames,
-     *        `output` (RGBA8) gets their mean, `entityIds` (R32UI) the
-     *        entities if asked.
+     *        `radiance` (RGBA32F) gets their mean, `entityIds` (R32UI) the
+     *        entities if asked, motion() the motion vectors.
      */
     void record(VkCommandBuffer commandBuffer, const RasterFrame& frame, const GpuScene& scene,
                 VisibilityPass& visibility, const vulkan::Image& accumulation,
-                const vulkan::Image& output, const vulkan::Image& entityIds);
+                const vulkan::Image& radiance, const vulkan::Image& entityIds);
+
+    /** @brief RGBA32F, xy: previous minus current pixel position of the surfaces. */
+    [[nodiscard]] auto motion() const noexcept -> const vulkan::Image&
+    {
+        return m_motion;
+    }
 
 private:
     vulkan::Context* m_context;
     vulkan::ComputePipeline m_shade;
     std::array<vulkan::Buffer, kFramesInFlight> m_uniforms;
+    vulkan::Image m_motion;
 };
 
 }  // namespace starcore::gpu

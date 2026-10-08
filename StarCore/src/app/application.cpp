@@ -257,7 +257,6 @@ void Application::renderFrame()
     const VkDevice device = m_vulkan->device();
 
     VkSemaphore imageAcquired = wd.FrameSemaphores[wd.SemaphoreIndex].ImageAcquiredSemaphore;
-    VkSemaphore renderComplete = wd.FrameSemaphores[wd.SemaphoreIndex].RenderCompleteSemaphore;
     const VkResult acquired = vkAcquireNextImageKHR(
         device, wd.Swapchain, UINT64_MAX, imageAcquired, VK_NULL_HANDLE, &wd.FrameIndex);
     if (acquired == VK_ERROR_OUT_OF_DATE_KHR || acquired == VK_SUBOPTIMAL_KHR) {
@@ -267,6 +266,9 @@ void Application::renderFrame()
         return;
     }
     vulkan::check(acquired);
+    // The semaphore the presentation waits on belongs to the image: presenting
+    // only lets go of it once that image is acquired again.
+    VkSemaphore renderComplete = wd.FrameSemaphores[wd.FrameIndex].RenderCompleteSemaphore;
 
     ImGui_ImplVulkanH_Frame& fd = wd.Frames[wd.FrameIndex];
     vulkan::check(vkWaitForFences(device, 1, &fd.Fence, VK_TRUE, UINT64_MAX));
@@ -316,7 +318,7 @@ void Application::presentFrame()
         return;
     }
     ImGui_ImplVulkanH_Window& wd = m_frame->window;
-    VkSemaphore renderComplete = wd.FrameSemaphores[wd.SemaphoreIndex].RenderCompleteSemaphore;
+    VkSemaphore renderComplete = wd.FrameSemaphores[wd.FrameIndex].RenderCompleteSemaphore;
     VkPresentInfoKHR info{};
     info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     info.waitSemaphoreCount = 1;

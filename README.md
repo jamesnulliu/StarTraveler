@@ -106,10 +106,16 @@ intermediate images. With `--cpu`, or on GPUs without ray queries, the CPU path
 tracer shows a noise-free preview while moving and path traces when still.
 Turning "Ray tracing" off (or `--raster`) rasterizes on the GPU instead: direct
 light without shadows or reflections, no rays at all, about 0.2 ms per frame.
+On the GPU the game adds bloom, motion blur (the cockpit stays sharp while the
+world rushes by) and a vignette, and draws particles: engine exhaust that
+follows the thrust, sparks when the hull scrapes something and space dust that
+streaks past when flying fast (panel "Effects"; particle emitters can be added
+to any entity in the inspector or with Create > Particle emitter).
 Layers (panel "Layers") control visibility, locking and which layers collide;
 the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
 
-`StarTraveler.exe [scene.yaml] [--cpu] [--raster] [--frames N --screenshot out.png] [--validation]`
+`StarTraveler.exe [scene.yaml] [--cpu] [--raster] [--cruise] [--frames N --screenshot out.png] [--validation]`
+(`--cruise` flies forward at full thrust, for screenshots of the effects).
 
 ## Engine overview
 
@@ -149,8 +155,16 @@ the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
     headlight, sphere lights) without shadows, the nearest window pane blended
     over: no rays, so it also runs on GPUs without ray tracing hardware;
     jittered frames are averaged while the view is still (anti-aliasing).
+  Every pipeline writes linear radiance; a last stage draws particles over it
+  (additive sprites, streaked along their screen motion, tested against the
+  rasterized depth), adds bloom (a downsampled chain of blurs, Jimenez's
+  filters), motion blur (McGuire et al.'s reconstruction filter over the
+  motion vectors and depths) and a vignette, and tone maps. With every effect
+  off the image is exactly the tone-mapped one, as the CPU's.
   `starcore-render scene.yaml --gpu` (or `--hybrid`, with `--move`, `--view`,
-  or `--raster`) renders offscreen.
+  or `--raster`; `--bloom`, `--motion-blur`, `--vignette`) renders offscreen.
+- **Particles**: a CPU particle system (emitter components spreading their
+  particles along the path they moved, bursts), drawn by the GPU renderer.
 - **2D raster**: Bresenham/midpoint/DDA lines, midpoint ellipses, Bezier and
   B-spline curves, Cohen-Sutherland / midpoint-subdivision / Sutherland-Hodgman
   clipping, scan-line and flood fill -- the algorithms of the original drawing

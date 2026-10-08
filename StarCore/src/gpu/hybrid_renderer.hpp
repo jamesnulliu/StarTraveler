@@ -7,8 +7,8 @@
 //      ids, write their guides and motion vectors, trace paths from them;
 //   3. temporal (temporal.comp, per layer): reproject and accumulate;
 //   4. a-trous (atrous.comp): the SVGF spatial filter, a few iterations;
-//   5. composite (composite.comp): lighting x albedo + emission + glass, tone
-//      mapped into GpuRenderer's output image.
+//   5. composite (composite.comp): lighting x albedo + emission + glass into
+//      GpuRenderer's radiance image.
 
 #include <array>
 #include <cstdint>
@@ -54,10 +54,13 @@ public:
     /** @brief (Re)create the images; the next frame must reset. Waits for nothing. */
     void resize(std::uint32_t width, std::uint32_t height);
 
-    /** @brief Record a frame writing `output` (RGBA8) and, if asked, `entityIds`. */
+    /** @brief Record a frame writing `radiance` (RGBA32F) and, if asked, `entityIds`. */
     void record(VkCommandBuffer commandBuffer, const HybridFrame& frame, const GpuScene& scene,
-                VisibilityPass& visibility, const vulkan::Image& output,
+                VisibilityPass& visibility, const vulkan::Image& radiance,
                 const vulkan::Image& entityIds);
+
+    /** @brief RGBA32F, xy: previous minus current pixel position of the primary surfaces. */
+    [[nodiscard]] auto motion() const -> const vulkan::Image&;
 
 private:
     struct Images;

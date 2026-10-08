@@ -1,7 +1,7 @@
 #version 460
 // Hybrid renderer, composite: primary lighting x albedo + emission + glass
-// layer, tone mapped into the RGBA8 output (as path_trace.comp), or a debug
-// view of one of the intermediate images.
+// layer into the radiance image (tone mapped by post.comp), or a debug view
+// of one of the intermediate images (raw ones: post.comp only clamps them).
 
 #extension GL_GOOGLE_include_directive : require
 
@@ -20,7 +20,7 @@ layout(set = 0, binding = 11, rgba32f) uniform readonly image2D noisyPrimary;
 layout(set = 0, binding = 12, rgba32f) uniform readonly image2D noisyGlass;
 layout(set = 0, binding = 13, rgba16f) uniform readonly image2D frameEmission;
 layout(set = 0, binding = 14, rgba32f) uniform readonly image2D primaryMotion;
-layout(set = 0, binding = 15, rgba8) uniform writeonly image2D outputImage;
+layout(set = 0, binding = 15, rgba32f) uniform writeonly image2D radianceImage;
 
 // HybridView.
 const uint kViewFinal = 0u;
@@ -44,15 +44,13 @@ void main()
     vec3 radiance =
         demodulationAlbedo(surfaceAlbedo) * lighting.rgb + imageLoad(emission, pixel).rgb + glass;
 
-    bool toneMapped = true;
     switch (frameData.history.z) {
     case kViewNoisy:
         radiance = imageLoad(noisyPrimary, pixel).rgb + imageLoad(frameEmission, pixel).rgb +
                    imageLoad(noisyGlass, pixel).rgb;
         break;
-    case kViewAlbedo:
+    case kViewAlbedo:  // Raw.
         radiance = surfaceAlbedo;
-        toneMapped = false;
         break;
     case kViewLighting:
         radiance = lighting.rgb;
@@ -60,30 +58,19 @@ void main()
     case kViewGlass:
         radiance = glass;
         break;
-    case kViewVariance:
+    case kViewVariance:  // Raw.
         radiance = vec3(sqrt(lighting.a) / max(1e-4, luminance(lighting.rgb)));
-        toneMapped = false;
         break;
-    case kViewMotion:
+    case kViewMotion:  // Raw.
         radiance = vec3(abs(imageLoad(primaryMotion, pixel).xy) / 8.0, 0.0);
-        toneMapped = false;
         break;
-    case kViewHistory: {
+    case kViewHistory: {  // Raw.
         float cap = float(max(frameData.history.x, 64u));
         radiance = vec3(imageLoad(primaryHistory, pixel).a / cap);
-        toneMapped = false;
         break;
     }
     default:
         break;
     }
-
-    vec3 display = toneMapped ? toneMap(radiance * frameData.cameraRight.w, frameData.options.w)
-                              : clamp(radiance, 0.0, 1.0);
-    if ((frameData.options.x & kFlagSrgb) != 0u) {
-        display = linearToSrgb(display);
-    }
-    // Quantize like packRgba8 (round half up) whatever rounding the GPU uses for UNORM stores.
-    vec3 quantized = floor(clamp(display, 0.0, 1.0) * 255.0 + 0.5);
-    imageStore(outputImage, pixel, vec4((quantized + 0.25) / 255.0, 1.0));
+    imageStore(radianceImage, pixel, vec4(radiance, 1.0));
 }

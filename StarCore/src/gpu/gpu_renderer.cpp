@@ -7,6 +7,7 @@
 #include <glm/trigonometric.hpp>
 
 #include "hybrid_renderer.hpp"
+#include "post_process.hpp"
 #include "raster_renderer.hpp"
 #include "rasterization.hpp"
 #include "starcore/common/assert.hpp"
@@ -29,7 +30,6 @@ constexpr std::uint32_t kWorkgroupSize = 8;  // local_size of path_trace.comp.
 // path_trace.comp flags.
 constexpr std::uint32_t kFlagPreview = 1U;
 constexpr std::uint32_t kFlagNextEvent = 2U;
-constexpr std::uint32_t kFlagSrgb = 4U;
 constexpr std::uint32_t kFlagWriteIds = 8U;
 
 // Timestamps per frame slot.
@@ -42,13 +42,13 @@ constexpr std::uint32_t kQueryFrameEnd = 3;
 /** @brief Push constants of path_trace.comp. */
 struct PathTraceParams
 {
-    Vec4 cameraPosition;  // w: exposure
-    Vec4 cameraForward;   // w: firefly clamp
-    Vec4 cameraRight;     // right * aspect * tan(fov / 2)
-    Vec4 cameraUp;        // up * tan(fov / 2)
+    Vec4 cameraPosition;
+    Vec4 cameraForward;  // w: firefly clamp
+    Vec4 cameraRight;    // right * aspect * tan(fov / 2)
+    Vec4 cameraUp;       // up * tan(fov / 2)
     Vec4 skyColor;
     std::uint32_t frame[4];    // frame index, seed, samples per pixel, max bounces
-    std::uint32_t options[4];  // flags, instance mask, light count, tone mapper
+    std::uint32_t options[4];  // flags, instance mask, light count, -
 };
 static_assert(sizeof(PathTraceParams) == 112, "push constant block of path_trace.comp");
 
@@ -56,7 +56,7 @@ static_assert(sizeof(PathTraceParams) == 112, "push constant block of path_trace
 constexpr VkDescriptorType kBindings[] = {
     VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,  // 0 tlas
     VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,               // 1 accumulation
-    VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,               // 2 output
+    VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,               // 2 radiance
     VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,               // 3 entity ids
     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,              // 4 instances
     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,              // 5 materials
@@ -80,6 +80,13 @@ auto estimatorSettings(PathTracerSettings settings) -> PathTracerSettings
     return settings;
 }
 
+/** @brief Hybrid debug images shown as they are (not tone mapped, see composite.comp). */
+auto rawView(HybridView view) -> bool
+{
+    return view == HybridView::Albedo || view == HybridView::Variance ||
+           view == HybridView::Motion || view == HybridView::History;
+}
+
 }  // namespace
 
 auto GpuRenderer::create(vulkan::Context& context)
@@ -92,7 +99,8 @@ auto GpuRenderer::create(vulkan::Context& context)
     return std::unique_ptr<GpuRenderer>(new GpuRenderer(context));
 }
 
-GpuRenderer::GpuRenderer(vulkan::Context& context) : m_context(&context), m_scene(context)
+GpuRenderer::GpuRenderer(vulkan::Context& context)
+    : m_context(&context), m_scene(context), m_post(std::make_unique<gpu::PostProcess>(context))
 {
     const VkDevice device = context.device();
     VkCommandPoolCreateInfo poolInfo{};
@@ -129,6 +137,7 @@ GpuRenderer::~GpuRenderer()
     m_raster.reset();
     m_visibility.reset();
     m_pathTracing.reset();
+    m_post.reset();
     const VkDevice device = m_context->device();
     for (FrameSlot& slot : m_slots) {
         vkDestroyFence(device, slot.fence, nullptr);
@@ -198,6 +207,7 @@ void GpuRenderer::resize(std::uint32_t width, std::uint32_t height)
     }
     waitIdle();
     m_accumulation = {};
+    m_radiance = {};
     m_output = {};
     m_entityIds = {};
     if (m_visibility) {
@@ -206,6 +216,10 @@ void GpuRenderer::resize(std::uint32_t width, std::uint32_t height)
     if (m_hybrid) {
         m_hybrid->resize(width, height);
     }
+    if (m_raster) {
+        m_raster->resize(width, height);
+    }
+    m_post->resize(width, height);
     if (width == 0 || height == 0) {
         return;
     }
@@ -213,6 +227,8 @@ void GpuRenderer::resize(std::uint32_t width, std::uint32_t height)
         VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     m_accumulation = vulkan::Image(*m_context, width, height, VK_FORMAT_R32G32B32A32_SFLOAT,
                                    VK_IMAGE_USAGE_STORAGE_BIT);
+    m_radiance = vulkan::Image(*m_context, width, height, VK_FORMAT_R32G32B32A32_SFLOAT,
+                               VK_IMAGE_USAGE_STORAGE_BIT);
     m_output = vulkan::Image(*m_context, width, height, VK_FORMAT_R8G8B8A8_UNORM,
                              VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | kCopyUsage);
     m_entityIds = vulkan::Image(*m_context, width, height, VK_FORMAT_R32_UINT,
@@ -221,7 +237,7 @@ void GpuRenderer::resize(std::uint32_t width, std::uint32_t height)
     // GENERAL from now on; black and "no entity" until the first frame, so the
     // UI may show the output before anything was rendered.
     m_context->submitAndWait([&](VkCommandBuffer commandBuffer) {
-        for (const vulkan::Image* image : {&m_accumulation, &m_output, &m_entityIds}) {
+        for (const vulkan::Image* image : {&m_accumulation, &m_radiance, &m_output, &m_entityIds}) {
             vulkan::transitionImage(commandBuffer, image->handle(), VK_IMAGE_LAYOUT_UNDEFINED,
                                     VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
                                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
@@ -286,27 +302,23 @@ void GpuRenderer::recordPathTracing(VkCommandBuffer commandBuffer, std::uint32_t
     if (settings.nextEventEstimation) {
         flags |= kFlagNextEvent;
     }
-    if (settings.srgbOutput) {
-        flags |= kFlagSrgb;
-    }
     if (m_frameIndex == 0) {
         flags |= kFlagWriteIds;
     }
     const PathTraceParams params{
-        .cameraPosition = Vec4(camera.position(), settings.exposure),
+        .cameraPosition = Vec4(camera.position(), 0.0F),
         .cameraForward = Vec4(camera.forward(), settings.fireflyClamp),
         .cameraRight = Vec4(camera.right() * (camera.aspectRatio() * tanHalfFov), 0.0F),
         .cameraUp = Vec4(camera.up() * tanHalfFov, 0.0F),
         .skyColor = Vec4(scene.skyColor, 0.0F),
         .frame = {m_frameIndex, settings.seed, settings.samplesPerPixel, settings.maxBounces},
-        .options = {flags, settings.instanceMask & kAllInstances, m_scene.lightCount(),
-                    static_cast<std::uint32_t>(settings.toneMapper)},
+        .options = {flags, settings.instanceMask & kAllInstances, m_scene.lightCount(), 0U},
     };
 
     vulkan::DescriptorWrites writes;
     writes.accelerationStructure(0, m_scene.tlas())
         .storageImage(1, m_accumulation.view())
-        .storageImage(2, m_output.view())
+        .storageImage(2, m_radiance.view())
         .storageImage(3, m_entityIds.view())
         .storageBuffer(4, m_scene.instanceBuffer())
         .storageBuffer(5, m_scene.materialBuffer())
@@ -327,7 +339,8 @@ void GpuRenderer::recordPathTracing(VkCommandBuffer commandBuffer, std::uint32_t
 }
 
 void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
-                         const PathTracerSettings& settings, const GpuRenderOptions& options)
+                         const PathTracerSettings& settings, const GpuRenderOptions& options,
+                         std::span<const RenderParticle> particles)
 {
     SC_VERIFY(rayTracing() || !tracesRays(options.pipeline),
               "the {} pipeline needs ray queries, which {} does not have",
@@ -357,6 +370,7 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
     }
     if (pipeline == GpuPipeline::Raster && !m_raster) {
         m_raster = std::make_unique<gpu::RasterRenderer>(*m_context);
+        m_raster->resize(m_output.width(), m_output.height());
     }
 
     bool still = false;
@@ -386,6 +400,16 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
 
     const std::uint32_t samples =
         settings.mode == RenderMode::Preview ? 1U : std::max(1U, settings.samplesPerPixel);
+    // Motion vectors: since the last frame, whatever else changed.
+    const Camera& previousCamera = m_frameNumber == 0 ? camera : m_lastCamera;
+    gpu::PostFrame post{
+        .camera = &camera,
+        .previousCamera = &previousCamera,
+        .settings = settings,
+        .effects = options.effects,
+        .particles = particles,
+        .frameSlot = slotIndex,
+    };
     switch (pipeline) {
     case GpuPipeline::PathTracing:
         recordPathTracing(commandBuffer, slotIndex, scene, camera, settings);
@@ -394,7 +418,7 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
         const gpu::HybridFrame frame{
             .scene = &scene,
             .camera = &camera,
-            .previousCamera = m_frameIndex == 0 ? &camera : &m_lastCamera,
+            .previousCamera = &previousCamera,
             .settings = settings,
             .options = options,
             .frameSlot = slotIndex,
@@ -406,7 +430,16 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
             .queryPool = m_queryPool,
             .traceQuery = kQueriesPerSlot * slotIndex + kQueryTraceStart,
         };
-        m_hybrid->record(commandBuffer, frame, m_scene, *m_visibility, m_output, m_entityIds);
+        m_hybrid->record(commandBuffer, frame, m_scene, *m_visibility, m_radiance, m_entityIds);
+        if (options.view == HybridView::Final) {
+            post.depth = &m_visibility->depth();
+            post.motion = &m_hybrid->motion();
+        } else {
+            // Intermediate images as they are.
+            post.raw = rawView(options.view);
+            post.effects = {};
+            post.particles = {};
+        }
         break;
     }
     case GpuPipeline::Raster: {
@@ -420,16 +453,20 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
         const gpu::RasterFrame frame{
             .scene = &scene,
             .camera = &camera,
+            .previousCamera = &previousCamera,
             .settings = settings,
             .frameSlot = slotIndex,
             .accumulated = m_frameIndex,
             .writeIds = m_frameIndex == 0,
         };
-        m_raster->record(commandBuffer, frame, m_scene, *m_visibility, m_accumulation, m_output,
-                         m_entityIds);
+        m_raster->record(commandBuffer, frame, m_scene, *m_visibility, m_accumulation,
+                         m_radiance, m_entityIds);
+        post.depth = &m_visibility->depth();
+        post.motion = &m_raster->motion();
         break;
     }
     }
+    m_post->record(commandBuffer, post, m_radiance, m_output);
 
     // The output is sampled by the UI pass or copied by readImage() later on the queue.
     vulkan::memoryBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,

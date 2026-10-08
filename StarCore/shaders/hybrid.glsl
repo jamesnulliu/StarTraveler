@@ -103,6 +103,23 @@ vec3 projectPrevious(vec3 point)
 }
 
 /**
+ * Screen motion (xy, pixels) of an object-space point of an instance since
+ * the previous frame, given the instance's previous object-to-world rows, and
+ * its view depth then (z); exactly 0 when neither the instance nor the camera
+ * moved. Points behind the previous camera move off screen.
+ */
+vec4 screenMotion(uint instanceIndex, vec4 previousObjectToWorld[3], vec3 objectPoint)
+{
+    vec3 current = projectCurrent(
+        transformPoint(transforms[instanceIndex].objectToWorld, objectPoint));
+    vec3 previous = projectPrevious(transformPoint(previousObjectToWorld, objectPoint));
+    if (previous.z <= 0.0) {
+        return vec4(1e9, 1e9, 0.0, 0.0);
+    }
+    return vec4(previous.xy - current.xy, previous.z, 0.0);
+}
+
+/**
  * The hit of a camera ray (origin, unit direction) with a known primitive (from
  * the visibility buffer): instance `instanceIndex`, triangle `primitive`.
  * Triangles are intersected as planes (the rasterizer decided coverage).

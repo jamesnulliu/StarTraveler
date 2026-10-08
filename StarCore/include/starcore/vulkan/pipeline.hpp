@@ -74,12 +74,13 @@ struct GraphicsPipelineConfig
     VkFormat depthFormat = VK_FORMAT_UNDEFINED;
     VkCompareOp depthCompare = VK_COMPARE_OP_GREATER;  // Reversed depth.
     bool depthWrite = true;
+    bool additiveBlending = false;  // Color attachments: destination + fragment.
 };
 
 /**
  * @brief Triangle-list pipeline for dynamic rendering (no render pass), no
- *        vertex input (shaders pull vertices from buffers), no culling, no
- *        blending, dynamic viewport and scissor.
+ *        vertex input (shaders pull vertices from buffers), no culling,
+ *        replacing or additive blending, dynamic viewport and scissor.
  */
 class GraphicsPipeline final : public Pipeline
 {
@@ -100,6 +101,9 @@ public:
     auto uniformBuffer(std::uint32_t binding, VkBuffer buffer) -> DescriptorWrites&;
     auto storageImage(std::uint32_t binding, VkImageView view,
                       VkImageLayout layout = VK_IMAGE_LAYOUT_GENERAL) -> DescriptorWrites&;
+    /** @brief VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER. */
+    auto sampledImage(std::uint32_t binding, VkImageView view, VkSampler sampler,
+                      VkImageLayout layout = VK_IMAGE_LAYOUT_GENERAL) -> DescriptorWrites&;
     auto accelerationStructure(std::uint32_t binding, VkAccelerationStructureKHR tlas)
         -> DescriptorWrites&;
 
@@ -111,6 +115,8 @@ public:
 private:
     auto buffer(std::uint32_t binding, VkBuffer buffer, VkDescriptorType type)
         -> DescriptorWrites&;
+    auto image(std::uint32_t binding, VkImageView view, VkSampler sampler, VkImageLayout layout,
+               VkDescriptorType type) -> DescriptorWrites&;
 
     // Reserved up front: the writes keep pointers into these.
     std::vector<VkDescriptorBufferInfo> m_buffers;

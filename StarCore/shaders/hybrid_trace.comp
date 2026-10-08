@@ -87,21 +87,10 @@ float viewDepth(SurfaceHit hit, vec3 direction)
     return hit.t * dot(direction, frameData.cameraForward.xyz);
 }
 
-/**
- * Screen motion (xy, pixels) of an object-space point since the previous
- * frame and its view depth then (z); exactly 0 when neither the instance nor
- * the camera moved. Points behind the previous camera move off screen.
- */
 vec4 motionOf(uint instanceIndex, vec3 objectPoint)
 {
-    vec3 current = projectCurrent(
-        transformPoint(transforms[instanceIndex].objectToWorld, objectPoint));
-    vec3 previous = projectPrevious(
-        transformPoint(previousTransforms[instanceIndex].objectToWorld, objectPoint));
-    if (previous.z <= 0.0) {
-        return vec4(1e9, 1e9, 0.0, 0.0);
-    }
-    return vec4(previous.xy - current.xy, previous.z, 0.0);
+    return screenMotion(instanceIndex, previousTransforms[instanceIndex].objectToWorld,
+                        objectPoint);
 }
 
 /** The rasterized first hits of a pixel's camera ray (with the pane only if in front). */
@@ -200,11 +189,13 @@ void main()
         imageStore(primaryFilterGuide, pixel,
                    uvec4(encodeFilterGuide(depth, primary.normal, primary.instanceIndex), 0u,
                          0u));
-        imageStore(primaryMotion, pixel, motionOf(primary.instanceIndex, primaryPoint));
+        // w: the view depth (motion blur).
+        imageStore(primaryMotion, pixel,
+                   vec4(motionOf(primary.instanceIndex, primaryPoint).xyz, depth));
     } else {
         imageStore(primaryGuide, pixel, uvec4(0u));
         imageStore(primaryFilterGuide, pixel, uvec4(0u));
-        imageStore(primaryMotion, pixel, vec4(0.0));
+        imageStore(primaryMotion, pixel, vec4(0.0, 0.0, 0.0, kFar));
     }
     if (hasPane) {
         float depth = viewDepth(pane, direction);

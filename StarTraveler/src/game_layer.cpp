@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <chrono>
 #include <format>
+#include <iterator>
 #include <ranges>
 #include <vector>
 
@@ -179,6 +180,7 @@ void GameLayer::saveScene(const std::filesystem::path& path)
 
 void GameLayer::onSceneReplaced()
 {
+    m_particles.clear();
     m_selection.clear();
     setTool(ToolKind::None);
     m_portals.reset();
@@ -325,7 +327,7 @@ void GameLayer::updateCamera()
         };
         const ShipInput shipInput{
             .thrust = {axis(ImGuiKey_D, ImGuiKey_A), axis(ImGuiKey_E, ImGuiKey_Q),
-                       axis(ImGuiKey_W, ImGuiKey_S)},
+                       m_gameOptions.cruise ? 1.0F : axis(ImGuiKey_W, ImGuiKey_S)},
             .look = m_cameraActive ? input::mouseDelta() : Vec2(0.0F),
             .boost = keys && io.KeyShift,
         };
@@ -334,6 +336,16 @@ void GameLayer::updateCamera()
             m_ships.update(m_scene, m_ship, physics, shipInput, deltaSeconds);
         if (events.collided) {
             m_collisionFlash = 0.4F;
+            // Sparks off the hull: small, hot, quickly cooling and slowing.
+            const ParticleSettings sparks{.lifetime = {0.15F, 0.4F},
+                                          .speed = {2.0F, 6.0F},
+                                          .spread = 1.4F,
+                                          .size = {0.012F, 0.0F},
+                                          .startColor = {6.0F, 3.0F, 0.9F},
+                                          .endColor = {0.8F, 0.1F, 0.0F},
+                                          .drag = 2.5F};
+            m_particles.emit(sparks, events.contactPoint, events.contactNormal,
+                             m_ship.get<ShipComponent>().velocity, 8);
         }
         if (events.teleported) {
             m_status = "Teleported!";
@@ -356,6 +368,12 @@ void GameLayer::updateCamera()
     if (m_portals.update(m_scene, m_camera)) {
         m_status = "Teleported!";
     }
+}
+
+void GameLayer::updateParticles(float deltaSeconds)
+{
+    m_particles.update(m_scene, deltaSeconds);
+    m_dust.update(m_camera.position());
 }
 
 void GameLayer::updateViewportSize(UVec2 size)
@@ -466,7 +484,14 @@ void GameLayer::composeFrame()
             if (m_options.gpuBudgetMs > 0.0F && tracesRays(options.pipeline)) {
                 settings.samplesPerPixel = m_gpuRenderer->samplesForBudget(m_options.gpuBudgetMs);
             }
-            m_gpuRenderer->render(renderScene, m_camera, settings, options);
+            m_frameParticles.clear();
+            if (m_options.particles) {
+                std::ranges::copy(m_particles.particles(), std::back_inserter(m_frameParticles));
+            }
+            if (m_options.spaceDust) {
+                m_dust.appendParticles(m_frameParticles, m_camera.position());
+            }
+            m_gpuRenderer->render(renderScene, m_camera, settings, options, m_frameParticles);
         } else {
             // Coarse first passes and a per-frame time budget keep the UI
             // responsive while the image converges; the CPU traverses a TLAS.
@@ -555,6 +580,7 @@ void GameLayer::onUIRender()
     buildDefaultLayoutIfNeeded();
     handleShortcuts();
     updateCamera();
+    updateParticles(Application::get().deltaTime());
 
     drawViewport();
     drawToolsPanel();
@@ -856,6 +882,30 @@ void GameLayer::drawRenderPanel()
         }
     }
 
+    if (usingGpu()) {
+        ImGui::SeparatorText("Effects");
+        EffectSettings& effects = m_options.gpuRender.effects;
+        ImGui::Checkbox("Bloom", &effects.bloom);
+        if (effects.bloom) {
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(-1.0F);
+            ImGui::SliderFloat("##Bloom strength", &effects.bloomStrength, 0.0F, 0.3F, "%.3f");
+        }
+        ImGui::Checkbox("Motion blur", &effects.motionBlur);
+        if (effects.motionBlur) {
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(-1.0F);
+            ImGui::SliderFloat("##Shutter", &effects.shutter, 0.0F, 1.0F, "shutter %.2f");
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Fraction of the frame the shutter is open (Hybrid and Raster)");
+        }
+        ImGui::SliderFloat("Vignette", &effects.vignette, 0.0F, 1.0F, "%.2f");
+        ImGui::Checkbox("Particles", &m_options.particles);
+        ImGui::SameLine();
+        ImGui::Checkbox("Space dust", &m_options.spaceDust);
+    }
+
     ImGui::Separator();
     ImGui::Text("Frame: %.2f ms (%.0f FPS)", 1000.0F * Application::get().deltaTime(),
                 ImGui::GetIO().Framerate);
@@ -875,7 +925,8 @@ void GameLayer::drawRenderPanel()
     ImGui::Text("Instances: %zu, lights: %zu, triangles: %zu", renderScene.instances.size(),
                 renderScene.lights.size(), renderScene.triangleCount());
     if (usingGpu()) {
-        ImGui::Text("Instances uploaded last frame: %u", m_gpuRenderer->uploadedInstances());
+        ImGui::Text("Instances uploaded last frame: %u, particles: %zu",
+                    m_gpuRenderer->uploadedInstances(), m_frameParticles.size());
     }
     ImGui::End();
 }
@@ -1222,6 +1273,31 @@ void GameLayer::drawInspectorPanel()
             entity.remove<PortalComponent>();
         }
     }
+    if (auto* emitter = entity.tryGet<ParticleEmitterComponent>()) {
+        const auto [open, remove] = componentHeader("Particle emitter", true);
+        if (open) {
+            // Particles are not traced: edits need not restart the accumulation.
+            ParticleSettings& particles = emitter->particles;
+            ImGui::Checkbox("Enabled", &emitter->enabled);
+            ImGui::SameLine();
+            ImGui::Checkbox("Inherit velocity", &emitter->inheritVelocity);
+            ImGui::DragFloat("Rate (/s)", &emitter->rate, 1.0F, 0.0F, 10000.0F);
+            ImGui::DragFloat2("Lifetime (s)", &particles.lifetime.x, 0.01F, 0.01F, 60.0F);
+            ImGui::DragFloat2("Speed", &particles.speed.x, 0.05F, 0.0F, 1000.0F);
+            ImGui::SliderFloat("Spread", &particles.spread, 0.0F, kPi);
+            ImGui::DragFloat2("Size (start, end)", &particles.size.x, 0.001F, 0.0F, 100.0F);
+            // Emitted radiance: may exceed 1 (glows, blooms).
+            constexpr ImGuiColorEditFlags kHdr =
+                ImGuiColorEditFlags_HDR | ImGuiColorEditFlags_Float;
+            ImGui::ColorEdit3("Start color", &particles.startColor.x, kHdr);
+            ImGui::ColorEdit3("End color", &particles.endColor.x, kHdr);
+            ImGui::DragFloat("Drag", &particles.drag, 0.01F, 0.0F, 100.0F);
+            ImGui::DragFloat3("Acceleration", &particles.acceleration.x, 0.05F);
+        }
+        if (remove) {
+            entity.remove<ParticleEmitterComponent>();
+        }
+    }
 
     ImGui::Separator();
     if (ImGui::Button("Add Component")) {
@@ -1251,6 +1327,7 @@ void GameLayer::drawInspectorPanel()
         addItem("Polygon", PolygonShapeComponent{
                                .vertices = {{-0.5F, -0.5F, 0}, {0.5F, -0.5F, 0}, {0, 0.5F, 0}}});
         addItem("Point", PointShapeComponent{});
+        addItem("Particle emitter", ParticleEmitterComponent{});
         ImGui::EndPopup();
     }
 
@@ -1423,6 +1500,24 @@ void GameLayer::drawMenuBar()
         }
         if (ImGui::MenuItem("Portal", "T")) {
             m_portals.createPortal(m_scene, m_camera, kPortalLayer);
+        }
+        if (ImGui::MenuItem("Particle emitter")) {
+            // A fountain of sparks: up (local -Z turned up), falling back.
+            Entity e = createAtCursor("Particle emitter");
+            e.patch<TransformComponent>([](TransformComponent& t) {
+                t.rotation = glm::angleAxis(kPi / 2.0F, Vec3{1.0F, 0.0F, 0.0F});
+            });
+            e.add<ParticleEmitterComponent>(ParticleEmitterComponent{
+                .particles = {.lifetime = {1.0F, 2.0F},
+                              .speed = {3.0F, 5.0F},
+                              .spread = 0.3F,
+                              .size = {0.04F, 0.0F},
+                              .startColor = {6.0F, 3.0F, 1.0F},
+                              .endColor = {0.6F, 0.1F, 0.0F},
+                              .acceleration = {0.0F, -4.0F, 0.0F}},
+                .rate = 120.0F,
+                .inheritVelocity = false,
+            });
         }
         ImGui::EndMenu();
     }

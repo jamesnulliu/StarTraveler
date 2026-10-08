@@ -23,15 +23,21 @@ static_assert(sizeof(RenderLight) == 32 && offsetof(RenderLight, radius) == 12 &
                   offsetof(RenderLight, instanceIndex) == 28,
               "std430 layout of Light in scene.glsl");
 
-// Meshes not referenced by this many consecutive updates lose their BLAS.
+// Meshes not referenced by this many consecutive mesh syncs lose their buffers.
 constexpr std::uint64_t kMeshGracePeriod = 8;
+constexpr std::uint32_t kMinInstanceCapacity = 16;
+constexpr std::uint32_t kMinLightCapacity = 16;
 
+constexpr VkBufferUsageFlags kMeshUsage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                          VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                                          VK_BUFFER_USAGE_TRANSFER_DST_BIT;
 constexpr VkBufferUsageFlags kBuildInputUsage =
-    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR |
-    VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    kMeshUsage | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
 constexpr VkBufferUsageFlags kScratchUsage =
     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+constexpr VkPipelineStageFlags kShaderStages = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+                                               VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
+                                               VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
 
 auto alignUp(VkDeviceSize value, VkDeviceSize alignment) -> VkDeviceSize
 {
@@ -99,8 +105,7 @@ void inputsToBuildBarrier(VkCommandBuffer commandBuffer)
 {
     vulkan::memoryBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
                           VK_ACCESS_TRANSFER_WRITE_BIT,
-                          VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR |
-                              VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                          VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
                           VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR);
 }
 
@@ -132,12 +137,21 @@ void toRows(const Mat4& m, Vec4 (&rows)[3])
     }
 }
 
+/** @brief Instances to upload: runs of consecutive indices. */
+struct Run
+{
+    std::uint32_t first = 0;
+    std::uint32_t count = 0;
+};
+
 }  // namespace
 
-GpuScene::GpuScene(vulkan::Context& context) : m_context(&context)
+GpuScene::GpuScene(vulkan::Context& context)
+    : m_context(&context), m_rayTracing(context.deviceInfo().rayQuery)
 {
-    SC_VERIFY(context.deviceInfo().rayQuery, "GpuScene needs ray query support");
-    buildSphereBlas();
+    if (m_rayTracing) {
+        buildSphereBlas();
+    }
 }
 
 GpuScene::~GpuScene()
@@ -216,6 +230,37 @@ void GpuScene::buildSphereBlas()
     });
 }
 
+void GpuScene::syncMeshes(const RenderScene& scene)
+{
+    ++m_meshSyncs;
+    std::vector<MeshHandle> newMeshes;
+    for (const RenderGeometry& geometry : scene.geometries) {
+        if (geometry.kind != GeometryKind::Triangles || !geometry.mesh ||
+            geometry.mesh->triangleCount() == 0) {
+            continue;
+        }
+        if (const auto entry = m_meshes.find(geometry.mesh.get()); entry != m_meshes.end()) {
+            entry->second.lastUsed = m_meshSyncs;
+        } else {
+            newMeshes.push_back(geometry.mesh);
+        }
+    }
+    buildMeshes(newMeshes);
+
+    // Meshes no longer in use (in-flight frames may still read them: retire).
+    std::erase_if(m_meshes, [&](auto& item) {
+        MeshEntry& entry = item.second;
+        if (entry.lastUsed + kMeshGracePeriod > m_meshSyncs) {
+            return false;
+        }
+        retire(std::move(entry.positions), VK_NULL_HANDLE);
+        retire(std::move(entry.normals), VK_NULL_HANDLE);
+        retire(std::move(entry.indices), VK_NULL_HANDLE);
+        retire(std::move(entry.blas.storage), entry.blas.handle);
+        return true;
+    });
+}
+
 void GpuScene::buildMeshes(const std::vector<MeshHandle>& meshes)
 {
     if (meshes.empty()) {
@@ -232,15 +277,16 @@ void GpuScene::buildMeshes(const std::vector<MeshHandle>& meshes)
     std::vector<Copy> copies;
     std::vector<MeshEntry*> entries;
     VkDeviceSize stagingSize = 0;
+    const VkBufferUsageFlags usage = m_rayTracing ? kBuildInputUsage : kMeshUsage;
     auto addBuffer = [&](Buffer& buffer, std::span<const std::byte> data) {
-        buffer = Buffer(*m_context, data.size(), kBuildInputUsage, MemoryUsage::DeviceLocal);
+        buffer = Buffer(*m_context, data.size(), usage, MemoryUsage::DeviceLocal);
         copies.push_back({buffer.handle(), stagingSize, data});
         stagingSize = alignUp(stagingSize + data.size(), 16);
     };
     for (const MeshHandle& mesh : meshes) {
         MeshEntry& entry = m_meshes[mesh.get()];
         entry.mesh = mesh;
-        entry.lastUsed = m_updateCount;
+        entry.lastUsed = m_meshSyncs;
         addBuffer(entry.positions, bytesOf(mesh->positions));
         if (!mesh->normals.empty()) {
             addBuffer(entry.normals, bytesOf(mesh->normals));
@@ -251,6 +297,21 @@ void GpuScene::buildMeshes(const std::vector<MeshHandle>& meshes)
     Buffer staging(*m_context, stagingSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT, MemoryUsage::Upload);
     for (const Copy& copy : copies) {
         staging.write(copy.data, copy.sourceOffset);
+    }
+    auto recordCopies = [&](VkCommandBuffer commandBuffer) {
+        for (const Copy& copy : copies) {
+            const VkBufferCopy region{copy.sourceOffset, 0, copy.data.size()};
+            vkCmdCopyBuffer(commandBuffer, staging.handle(), copy.destination, 1, &region);
+        }
+    };
+    if (!m_rayTracing) {
+        m_context->submitAndWait([&](VkCommandBuffer commandBuffer) {
+            recordCopies(commandBuffer);
+            vulkan::memoryBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                  VK_ACCESS_TRANSFER_WRITE_BIT, kShaderStages,
+                                  VK_ACCESS_SHADER_READ_BIT);
+        });
+        return;
     }
 
     // One BLAS per mesh, all built by one command (disjoint scratch ranges).
@@ -303,11 +364,11 @@ void GpuScene::buildMeshes(const std::vector<MeshHandle>& meshes)
     }
 
     m_context->submitAndWait([&](VkCommandBuffer commandBuffer) {
-        for (const Copy& copy : copies) {
-            const VkBufferCopy region{copy.sourceOffset, 0, copy.data.size()};
-            vkCmdCopyBuffer(commandBuffer, staging.handle(), copy.destination, 1, &region);
-        }
-        inputsToBuildBarrier(commandBuffer);
+        recordCopies(commandBuffer);
+        vulkan::memoryBarrier(
+            commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
+            VK_PIPELINE_STAGE_ACCELERATION_STRUCTURE_BUILD_BIT_KHR | kShaderStages,
+            VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_ACCELERATION_STRUCTURE_READ_BIT_KHR);
         m_context->functions().cmdBuildAccelerationStructures(
             commandBuffer, static_cast<std::uint32_t>(builds.size()), builds.data(),
             rangePointers.data());
@@ -315,153 +376,193 @@ void GpuScene::buildMeshes(const std::vector<MeshHandle>& meshes)
     });
 }
 
-void GpuScene::ensureCapacity(Buffer& buffer, VkDeviceSize size, VkBufferUsageFlags usage)
+auto GpuScene::reserveInstances(std::uint32_t count) -> bool
 {
-    if (buffer.isValid() && buffer.size() >= size) {
-        return;
+    if (count <= m_instanceCapacity && m_instances.isValid()) {
+        return false;
     }
-    const VkDeviceSize capacity = std::max(size, buffer.size() * 2);
-    if (buffer.isValid()) {
-        retire(std::move(buffer), VK_NULL_HANDLE);
+    m_instanceCapacity = std::max({count, 2 * m_instanceCapacity, kMinInstanceCapacity});
+    auto replace = [&](Buffer& buffer, VkDeviceSize recordSize, VkBufferUsageFlags usage) {
+        if (buffer.isValid()) {
+            retire(std::move(buffer), VK_NULL_HANDLE);
+        }
+        buffer = Buffer(*m_context, recordSize * m_instanceCapacity, usage,
+                        MemoryUsage::DeviceLocal);
+    };
+    constexpr VkBufferUsageFlags kStorage =
+        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT;
+    replace(m_instances, sizeof(InstanceRecord), kStorage);
+    replace(m_materials, sizeof(RenderMaterial), kStorage);
+    replace(m_transforms, sizeof(InstanceTransformRecord),
+            kStorage | VK_BUFFER_USAGE_TRANSFER_SRC_BIT);
+    replace(m_previousTransforms, sizeof(InstanceTransformRecord), kStorage);
+    if (m_rayTracing) {
+        replace(m_tlasInstances, sizeof(VkAccelerationStructureInstanceKHR),
+                VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
+                    VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR);
     }
-    buffer = Buffer(*m_context, capacity, usage | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                    MemoryUsage::DeviceLocal);
+    return true;
 }
 
 void GpuScene::update(const RenderScene& scene, VkCommandBuffer commandBuffer,
                       std::uint32_t frameSlot, std::uint64_t frameNumber)
 {
-    ++m_updateCount;
     m_frameNumber = frameNumber;
-
-    // New meshes get their BLAS now.
-    std::vector<MeshHandle> newMeshes;
-    for (const RenderGeometry& geometry : scene.geometries) {
-        if (geometry.kind == GeometryKind::Triangles && geometry.mesh &&
-            geometry.mesh->triangleCount() > 0 && !m_meshes.contains(geometry.mesh.get())) {
-            newMeshes.push_back(geometry.mesh);
-        }
+    const auto count = static_cast<std::uint32_t>(scene.instances.size());
+    SC_ASSERT(scene.instanceVersions.size() == count, "instance stamps out of sync");
+    bool full = scene.lineage.value() != m_lineage;
+    if (reserveInstances(count)) {
+        full = true;
     }
-    buildMeshes(newMeshes);
-
-    // Instance records and TLAS instances.
-    const auto instanceCount = static_cast<std::uint32_t>(scene.instances.size());
-    std::vector<InstanceRecord> records(instanceCount);
-    std::vector<VkAccelerationStructureInstanceKHR> tlasInstances(instanceCount);
-    for (std::uint32_t i = 0; i < instanceCount; ++i) {
-        const RenderInstance& instance = scene.instances[i];
-        const RenderGeometry& geometry = scene.geometries[instance.geometryIndex];
-        InstanceRecord& record = records[i];
-        record.materialIndex = instance.materialIndex;
-        record.entityId = instance.entityId;
-        record.lightIndex = scene.lightOfInstance[i];
-        record.kind = static_cast<std::uint32_t>(geometry.kind);
-
-        VkDeviceAddress blas = m_sphereBlas.address;
-        if (geometry.kind == GeometryKind::Triangles) {
-            MeshEntry& entry = m_meshes.at(geometry.mesh.get());
-            entry.lastUsed = m_updateCount;
-            record.positions = entry.positions.deviceAddress();
-            record.normals = entry.normals.isValid() ? entry.normals.deviceAddress() : 0;
-            record.indices = entry.indices.deviceAddress();
-            blas = entry.blas.address;
-        }
-
-        VkAccelerationStructureInstanceKHR& tlasInstance = tlasInstances[i];
-        tlasInstance.transform = toVkTransform(instance.objectToWorld);
-        tlasInstance.instanceCustomIndex = i;
-        tlasInstance.mask = instance.mask & 0xFFU;
-        tlasInstance.instanceShaderBindingTableRecordOffset = 0;
-        tlasInstance.flags = static_cast<std::uint32_t>(
-            VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR);
-        tlasInstance.accelerationStructureReference = blas;
+    if (full || scene.contentVersion != m_contentVersion) {
+        syncMeshes(scene);
     }
 
-    // Meshes no longer in use (in-flight frames may still trace them: retire).
-    std::erase_if(m_meshes, [&](auto& item) {
-        MeshEntry& entry = item.second;
-        if (entry.lastUsed + kMeshGracePeriod > m_updateCount) {
-            return false;
-        }
-        retire(std::move(entry.positions), VK_NULL_HANDLE);
-        retire(std::move(entry.normals), VK_NULL_HANDLE);
-        retire(std::move(entry.indices), VK_NULL_HANDLE);
-        retire(std::move(entry.blas.storage), entry.blas.handle);
-        return true;
-    });
+    // Motion vectors: this frame's previous transforms are the last update's.
+    if (count > 0) {
+        const VkBufferCopy region{0, 0, VkDeviceSize{count} * sizeof(InstanceTransformRecord)};
+        vkCmdCopyBuffer(commandBuffer, m_transforms.handle(), m_previousTransforms.handle(), 1,
+                        &region);
+        vulkan::memoryBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                              VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+                              VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    }
 
-    // Upload through this frame slot's staging buffer.
+    // Instances stamped since the last update, as runs.
+    std::vector<Run> runs;
+    std::uint32_t changed = 0;
+    for (std::uint32_t i = 0; i < count; ++i) {
+        if (!full && scene.instanceVersions[i] <= m_version) {
+            continue;
+        }
+        if (!runs.empty() && runs.back().first + runs.back().count == i) {
+            ++runs.back().count;
+        } else {
+            runs.push_back({i, 1});
+        }
+        ++changed;
+    }
+    m_uploadedInstances = changed;
+
+    const bool uploadLights = full || scene.lightsVersion != m_lightsVersion;
+    const auto lightCount = static_cast<std::uint32_t>(scene.lights.size());
+    if (!m_lights.isValid() || lightCount > m_lightCapacity) {
+        if (m_lights.isValid()) {
+            retire(std::move(m_lights), VK_NULL_HANDLE);
+        }
+        m_lightCapacity = std::max({lightCount, 2 * m_lightCapacity, kMinLightCapacity});
+        m_lights = Buffer(*m_context, sizeof(RenderLight) * m_lightCapacity,
+                          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                          MemoryUsage::DeviceLocal);
+    }
+
+    // Staging: the changed instances' records, materials, transforms and TLAS
+    // instances, then the lights.
+    std::vector<InstanceRecord> records;
+    std::vector<RenderMaterial> materials;
+    std::vector<InstanceTransformRecord> transforms;
+    std::vector<VkAccelerationStructureInstanceKHR> tlasInstances;
+    records.reserve(changed);
+    materials.reserve(changed);
+    transforms.reserve(changed);
+    tlasInstances.reserve(m_rayTracing ? changed : 0);
+    for (const Run& run : runs) {
+        for (std::uint32_t i = run.first; i < run.first + run.count; ++i) {
+            const RenderInstance& instance = scene.instances[i];
+            const RenderGeometry& geometry = scene.geometries[instance.geometryIndex];
+            InstanceRecord& record = records.emplace_back();
+            record.materialIndex = instance.materialIndex;
+            record.entityId = instance.entityId;
+            record.lightIndex = scene.lightOfInstance[i];
+            record.kind = static_cast<std::uint32_t>(geometry.kind);
+            VkDeviceAddress blas = m_sphereBlas.address;
+            if (geometry.kind == GeometryKind::Triangles) {
+                const MeshEntry& entry = m_meshes.at(geometry.mesh.get());
+                record.positions = entry.positions.deviceAddress();
+                record.normals = entry.normals.isValid() ? entry.normals.deviceAddress() : 0;
+                record.indices = entry.indices.deviceAddress();
+                blas = entry.blas.address;
+            }
+            materials.push_back(scene.materials[instance.materialIndex]);
+            InstanceTransformRecord& transform = transforms.emplace_back();
+            toRows(instance.objectToWorld, transform.objectToWorld);
+            toRows(instance.worldToObject, transform.worldToObject);
+            if (m_rayTracing) {
+                VkAccelerationStructureInstanceKHR& tlasInstance = tlasInstances.emplace_back();
+                tlasInstance.transform = toVkTransform(instance.objectToWorld);
+                tlasInstance.instanceCustomIndex = i;
+                tlasInstance.mask = instance.mask & 0xFFU;
+                tlasInstance.instanceShaderBindingTableRecordOffset = 0;
+                tlasInstance.flags = static_cast<std::uint32_t>(
+                    VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR);
+                tlasInstance.accelerationStructureReference = blas;
+            }
+        }
+    }
     const auto recordBytes = bytesOf(records);
-    const auto materialBytes = bytesOf(scene.materials);
-    const auto lightBytes = bytesOf(scene.lights);
+    const auto materialBytes = bytesOf(materials);
+    const auto transformBytes = bytesOf(transforms);
     const auto tlasInstanceBytes = bytesOf(tlasInstances);
+    const auto lightBytes = uploadLights ? bytesOf(scene.lights) : std::span<const std::byte>();
     const VkDeviceSize materialOffset = alignUp(recordBytes.size(), 256);
-    const VkDeviceSize lightOffset = materialOffset + alignUp(materialBytes.size(), 256);
-    const VkDeviceSize tlasInstanceOffset = lightOffset + alignUp(lightBytes.size(), 256);
-    const VkDeviceSize stagingSize = tlasInstanceOffset + tlasInstanceBytes.size();
-    Buffer& staging = m_staging[frameSlot];
-    if (!staging.isValid() || staging.size() < stagingSize) {
-        // The slot's previous submission completed: no need to retire.
-        staging = Buffer(*m_context, std::max(stagingSize, staging.size() * 2),
-                         VK_BUFFER_USAGE_TRANSFER_SRC_BIT, MemoryUsage::Upload);
-    }
-    staging.write(recordBytes, 0);
-    staging.write(materialBytes, materialOffset);
-    staging.write(lightBytes, lightOffset);
-    staging.write(tlasInstanceBytes, tlasInstanceOffset);
-
-    constexpr VkBufferUsageFlags kStorage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-    ensureCapacity(m_instances, recordBytes.size(), kStorage);
-    ensureCapacity(m_materials, materialBytes.size(), kStorage);
-    ensureCapacity(m_lights, lightBytes.size(), kStorage);
-    ensureCapacity(m_tlasInstances, tlasInstanceBytes.size(),
-                   VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT |
-                       VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR);
-    m_lightCount = static_cast<std::uint32_t>(scene.lights.size());
-
-    auto copy = [&](const Buffer& destination, VkDeviceSize offset, VkDeviceSize size) {
-        if (size > 0) {
-            const VkBufferCopy region{offset, 0, size};
-            vkCmdCopyBuffer(commandBuffer, staging.handle(), destination.handle(), 1, &region);
+    const VkDeviceSize transformOffset = materialOffset + alignUp(materialBytes.size(), 256);
+    const VkDeviceSize tlasInstanceOffset = transformOffset + alignUp(transformBytes.size(), 256);
+    const VkDeviceSize lightOffset = tlasInstanceOffset + alignUp(tlasInstanceBytes.size(), 256);
+    const VkDeviceSize stagingSize = lightOffset + lightBytes.size();
+    if (stagingSize > 0) {
+        Buffer& staging = m_staging[frameSlot];
+        if (!staging.isValid() || staging.size() < stagingSize) {
+            // The slot's previous submission completed: no need to retire.
+            staging = Buffer(*m_context, std::max(stagingSize, staging.size() * 2),
+                             VK_BUFFER_USAGE_TRANSFER_SRC_BIT, MemoryUsage::Upload);
         }
-    };
-    copy(m_instances, 0, recordBytes.size());
-    copy(m_materials, materialOffset, materialBytes.size());
-    copy(m_lights, lightOffset, lightBytes.size());
-    copy(m_tlasInstances, tlasInstanceOffset, tlasInstanceBytes.size());
-    inputsToBuildBarrier(commandBuffer);
-    recordTlasBuild(commandBuffer, instanceCount);
-}
+        staging.write(recordBytes, 0);
+        staging.write(materialBytes, materialOffset);
+        staging.write(transformBytes, transformOffset);
+        staging.write(tlasInstanceBytes, tlasInstanceOffset);
+        staging.write(lightBytes, lightOffset);
 
-auto GpuScene::writeTransforms(const RenderScene& scene, std::uint32_t frameSlot) -> VkBuffer
-{
-    std::vector<InstanceTransformRecord> records(scene.instances.size());
-    std::unordered_map<std::uint64_t, Mat4> transforms;
-    transforms.reserve(scene.instances.size());
-    for (std::size_t i = 0; i < scene.instances.size(); ++i) {
-        const RenderInstance& instance = scene.instances[i];
-        // An entity may have a sphere and a mesh (with different transforms).
-        const auto kind = static_cast<std::uint64_t>(scene.geometries[instance.geometryIndex].kind);
-        const std::uint64_t key = (static_cast<std::uint64_t>(instance.entityId) << 1U) | kind;
-        const auto last = m_lastTransforms.find(key);
-        const Mat4& previous = last != m_lastTransforms.end() ? last->second
-                                                               : instance.objectToWorld;
-        toRows(instance.objectToWorld, records[i].objectToWorld);
-        toRows(instance.worldToObject, records[i].worldToObject);
-        toRows(previous, records[i].previousObjectToWorld);
-        transforms.emplace(key, instance.objectToWorld);
+        // One copy command per buffer, one region per run.
+        std::vector<VkBufferCopy> regions;
+        auto copyRuns = [&](const Buffer& destination, VkDeviceSize sourceOffset,
+                            VkDeviceSize recordSize) {
+            regions.clear();
+            VkDeviceSize offset = sourceOffset;
+            for (const Run& run : runs) {
+                const VkDeviceSize size = recordSize * run.count;
+                regions.push_back({offset, recordSize * run.first, size});
+                offset += size;
+            }
+            if (!regions.empty()) {
+                vkCmdCopyBuffer(commandBuffer, staging.handle(), destination.handle(),
+                                static_cast<std::uint32_t>(regions.size()), regions.data());
+            }
+        };
+        copyRuns(m_instances, 0, sizeof(InstanceRecord));
+        copyRuns(m_materials, materialOffset, sizeof(RenderMaterial));
+        copyRuns(m_transforms, transformOffset, sizeof(InstanceTransformRecord));
+        if (m_rayTracing) {
+            copyRuns(m_tlasInstances, tlasInstanceOffset,
+                     sizeof(VkAccelerationStructureInstanceKHR));
+        }
+        if (!lightBytes.empty()) {
+            const VkBufferCopy region{lightOffset, 0, lightBytes.size()};
+            vkCmdCopyBuffer(commandBuffer, staging.handle(), m_lights.handle(), 1, &region);
+        }
     }
-    m_lastTransforms = std::move(transforms);
+    m_lightCount = lightCount;
 
-    // The slot's previous submission completed: its buffer may be rewritten.
-    const auto bytes = bytesOf(records);
-    vulkan::Buffer& buffer = m_transforms[frameSlot];
-    if (!buffer.isValid() || buffer.size() < bytes.size()) {
-        buffer = Buffer(*m_context, std::max<VkDeviceSize>(bytes.size(), buffer.size() * 2),
-                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, MemoryUsage::Upload);
+    vulkan::memoryBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                          VK_ACCESS_TRANSFER_WRITE_BIT, kShaderStages, VK_ACCESS_SHADER_READ_BIT);
+    if (m_rayTracing && (full || scene.version != m_version)) {
+        inputsToBuildBarrier(commandBuffer);
+        recordTlasBuild(commandBuffer, count);
     }
-    buffer.write(bytes);
-    return buffer.handle();
+
+    m_lineage = scene.lineage.value();
+    m_version = scene.version;
+    m_contentVersion = scene.contentVersion;
+    m_lightsVersion = scene.lightsVersion;
 }
 
 void GpuScene::recordTlasBuild(VkCommandBuffer commandBuffer, std::uint32_t instanceCount)

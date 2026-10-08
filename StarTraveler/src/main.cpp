@@ -49,6 +49,8 @@ auto main(int argc, char** argv) -> int
     cli.add_option("scene", scenePath, "Scene file to open (.yaml)")->check(CLI::ExistingFile);
     cli.add_flag("--cpu", options.cpuRenderer,
                  "Path trace on the CPU (default: on the GPU if it supports ray queries)");
+    cli.add_flag("--raster", options.raster,
+                 "Start with ray tracing off: rasterize on the GPU (no rays, no shadows)");
     cli.add_flag("--validation", validation,
                  "Enable Vulkan validation layers (configure with STARCORE_VULKAN_VALIDATION=ON)");
     cli.add_flag("--no-vsync", noVsync, "Present without vsync");

@@ -9,7 +9,7 @@
 #include <starcore/app/layer.hpp>
 #include <starcore/asset/model.hpp>
 #include <starcore/common/image.hpp>
-#include <starcore/gpu/gpu_path_tracer.hpp>
+#include <starcore/gpu/gpu_renderer.hpp>
 #include <starcore/render/camera.hpp>
 #include <starcore/render/path_tracer.hpp>
 #include <starcore/render/render_scene.hpp>
@@ -35,13 +35,16 @@ struct GameOptions
     std::filesystem::path screenshotPath;
     // Start with the CPU path tracer even if the GPU supports ray queries.
     bool cpuRenderer = false;
+    // Start with ray tracing off (the GPU's raster pipeline).
+    bool raster = false;
 };
 
 struct RenderOptions
 {
     // Accumulate path-traced frames continuously (legacy "Render" mode).
     bool liveRender = true;
-    // false: draw the 2D overlay over the plain sky color (fast 2D mode).
+    // false: rasterize on the GPU (direct light without shadows, no rays), or
+    // without a GPU renderer draw the 2D overlay over the plain sky color.
     bool rayTracing = true;
     // Path trace on the GPU (ray queries) when available, else on the CPU.
     bool gpu = true;
@@ -108,6 +111,8 @@ private:
     void updateViewportSize(starcore::UVec2 size);
     void handleViewportInput();
     [[nodiscard]] auto usingGpu() const -> bool;
+    /** @brief The GPU pipeline frames are rendered with (if usingGpu()). */
+    [[nodiscard]] auto gpuPipeline() const -> starcore::GpuPipeline;
     [[nodiscard]] auto adaptive() const -> bool;
     void composeFrame();
     void drawOverlay(starcore::ColorImage& target);
@@ -146,12 +151,12 @@ private:
     bool m_cameraActive = false;
 
     starcore::CpuPathTracer m_tracer;
-    std::unique_ptr<starcore::GpuPathTracer> m_gpuTracer;  // Null without ray queries.
+    std::unique_ptr<starcore::GpuRenderer> m_gpuRenderer;  // Null without a usable GPU.
     std::string m_gpuUnavailable;                           // Why it is null.
-    starcore::RenderScene m_renderScene;
+    // The render scene, kept up to date incrementally.
+    starcore::RenderSceneBuilder m_renderScene;
     starcore::Mat4 m_lastView{0.0F};
     bool m_previewing = false;  // Adaptive rendering is showing the preview.
-    std::uint64_t m_renderSceneSourceVersion = ~0ULL;
     RenderOptions m_options;
     bool m_frozen = false;    // Keep the displayed frame (seed fill paints on it).
     bool m_stepOnce = false;  // Trace one frame while live rendering is off.

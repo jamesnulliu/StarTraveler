@@ -5,6 +5,7 @@
 //   starcore-render assets/scenes/legacy_demo.yaml -o renders/demo.png -f 1024 --gpu
 //   starcore-render assets/scenes/legacy_demo.yaml -o renders/demo.png -f 30 --hybrid
 //       --move 0 0 -0.05   (the hybrid pipeline, the camera moving every frame)
+//   starcore-render assets/scenes/legacy_demo.yaml -o renders/demo.png -f 16 --raster
 
 #include <chrono>
 #include <cstdlib>
@@ -24,7 +25,7 @@
 #include <starcore/scene/serializer.hpp>
 
 #ifdef STARCORE_RENDER_GPU
-#include <starcore/gpu/gpu_path_tracer.hpp>
+#include <starcore/gpu/gpu_renderer.hpp>
 #include <starcore/vulkan/context.hpp>
 #endif
 
@@ -34,6 +35,7 @@ namespace
 struct GpuOptions
 {
     bool hybrid = false;
+    bool raster = false;
     std::string view = "Final";
     bool spatial = true;
     bool temporal = true;
@@ -41,7 +43,7 @@ struct GpuOptions
     bool validation = false;
 };
 
-/** @brief Path trace `frames` frames on the GPU; nullopt (logged) if it cannot. */
+/** @brief Render `frames` frames on the GPU; nullopt (logged) if it cannot. */
 auto renderOnGpu([[maybe_unused]] const starcore::RenderScene& scene,
                  [[maybe_unused]] starcore::Camera camera,
                  [[maybe_unused]] const starcore::PathTracerSettings& settings,
@@ -60,15 +62,22 @@ auto renderOnGpu([[maybe_unused]] const starcore::RenderScene& scene,
             return std::nullopt;
         }
     }
+    if (gpuOptions.raster) {
+        options.pipeline = starcore::GpuPipeline::Raster;
+    }
     auto context = starcore::vulkan::Context::create(
         {.applicationName = "starcore-render", .enableValidation = gpuOptions.validation});
     if (!context) {
         SC_ERROR("Vulkan: {}", context.error());
         return std::nullopt;
     }
-    auto tracer = starcore::GpuPathTracer::create(**context);
+    auto tracer = starcore::GpuRenderer::create(**context);
     if (!tracer) {
         SC_ERROR("{}", tracer.error());
+        return std::nullopt;
+    }
+    if (starcore::tracesRays(options.pipeline) && !(*tracer)->rayTracing()) {
+        SC_ERROR("{} has no ray queries (--raster works)", (*context)->deviceInfo().name);
         return std::nullopt;
     }
     (*tracer)->resize(camera.viewportSize().x, camera.viewportSize().y);
@@ -128,6 +137,8 @@ auto main(int argc, char** argv) -> int
     app.add_flag("--gpu", gpu, "Path trace on the GPU (Vulkan ray queries)");
     app.add_flag("--hybrid", gpuOptions.hybrid,
                  "GPU, hybrid pipeline: rasterized first hits, reprojection and denoising");
+    app.add_flag("--raster", gpuOptions.raster,
+                 "GPU, raster pipeline: direct light without shadows, no rays");
     app.add_option("--view", gpuOptions.view,
                    "Hybrid: Final, Noisy, Albedo, Lighting, Glass, Variance, Motion, History");
     app.add_flag("--no-spatial", noSpatial, "Hybrid: no spatial filter");
@@ -142,7 +153,7 @@ auto main(int argc, char** argv) -> int
     if (move.size() == 3) {
         gpuOptions.move = {move[0], move[1], move[2]};
     }
-    gpu = gpu || gpuOptions.hybrid;
+    gpu = gpu || gpuOptions.hybrid || gpuOptions.raster;
 
     starcore::Scene scene;
     starcore::AssetLibrary assets;

@@ -19,8 +19,6 @@ float fireflyClamp();  // 0 = off.
 const uint kRussianRouletteStart = 3u;
 // Thin surfaces a shadow ray (or a preview ray) may pass through.
 const int kMaxThinLayers = 8;
-// Thin surfaces transmitting at least this much do not take the primary id.
-const float kSeeThrough = 0.5;
 
 const uint kLobeDiffuse = 0u;
 const uint kLobeSpecular = 1u;
@@ -32,22 +30,6 @@ vec3 offsetOrigin(vec3 position, vec3 geometricNormal, vec3 direction)
     float scale = 1e-4 + 2e-6 * maxComponent(abs(position));
     return position +
            geometricNormal * (dot(direction, geometricNormal) >= 0.0 ? scale : -scale);
-}
-
-Material materialOf(uint instanceIndex)
-{
-    return materials[instances[instanceIndex].materialIndex];
-}
-
-bool isThinTransmissive(Material m)
-{
-    return (m.flags & kMaterialThinWalled) != 0u && m.transmission > 0.0;
-}
-
-bool isSeeThrough(Material m)
-{
-    return (m.flags & kMaterialThinWalled) != 0u &&
-           m.transmission * (1.0 - m.metallic) >= kSeeThrough;
 }
 
 /** Entity of the first surface along a ray that is not see-through. */
@@ -435,8 +417,6 @@ vec3 tracePath(vec3 origin, vec3 direction, inout uint rng)
 /** RenderMode::Preview: direct light + ambient + headlight, deterministic. */
 vec3 shadePreview(vec3 origin, vec3 direction)
 {
-    const float kAmbient = 0.04;
-    const float kHeadlight = 0.15;
     vec3 sky = skyColor();
     vec3 result = vec3(0.0);
     vec3 throughput = vec3(1.0);
@@ -447,8 +427,8 @@ vec3 shadePreview(vec3 origin, vec3 direction)
         }
         Material material = materialOf(hit.instanceIndex);
 
-        vec3 irradiance = sky + vec3(kAmbient) +
-                          vec3(kHeadlight * max(0.0, -dot(hit.normal, direction)));
+        vec3 irradiance = sky + vec3(kPreviewAmbient) +
+                          vec3(kPreviewHeadlight * max(0.0, -dot(hit.normal, direction)));
         for (uint i = 0u; i < lightCount(); ++i) {
             Light light = lights[i];
             vec3 toCenter = light.center - hit.position;

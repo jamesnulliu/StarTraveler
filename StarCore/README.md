@@ -7,10 +7,11 @@ A small render engine with two frontends: C++ (`StarCore::Core`,
   and YAML serialization, CPU path tracer, 2D raster algorithms, collision
   detection.
 - `StarCore::Gpu` -- headless Vulkan (context, buffers, compute and graphics
-  pipelines) and `GpuPathTracer`: the CPU path tracer ported to compute
-  shaders with ray queries (`shaders/`), on BLAS/TLAS acceleration structures;
-  plain progressive path tracing, or the hybrid pipeline (rasterized first
-  hits, reprojection across frames, SVGF denoising) for real time.
+  pipelines) and `GpuRenderer`: the CPU path tracer ported to compute shaders
+  with ray queries (`shaders/`), on BLAS/TLAS acceleration structures; plain
+  progressive path tracing, the hybrid pipeline (rasterized first hits,
+  reprojection across frames, SVGF denoising) for real time, or pure
+  rasterization (no ray tracing hardware needed).
 - `StarCore::Runtime` -- GLFW window, Dear ImGui, textures, application and
   layers.
 - `starcore` -- nanobind bindings of `StarCore::Core`; images are numpy arrays.
@@ -33,15 +34,17 @@ hit = world.raycast(sc.Ray((0, 10, 0), (0, -1, 0)))
 
 ```cpp
 auto context = starcore::vulkan::Context::create({});  // Headless.
-auto tracer = starcore::GpuPathTracer::create(**context);  // Error without ray queries.
-(*tracer)->resize(960, 540);
+auto renderer = starcore::GpuRenderer::create(**context);
+(*renderer)->resize(960, 540);
 const starcore::RenderScene renderScene = starcore::buildRenderScene(scene);
 for (int i = 0; i < 256; ++i) {
-    (*tracer)->render(renderScene, camera, {});
+    (*renderer)->render(renderScene, camera, {});  // Path tracing: needs rayTracing().
 }
-starcore::writePng((*tracer)->readImage(), "out.png");
+starcore::writePng((*renderer)->readImage(), "out.png");
 
-// Real time: the camera and objects may move every frame.
+// Real time: the camera and objects may move every frame. The builder keeps
+// the render scene up to date; only changed instances are uploaded.
+starcore::RenderSceneBuilder builder;
 const starcore::GpuRenderOptions hybrid{.pipeline = starcore::GpuPipeline::Hybrid};
-(*tracer)->render(renderScene, camera, {.samplesPerPixel = 2}, hybrid);
+(*renderer)->render(builder.update(scene), camera, {.samplesPerPixel = 2}, hybrid);
 ```

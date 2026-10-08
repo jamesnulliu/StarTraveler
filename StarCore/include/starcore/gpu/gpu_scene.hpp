@@ -1,8 +1,13 @@
 #pragma once
-// A RenderScene on the GPU: one bottom-level acceleration structure (BLAS)
-// per mesh, kept across frames, plus a top-level one (TLAS) over the
-// instances and storage buffers with per-instance data, materials and lights
-// (layouts in shaders/scene.glsl).
+// A RenderScene on the GPU: storage buffers with the per-instance data
+// (records, materials, transforms), the lights and the meshes' vertex and
+// index buffers; with ray queries also one bottom-level acceleration structure
+// (BLAS) per mesh, kept across frames, and a top-level one (TLAS) over the
+// instances. Layouts in shaders/scene.glsl and hybrid.glsl.
+//
+// Updates are incremental: while the render scene is the one of the previous
+// update (its lineage, see RenderSceneBuilder), only the instances stamped
+// since are uploaded.
 
 #include <array>
 #include <cstdint>
@@ -45,9 +50,8 @@ struct InstanceTransformRecord
 {
     Vec4 objectToWorld[3];
     Vec4 worldToObject[3];
-    Vec4 previousObjectToWorld[3];  // Where the instance was the frame before.
 };
-static_assert(sizeof(InstanceTransformRecord) == 144,
+static_assert(sizeof(InstanceTransformRecord) == 96,
               "std430 layout of InstanceTransform in hybrid.glsl");
 
 /** @brief An acceleration structure and the buffer holding it. */
@@ -61,19 +65,22 @@ struct AccelerationStructure
 class GpuScene
 {
 public:
-    /** @pre context.deviceInfo().rayQuery */
+    /** @brief Acceleration structures are built if the device has ray queries. */
     explicit GpuScene(vulkan::Context& context);
     ~GpuScene();
     GpuScene(const GpuScene&) = delete;
     auto operator=(const GpuScene&) -> GpuScene& = delete;
 
     /**
-     * @brief Make `scene` the current scene.
+     * @brief Make `scene` the current scene; once per frame.
      *
-     * Meshes seen for the first time are uploaded and get a BLAS right away
-     * (blocking); instance data, materials and lights go through the staging
-     * buffer of `frameSlot`, and their copies plus the TLAS build are recorded
-     * into `commandBuffer` (followed by a barrier for compute shaders).
+     * First the transforms of the previous update become the previous
+     * transforms. Then the instances of `scene` stamped since the previous
+     * update are uploaded -- all of them if `scene` has another lineage.
+     * Meshes seen for the first time are uploaded (and get their BLAS) right
+     * away, blocking; the rest goes through the staging buffer of `frameSlot`:
+     * copies and the TLAS build are recorded into `commandBuffer`, followed by
+     * a barrier for vertex, fragment and compute shaders.
      *
      * @param frameSlot Frame in flight whose previous submission has completed.
      * @param frameNumber Increases by one per submitted frame (resource retirement).
@@ -84,15 +91,12 @@ public:
     /** @brief Destroy resources replaced at least kFramesInFlight frames ago. */
     void collectGarbage(std::uint64_t completedFrameNumber);
 
-    /**
-     * @brief Write the transforms of `scene`'s instances, with each one's
-     *        transform of the previous call as the previous transform (matched
-     *        by entity and geometry kind; new instances have not moved), into
-     *        the host-visible buffer of `frameSlot`.
-     * @return That buffer (InstanceTransformRecord[], one per instance).
-     */
-    auto writeTransforms(const RenderScene& scene, std::uint32_t frameSlot) -> VkBuffer;
-
+    /** @brief Whether acceleration structures are built (ray queries). */
+    [[nodiscard]] auto rayTracing() const noexcept -> bool
+    {
+        return m_rayTracing;
+    }
+    /** @brief VK_NULL_HANDLE without ray tracing. */
     [[nodiscard]] auto tlas() const noexcept -> VkAccelerationStructureKHR
     {
         return m_tlas.handle;
@@ -113,10 +117,28 @@ public:
     {
         return m_lightCount;
     }
-    /** @brief Meshes with a BLAS (cached across updates). */
+    /** @brief InstanceTransformRecord per instance. */
+    [[nodiscard]] auto transformBuffer() const noexcept -> VkBuffer
+    {
+        return m_transforms.handle();
+    }
+    /**
+     * @brief The transforms as of the previous update (for motion vectors);
+     *        meaningless for instances that are new since or of another lineage.
+     */
+    [[nodiscard]] auto previousTransformBuffer() const noexcept -> VkBuffer
+    {
+        return m_previousTransforms.handle();
+    }
+    /** @brief Meshes on the GPU (cached across updates). */
     [[nodiscard]] auto meshCount() const noexcept -> std::size_t
     {
         return m_meshes.size();
+    }
+    /** @brief Instances uploaded by the last update. */
+    [[nodiscard]] auto uploadedInstances() const noexcept -> std::uint32_t
+    {
+        return m_uploadedInstances;
     }
 
 private:
@@ -127,7 +149,7 @@ private:
         vulkan::Buffer normals;
         vulkan::Buffer indices;
         AccelerationStructure blas;
-        std::uint64_t lastUsed = 0;  // Update counter.
+        std::uint64_t lastUsed = 0;  // Mesh sync counter.
     };
 
     struct Retired
@@ -138,25 +160,33 @@ private:
     };
 
     void buildSphereBlas();
+    /** @brief Upload new meshes, drop those unused for a while. */
+    void syncMeshes(const RenderScene& scene);
     void buildMeshes(const std::vector<MeshHandle>& meshes);
+    /** @return Whether the per-instance buffers were replaced (their contents lost). */
+    auto reserveInstances(std::uint32_t count) -> bool;
     void retire(vulkan::Buffer buffer, VkAccelerationStructureKHR accelerationStructure);
-    void ensureCapacity(vulkan::Buffer& buffer, VkDeviceSize size, VkBufferUsageFlags usage);
     void recordTlasBuild(VkCommandBuffer commandBuffer, std::uint32_t instanceCount);
     void destroyAccelerationStructure(VkAccelerationStructureKHR handle);
 
     vulkan::Context* m_context;
-    std::uint64_t m_updateCount = 0;
+    bool m_rayTracing = false;
+    std::uint64_t m_meshSyncs = 0;
     std::uint64_t m_frameNumber = 0;
 
     std::unordered_map<const MeshData*, MeshEntry> m_meshes;
     AccelerationStructure m_sphereBlas;
     vulkan::Buffer m_sphereAabb;
 
-    // Device-local scene data, rewritten by every update().
+    // Device-local, per instance (m_instanceCapacity of each).
+    std::uint32_t m_instanceCapacity = 0;
     vulkan::Buffer m_instances;
     vulkan::Buffer m_materials;
-    vulkan::Buffer m_lights;
+    vulkan::Buffer m_transforms;
+    vulkan::Buffer m_previousTransforms;
     vulkan::Buffer m_tlasInstances;  // VkAccelerationStructureInstanceKHR[]
+    vulkan::Buffer m_lights;
+    std::uint32_t m_lightCapacity = 0;
     std::uint32_t m_lightCount = 0;
 
     AccelerationStructure m_tlas;
@@ -166,9 +196,12 @@ private:
     std::array<vulkan::Buffer, kFramesInFlight> m_staging;
     std::vector<Retired> m_retired;
 
-    // writeTransforms(): per frame slot, and each instance's last transform.
-    std::array<vulkan::Buffer, kFramesInFlight> m_transforms;
-    std::unordered_map<std::uint64_t, Mat4> m_lastTransforms;
+    // What the buffers hold: the render scene's lineage and stamps.
+    std::uint64_t m_lineage = 0;
+    std::uint64_t m_version = 0;
+    std::uint64_t m_contentVersion = 0;
+    std::uint64_t m_lightsVersion = 0;
+    std::uint32_t m_uploadedInstances = 0;
 };
 
 }  // namespace starcore::gpu

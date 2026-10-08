@@ -68,7 +68,10 @@ void bindTracer(nb::module_& m)
         .def_prop_ro("triangle_count", &RenderScene::triangleCount,
                      "Triangles of the distinct meshes (BLAS), not counting instancing.")
         .def_ro("sky_color", &RenderScene::skyColor)
-        .def_rw("scene_version", &RenderScene::sceneVersion)
+        .def_ro("version", &RenderScene::version,
+                "Stamp of the last change of anything traced (equal stamps: equal data).")
+        .def_ro("content_version", &RenderScene::contentVersion,
+                "Stamp of the last change of anything but the instances' transforms.")
         .def(
             "instance_entity",
             [](const RenderScene& s, std::size_t index) {
@@ -80,8 +83,6 @@ void bindTracer(nb::module_& m)
             "index"_a, "Entity handle of an instance.");
 
     m.def("build_render_scene", &buildRenderScene, "scene"_a);
-    m.def("hash_render_scene", &hashRenderScene, "render_scene"_a,
-          "Hash of everything that affects ray tracing.");
 
     nb::class_<SurfaceHit>(m, "SurfaceHit")
         .def_ro("t", &SurfaceHit::t)

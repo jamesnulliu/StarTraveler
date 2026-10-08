@@ -23,9 +23,11 @@ namespace starcore
 namespace gpu
 {
 class HybridRenderer;
-}
+class RasterRenderer;
+class VisibilityPass;
+}  // namespace gpu
 
-/** @brief How GpuPathTracer::render() makes an image. */
+/** @brief How GpuRenderer::render() makes an image. */
 enum class GpuPipeline : std::uint8_t
 {
     // Camera rays and plain accumulation that restarts whenever anything
@@ -35,13 +37,22 @@ enum class GpuPipeline : std::uint8_t
     // with the same estimator, samples reprojected across frames and
     // denoised: for real time.
     Hybrid,
+    // Rasterized first hits lit like RenderMode::Preview without shadows: no
+    // rays, so no ray tracing hardware needed. Anti-aliased while still.
+    Raster,
 };
 
 template <>
 struct EnumNames<GpuPipeline>
 {
-    static constexpr std::array kNames = {"Path tracing", "Hybrid"};
+    static constexpr std::array kNames = {"Path tracing", "Hybrid", "Raster"};
 };
+
+/** @brief Whether a pipeline traces rays (needs ray queries). */
+[[nodiscard]] constexpr auto tracesRays(GpuPipeline pipeline) noexcept -> bool
+{
+    return pipeline != GpuPipeline::Raster;
+}
 
 /** @brief What the hybrid pipeline shows: its result or an intermediate image. */
 enum class HybridView : std::uint8_t
@@ -92,29 +103,39 @@ struct GpuRenderOptions
 };
 
 /**
- * @brief Progressive path tracer on the GPU: compute shaders with ray queries
- *        against acceleration structures built from the RenderScene.
+ * @brief Renderer on the GPU: path tracing in compute shaders with ray
+ *        queries against acceleration structures built from the RenderScene,
+ *        or rasterization (see GpuPipeline).
  *
  * The PathTracing pipeline has the interface and estimator of CpuPathTracer
  * (shaders/path_trace.comp is a port of path_tracer.cpp, with the same random
  * number streams), so both converge to the same image. The Hybrid pipeline
  * rasterizes the first hits, traces paths from there with the same estimator
  * and reuses samples across frames while the view moves (see
- * GpuRenderOptions). Each render() records and submits one frame without
- * waiting for it; at most kFramesInFlight frames are queued. The output image
- * is read by later work on the same queue (the UI pass) or copied back with
- * readImage().
+ * GpuRenderOptions). The Raster pipeline traces nothing. Each render()
+ * records and submits one frame without waiting for it; at most
+ * kFramesInFlight frames are queued. The output image is read by later work
+ * on the same queue (the UI pass) or copied back with readImage().
+ *
+ * The scene is uploaded incrementally: render scenes kept up to date by a
+ * RenderSceneBuilder upload only the instances that changed.
  */
-class GpuPathTracer
+class GpuRenderer
 {
 public:
-    /** @return An error if the device has no ray query support. */
+    /** @return An error if the device has no push descriptors (all pipelines use them). */
     [[nodiscard]] static auto create(vulkan::Context& context)
-        -> std::expected<std::unique_ptr<GpuPathTracer>, std::string>;
+        -> std::expected<std::unique_ptr<GpuRenderer>, std::string>;
 
-    ~GpuPathTracer();
-    GpuPathTracer(const GpuPathTracer&) = delete;
-    auto operator=(const GpuPathTracer&) -> GpuPathTracer& = delete;
+    ~GpuRenderer();
+    GpuRenderer(const GpuRenderer&) = delete;
+    auto operator=(const GpuRenderer&) -> GpuRenderer& = delete;
+
+    /** @brief Whether the pipelines that trace rays can run (the device has ray queries). */
+    [[nodiscard]] auto rayTracing() const noexcept -> bool
+    {
+        return m_scene.rayTracing();
+    }
 
     /** @brief Recreates the images (waits for the device when they exist). */
     void resize(std::uint32_t width, std::uint32_t height);
@@ -124,14 +145,17 @@ public:
     }
 
     /**
-     * @brief Trace settings.samplesPerPixel samples per pixel. Frames are
-     *        weighted by their sample count, so it may follow a time budget
-     *        (see samplesForBudget).
+     * @brief Render a frame; tracing pipelines trace settings.samplesPerPixel
+     *        samples per pixel. Frames are weighted by their sample count, so
+     *        it may follow a time budget (see samplesForBudget).
      *
-     * PathTracing: accumulation restarts when the scene, camera, settings
-     * (but samplesPerPixel) or size change. Hybrid: it restarts when the
-     * scene's content or the estimator's settings change; when only the camera
-     * or instance transforms change, earlier samples are reprojected.
+     * PathTracing and Raster: accumulation restarts when the scene, camera,
+     * settings that change what is sampled, or size change. Hybrid: it
+     * restarts when the scene's content or the estimator's settings change;
+     * when only the camera or instance transforms change, earlier samples are
+     * reprojected.
+     *
+     * @pre rayTracing() || !tracesRays(options.pipeline)
      */
     void render(const RenderScene& scene, const Camera& camera,
                 const PathTracerSettings& settings, const GpuRenderOptions& options = {});
@@ -168,6 +192,11 @@ public:
     {
         return m_traceTimeMs;
     }
+    /** @brief Instances uploaded for the last frame (incremental scene updates). */
+    [[nodiscard]] auto uploadedInstances() const noexcept -> std::uint32_t
+    {
+        return m_scene.uploadedInstances();
+    }
 
     /**
      * @brief Samples per pixel that should take about `budgetMs` of GPU time
@@ -193,15 +222,14 @@ private:
         VkFence fence = VK_NULL_HANDLE;
         bool submitted = false;
         bool timed = false;
-        // Samples per pixel of a path-traced frame (0: preview, not a cost sample).
+        // Samples per pixel of a path-traced frame (0: preview or raster, not a cost sample).
         std::uint32_t tracedSamples = 0;
     };
 
-    explicit GpuPathTracer(vulkan::Context& context);
+    explicit GpuRenderer(vulkan::Context& context);
     void waitForSlot(std::uint32_t slot);
     /** @brief Whether the frame starts over; `still`: nothing moved since the last one. */
-    [[nodiscard]] auto needsReset(const RenderScene& scene, std::uint64_t sceneHash,
-                                  std::uint64_t contentHash, const Camera& camera,
+    [[nodiscard]] auto needsReset(const RenderScene& scene, const Camera& camera,
                                   const PathTracerSettings& settings,
                                   const GpuRenderOptions& options, bool& still) const -> bool;
     void recordPathTracing(VkCommandBuffer commandBuffer, std::uint32_t slotIndex,
@@ -211,8 +239,11 @@ private:
 
     vulkan::Context* m_context;
     gpu::GpuScene m_scene;
-    vulkan::ComputePipeline m_pipeline;
-    std::unique_ptr<gpu::HybridRenderer> m_hybrid;  // Created when first used.
+    // Created when first used.
+    std::unique_ptr<vulkan::ComputePipeline> m_pathTracing;
+    std::unique_ptr<gpu::VisibilityPass> m_visibility;
+    std::unique_ptr<gpu::HybridRenderer> m_hybrid;
+    std::unique_ptr<gpu::RasterRenderer> m_raster;
 
     VkCommandPool m_commandPool = VK_NULL_HANDLE;
     // Per frame slot: frame start, tracing start and end, frame end.
@@ -232,11 +263,8 @@ private:
     std::uint32_t m_lastSamples = 1;     // Samples per pixel of the last frame.
 
     // State of the previous frame, for automatic accumulation resets.
-    std::uint64_t m_uploadedSceneHash = 0;
-    bool m_sceneUploaded = false;
-    std::uint64_t m_lastSceneVersion = ~0ULL;
-    std::uint64_t m_lastSceneHash = 0;
-    std::uint64_t m_lastContentHash = 0;
+    std::uint64_t m_lastVersion = 0;         // RenderScene::version.
+    std::uint64_t m_lastContentVersion = 0;  // RenderScene::contentVersion.
     Mat4 m_lastView{0.0F};
     Mat4 m_lastProjection{0.0F};
     PathTracerSettings m_lastSettings{};

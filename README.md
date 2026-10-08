@@ -43,9 +43,11 @@ Other presets: `msvc-vs2022`, `msvc-ninja` (inside a VS developer shell),
 `linux-clang` (not tested yet). C++23 is the default; `-DSTARCORE_CXX_STANDARD=26`
 opts into C++26.
 
-The GPU path tracer needs a GPU with `VK_KHR_ray_query` (NVIDIA RTX, AMD RDNA2+,
-Intel Arc); without one everything falls back to the CPU and the GPU tests are
-skipped. No Vulkan SDK is needed: the shader compiler (glslang) comes from vcpkg.
+GPU path tracing needs a GPU with `VK_KHR_ray_query` (NVIDIA RTX, AMD RDNA2+,
+Intel Arc); without one path tracing falls back to the CPU, the GPU only
+rasterizes (any Vulkan 1.3 GPU with push descriptors) and the ray-tracing GPU
+tests are skipped. No Vulkan SDK is needed: the shader compiler (glslang) comes
+from vcpkg.
 For development, `-DSTARCORE_VULKAN_VALIDATION=ON` also builds the Vulkan
 validation layers (with synchronization validation); the GPU tests and
 `StarTraveler.exe --validation` then use them. `STARCORE_VULKAN_DEVICE=Intel`
@@ -102,10 +104,12 @@ by default). The Render panel switches to plain path tracing (the reference,
 which restarts whenever anything moves), tunes the denoiser and shows its
 intermediate images. With `--cpu`, or on GPUs without ray queries, the CPU path
 tracer shows a noise-free preview while moving and path traces when still.
+Turning "Ray tracing" off (or `--raster`) rasterizes on the GPU instead: direct
+light without shadows or reflections, no rays at all, about 0.2 ms per frame.
 Layers (panel "Layers") control visibility, locking and which layers collide;
 the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
 
-`StarTraveler.exe [scene.yaml] [--cpu] [--frames N --screenshot out.png] [--validation]`
+`StarTraveler.exe [scene.yaml] [--cpu] [--raster] [--frames N --screenshot out.png] [--validation]`
 
 ## Engine overview
 
@@ -114,15 +118,18 @@ the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
   scene files; meshes from models are saved as references to their glTF file.
 - **Assets**: immutable shared `MeshData` (with its BVH), procedural primitives,
   glTF 2.0 loading (fastgltf) and `.glb` writing, an `AssetLibrary` cache.
-- **Rendering**: a render-scene snapshot shaped like Vulkan ray tracing input
-  (BLAS per mesh, TLAS over instances, 8-bit instance masks); a progressive,
-  multi-threaded CPU path tracer with a GGX metal/dielectric BSDF, thin and
-  refracting glass, next event estimation of sphere lights with MIS, a
-  preview mode, coarse-to-fine passes and a per-frame time budget.
-- **GPU rendering** (`StarCore::Gpu`, headless Vulkan): the same path tracer
-  as compute shaders with ray queries. The render scene becomes a BLAS per
-  mesh (cached across frames, spheres as procedural AABBs) and a TLAS rebuilt
-  when instances move. Two pipelines:
+- **Rendering**: a render scene shaped like Vulkan ray tracing input (BLAS per
+  mesh, TLAS over instances, 8-bit instance masks), kept up to date
+  incrementally by a `RenderSceneBuilder`: every entity keeps its instance
+  slot and each change is stamped, so only what changed is rewritten and
+  uploaded. A progressive, multi-threaded CPU path tracer with a GGX
+  metal/dielectric BSDF, thin and refracting glass, next event estimation of
+  sphere lights with MIS, a preview mode, coarse-to-fine passes and a
+  per-frame time budget.
+- **GPU rendering** (`StarCore::Gpu`, headless Vulkan, `GpuRenderer`): the
+  render scene becomes storage buffers updated per changed instance and, with
+  ray queries, a BLAS per mesh (cached across frames, spheres as procedural
+  AABBs) and a TLAS rebuilt when instances move. Three pipelines:
   - *Path tracing*: a line-by-line port with the same random streams, so GPU
     and CPU images agree almost bit for bit (checked by the tests); in the
     cockpit about 70x faster than the CPU. The reference.
@@ -138,8 +145,12 @@ the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
     edge-avoiding a-trous filter, which fades out as samples accumulate: a
     still image converges to the path tracer's (also checked by the tests).
     Rasterized first hits are where textures will be sampled.
-  `starcore-render scene.yaml --gpu` (or `--hybrid`, with `--move`, `--view`)
-  renders offscreen.
+  - *Raster*: the same visibility buffer lit like the preview (sky, ambient,
+    headlight, sphere lights) without shadows, the nearest window pane blended
+    over: no rays, so it also runs on GPUs without ray tracing hardware;
+    jittered frames are averaged while the view is still (anti-aliasing).
+  `starcore-render scene.yaml --gpu` (or `--hybrid`, with `--move`, `--view`,
+  or `--raster`) renders offscreen.
 - **2D raster**: Bresenham/midpoint/DDA lines, midpoint ellipses, Bezier and
   B-spline curves, Cohen-Sutherland / midpoint-subdivision / Sutherland-Hodgman
   clipping, scan-line and flood fill -- the algorithms of the original drawing
@@ -149,7 +160,7 @@ the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
 - **Runtime**: GLFW window, Vulkan (vk-bootstrap, VMA), Dear ImGui docking with
   multi-viewports, an application/layer framework.
 
-Planned: Python bindings of the GPU path tracer and the runtime, for games
+Planned: Python bindings of the GPU renderer and the runtime, for games
 written in Python.
 
 ## Regenerating the ship model

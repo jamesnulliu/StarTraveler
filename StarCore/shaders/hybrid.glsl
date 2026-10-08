@@ -1,12 +1,13 @@
-// Shared by the passes of the hybrid renderer (src/gpu/hybrid_renderer.cpp):
-// frame uniforms, instance transforms, camera projection, surface guides.
+// Shared by the passes of the rasterizing pipelines, Hybrid and Raster
+// (src/gpu/hybrid_renderer.cpp, raster_renderer.cpp): frame uniforms,
+// instance transforms, camera projection, surface guides.
 
 #ifndef STARCORE_HYBRID_GLSL
 #define STARCORE_HYBRID_GLSL
 
 #include "scene.glsl"
 
-/** gpu::HybridFrameUniforms. */
+/** gpu::FrameUniforms. */
 layout(set = 0, binding = 1, std140) uniform FrameUniforms
 {
     vec4 cameraPosition;    // w: near plane of the visibility pass
@@ -41,7 +42,6 @@ struct InstanceTransform
 {
     vec4 objectToWorld[3];
     vec4 worldToObject[3];
-    vec4 previousObjectToWorld[3];
 };
 layout(set = 0, binding = 2, std430) readonly buffer Transforms
 {
@@ -100,23 +100,6 @@ vec3 projectPrevious(vec3 point)
 {
     return projectToPixel(point, frameData.previousPosition.xyz, frameData.previousForward.xyz,
                           frameData.previousRight.xyz, frameData.previousUp.xyz);
-}
-
-/**
- * Screen motion (xy, pixels) of an object-space point since the previous
- * frame and its view depth then (z); exactly 0 when neither the instance nor
- * the camera moved. Points behind the previous camera move off screen.
- */
-vec4 motionOf(uint instanceIndex, vec3 objectPoint)
-{
-    vec3 current = projectCurrent(
-        transformPoint(transforms[instanceIndex].objectToWorld, objectPoint));
-    vec3 previous = projectPrevious(
-        transformPoint(transforms[instanceIndex].previousObjectToWorld, objectPoint));
-    if (previous.z <= 0.0) {
-        return vec4(1e9, 1e9, 0.0, 0.0);
-    }
-    return vec4(previous.xy - current.xy, previous.z, 0.0);
 }
 
 /**

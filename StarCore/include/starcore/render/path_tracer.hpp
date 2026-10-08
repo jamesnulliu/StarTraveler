@@ -96,7 +96,9 @@ struct RenderControl
  *
  * Each render() call adds one pass of samples (or, with a time budget, as
  * many tiles as fit); accumulation restarts automatically when the scene
- * version, camera, settings or size change.
+ * version, camera, settings or size change. The scene's TLAS should be
+ * current (buildRenderScene, RenderSceneBuilder::updateTlas): without it
+ * every ray tests every instance.
  */
 class CpuPathTracer
 {

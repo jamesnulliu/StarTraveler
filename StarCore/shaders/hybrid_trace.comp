@@ -46,7 +46,11 @@ layout(set = 0, binding = 15, rgba32f) uniform writeonly image2D glassMotion;
 layout(set = 0, binding = 16, r32ui) uniform writeonly uimage2D entityIds;
 layout(set = 0, binding = 17, rg32ui) uniform writeonly uimage2D primaryFilterGuide;
 layout(set = 0, binding = 18, rg32ui) uniform writeonly uimage2D glassFilterGuide;
-
+// GpuScene::previousTransformBuffer(): the instances' transforms of the previous frame.
+layout(set = 0, binding = 19, std430) readonly buffer PreviousTransforms
+{
+    InstanceTransform previousTransforms[];
+};
 
 uint instanceMask()
 {
@@ -81,6 +85,23 @@ float fireflyClamp()
 float viewDepth(SurfaceHit hit, vec3 direction)
 {
     return hit.t * dot(direction, frameData.cameraForward.xyz);
+}
+
+/**
+ * Screen motion (xy, pixels) of an object-space point since the previous
+ * frame and its view depth then (z); exactly 0 when neither the instance nor
+ * the camera moved. Points behind the previous camera move off screen.
+ */
+vec4 motionOf(uint instanceIndex, vec3 objectPoint)
+{
+    vec3 current = projectCurrent(
+        transformPoint(transforms[instanceIndex].objectToWorld, objectPoint));
+    vec3 previous = projectPrevious(
+        transformPoint(previousTransforms[instanceIndex].objectToWorld, objectPoint));
+    if (previous.z <= 0.0) {
+        return vec4(1e9, 1e9, 0.0, 0.0);
+    }
+    return vec4(previous.xy - current.xy, previous.z, 0.0);
 }
 
 /** The rasterized first hits of a pixel's camera ray (with the pane only if in front). */

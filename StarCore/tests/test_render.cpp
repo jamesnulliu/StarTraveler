@@ -106,7 +106,8 @@ TEST_CASE("RenderScene and closest-hit queries", "[render][trace]")
 
     const RenderScene renderScene = buildRenderScene(scene);
     REQUIRE(renderScene.instances.size() == 2);
-    REQUIRE(renderScene.sceneVersion == scene.version());
+    REQUIRE(renderScene.version != 0);
+    REQUIRE(renderScene.tlasCurrent());
 
     SECTION("sphere hit honors radius and non-uniform scale")
     {
@@ -134,20 +135,166 @@ TEST_CASE("RenderScene and closest-hit queries", "[render][trace]")
     }
 }
 
-TEST_CASE("hashRenderScene ignores non-traced changes", "[render][trace]")
+namespace
+{
+
+auto instanceOf(const RenderScene& renderScene, Entity entity) -> std::uint32_t
+{
+    for (std::uint32_t i = 0; i < renderScene.instances.size(); ++i) {
+        if (renderScene.instances[i].entityId == entt::to_integral(entity.handle())) {
+            return i;
+        }
+    }
+    FAIL("no instance of " << entity.name());
+    return 0;
+}
+
+/** @brief Same instances (by entity), transforms, materials and lights. */
+void requireSameContent(const RenderScene& a, const RenderScene& b)
+{
+    REQUIRE(a.instances.size() == b.instances.size());
+    REQUIRE(a.lights.size() == b.lights.size());
+    REQUIRE(a.skyColor == b.skyColor);
+    for (std::uint32_t i = 0; i < a.instances.size(); ++i) {
+        const RenderInstance& instance = a.instances[i];
+        const auto match = std::ranges::find_if(b.instances, [&](const RenderInstance& other) {
+            return other.entityId == instance.entityId &&
+                   a.geometries[instance.geometryIndex].kind ==
+                       b.geometries[other.geometryIndex].kind;
+        });
+        REQUIRE(match != b.instances.end());
+        REQUIRE(match->objectToWorld == instance.objectToWorld);
+        REQUIRE(match->mask == instance.mask);
+        REQUIRE(b.materials[match->materialIndex] == a.materials[instance.materialIndex]);
+        REQUIRE(b.geometries[match->geometryIndex].mesh == a.geometries[instance.geometryIndex].mesh);
+        const bool lightA = a.lightOfInstance[i] >= 0;
+        const bool lightB =
+            b.lightOfInstance[static_cast<std::size_t>(match - b.instances.begin())] >= 0;
+        REQUIRE(lightA == lightB);
+    }
+}
+
+}  // namespace
+
+TEST_CASE("RenderSceneBuilder updates and stamps only what changed", "[render][trace]")
 {
     Scene scene;
-    Entity ball = makeSphereScene(scene);
+    Entity ball = makeSphereScene(scene);  // An emissive sphere: a light.
     Entity line = scene.createEntity("Line");
     line.add<LineShapeComponent>();
+    Entity ship = scene.createEntity("Ship");
+    ship.get<TransformComponent>().translation = {6.0F, 0.0F, 0.0F};
+    Entity hull = scene.createEntity("Hull");
+    hull.add<MeshComponent>(MeshComponent{.mesh = primitives::box(Vec3(0.5F)).build()});
+    scene.setParent(hull, ship);
+    hull.patch<TransformComponent>([](auto& t) { t.translation = Vec3(0.0F); });  // At the ship.
 
-    const auto base = hashRenderScene(buildRenderScene(scene));
-    line.patch<LineShapeComponent>([](auto& l) { l.end.x = 5.0F; });
-    line.patch<NameComponent>([](auto& n) { n.name = "Renamed"; });
-    REQUIRE(hashRenderScene(buildRenderScene(scene)) == base);
+    RenderSceneBuilder builder;
+    const RenderScene& renderScene = builder.update(scene);
+    REQUIRE(renderScene.instances.size() == 2);
+    REQUIRE(renderScene.lights.size() == 1);
+    REQUIRE_FALSE(renderScene.tlasCurrent());  // Only built on request.
+    const std::uint64_t first = renderScene.version;
+    const std::uint64_t lineage = renderScene.lineage.value();
+    REQUIRE(first != 0);
+    REQUIRE(renderScene.contentVersion == first);
 
-    ball.patch<SphereComponent>([](auto& s) { s.radius = 3.0F; });
-    REQUIRE(hashRenderScene(buildRenderScene(scene)) != base);
+    SECTION("2D shapes and names change nothing traced")
+    {
+        line.patch<LineShapeComponent>([](auto& l) { l.end.x = 5.0F; });
+        line.patch<NameComponent>([](auto& n) { n.name = "Renamed"; });
+        builder.update(scene);
+        REQUIRE(renderScene.version == first);
+    }
+    SECTION("moving a parent restamps the instances below it, as a transform change")
+    {
+        const std::uint32_t hullIndex = instanceOf(renderScene, hull);
+        const std::uint32_t ballIndex = instanceOf(renderScene, ball);
+        ship.patch<TransformComponent>([](auto& t) { t.translation.y = 2.0F; });
+        builder.update(scene);
+        REQUIRE(renderScene.version > first);
+        REQUIRE(renderScene.contentVersion == first);
+        REQUIRE(renderScene.instanceVersions[hullIndex] == renderScene.version);
+        REQUIRE(renderScene.instanceVersions[ballIndex] == first);
+        REQUIRE(renderScene.lineage.value() == lineage);
+
+        // Without a current TLAS the queries test every instance.
+        const Ray ray{{6.0F, 2.0F, 10.0F}, {0.0F, 0.0F, -1.0F}};
+        const auto hit = traceClosestHit(renderScene, ray, 0.0F, kInfinity);
+        REQUIRE(hit.has_value());
+        REQUIRE(hit->instanceIndex == hullIndex);
+        REQUIRE_THAT(hit->t, WithinAbs(9.5, 1e-4));
+        REQUIRE(traceAnyHit(renderScene, ray, 0.0F, kInfinity));
+        builder.updateTlas();
+        REQUIRE(renderScene.tlasCurrent());
+        REQUIRE(traceClosestHit(renderScene, ray, 0.0F, kInfinity)->t == hit->t);
+    }
+    SECTION("materials are content; the lights follow them")
+    {
+        ball.patch<MaterialComponent>([](auto& m) { m.emissionPower = 0.0F; });
+        builder.update(scene);
+        REQUIRE(renderScene.contentVersion == renderScene.version);
+        REQUIRE(renderScene.lightsVersion == renderScene.version);
+        REQUIRE(renderScene.lights.empty());
+        REQUIRE(renderScene.lightOfInstance[instanceOf(renderScene, ball)] == -1);
+    }
+    SECTION("removed entities give their slot to the last instance")
+    {
+        scene.destroyEntity(ball);
+        builder.update(scene);
+        REQUIRE(renderScene.instances.size() == 1);
+        REQUIRE(renderScene.instances[0].entityId == entt::to_integral(hull.handle()));
+        REQUIRE(renderScene.instances[0].materialIndex == 0);
+        REQUIRE(renderScene.instanceVersions[0] == renderScene.version);
+        REQUIRE(renderScene.lights.empty());
+    }
+
+    // Whatever happened, the result is the one of a rebuild.
+    builder.update(scene);
+    requireSameContent(renderScene, buildRenderScene(scene));
+}
+
+TEST_CASE("RenderSceneBuilder follows meshes, layers and new entities", "[render][trace]")
+{
+    Scene scene;
+    const MeshHandle box = primitives::box(Vec3(0.5F)).build();
+    const MeshHandle other = primitives::box(Vec3(0.25F)).build();
+    std::vector<Entity> boxes;
+    for (int i = 0; i < 4; ++i) {
+        Entity entity = scene.createEntity("Box");
+        entity.get<TransformComponent>().translation = {2.0F * static_cast<float>(i), 0.0F, 0.0F};
+        entity.add<MeshComponent>(MeshComponent{.mesh = box});
+        boxes.push_back(entity);
+    }
+    RenderSceneBuilder builder;
+    const RenderScene& renderScene = builder.update(scene);
+    // The unit sphere's slot and one shared mesh.
+    REQUIRE(renderScene.geometries.size() == 2);
+    REQUIRE(renderScene.triangleCount() == box->triangleCount());
+
+    boxes[1].patch<MeshComponent>([&](auto& m) { m.mesh = other; });
+    scene.setLayer(boxes[2], 3);
+    Entity added = scene.createEntity("Ball");
+    added.add<SphereComponent>(1.0F);
+    builder.update(scene);
+    REQUIRE(renderScene.geometries.size() == 3);
+    REQUIRE(renderScene.instances[instanceOf(renderScene, boxes[2])].mask == layerBit(3));
+    REQUIRE(renderScene.instances.size() == 5);
+    requireSameContent(renderScene, buildRenderScene(scene));
+
+    // The last user of a mesh frees its slot, and the next new mesh takes it.
+    boxes[1].patch<MeshComponent>([&](auto& m) { m.mesh = box; });
+    builder.update(scene);
+    REQUIRE(renderScene.triangleCount() == box->triangleCount());
+    boxes[3].patch<MeshComponent>([&](auto& m) { m.mesh = primitives::sphere(0.5F, 8, 6).build(); });
+    builder.update(scene);
+    REQUIRE(renderScene.geometries.size() == 3);
+    requireSameContent(renderScene, buildRenderScene(scene));
+
+    // A copy is a lineage of its own.
+    const RenderScene copy = renderScene;
+    REQUIRE(copy.lineage.value() != renderScene.lineage.value());
+    REQUIRE(copy.version == renderScene.version);
 }
 
 TEST_CASE("tracePath sees emission and sky", "[render][trace]")

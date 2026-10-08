@@ -90,6 +90,28 @@ struct SurfaceHit
     uint instanceIndex;
 };
 
+// Thin surfaces transmitting at least this much do not take the primary id.
+const float kSeeThrough = 0.5;
+// Preview and raster shading: ambient light and a headlight at the camera.
+const float kPreviewAmbient = 0.04;
+const float kPreviewHeadlight = 0.15;
+
+Material materialOf(uint instanceIndex)
+{
+    return materials[instances[instanceIndex].materialIndex];
+}
+
+bool isThinTransmissive(Material m)
+{
+    return (m.flags & kMaterialThinWalled) != 0u && m.transmission > 0.0;
+}
+
+bool isSeeThrough(Material m)
+{
+    return (m.flags & kMaterialThinWalled) != 0u &&
+           m.transmission * (1.0 - m.metallic) >= kSeeThrough;
+}
+
 /** Nearest root in (tMin, tMax) of a ray (direction not normalized) and the unit sphere. */
 bool intersectUnitSphere(vec3 origin, vec3 direction, float tMin, float tMax, out float t)
 {

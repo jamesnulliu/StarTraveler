@@ -1,0 +1,101 @@
+#version 460
+// Raster pipeline, shading pass: the rasterized first hits (visibility
+// buffers) lit like RenderMode::Preview -- sky, ambient light, a headlight and
+// the sphere lights -- but without shadows, so no ray is traced; the nearest
+// thin transmissive surface in front (the glass layer) is blended over what it
+// covers, as the preview does with its first layer. Jittered frames are
+// averaged while nothing changes (anti-aliasing), then tone mapped.
+
+#extension GL_GOOGLE_include_directive : require
+
+#define STARCORE_NO_RAY_QUERY
+#include "hybrid.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// Bindings 1-2 and 4-6 are the scene's (hybrid.glsl, scene.glsl).
+layout(set = 0, binding = 3, rg32ui) uniform readonly uimage2D visibility;
+layout(set = 0, binding = 7, rg32ui) uniform readonly uimage2D glassVisibility;
+// rgb = sum of the frames' radiance, a = frame count.
+layout(set = 0, binding = 8, rgba32f) uniform image2D accumulation;
+layout(set = 0, binding = 9, rgba8) uniform writeonly image2D outputImage;
+layout(set = 0, binding = 10, r32ui) uniform writeonly uimage2D entityIds;
+
+/** Irradiance at a hit: shadePreview's (path.glsl) without shadows. */
+vec3 irradianceAt(SurfaceHit hit, vec3 direction)
+{
+    vec3 irradiance = frameData.skyColor.rgb + vec3(kPreviewAmbient) +
+                      vec3(kPreviewHeadlight * max(0.0, -dot(hit.normal, direction)));
+    uint count = frameData.options.z;
+    for (uint i = 0u; i < count; ++i) {
+        Light light = lights[i];
+        vec3 toCenter = light.center - hit.position;
+        float distance2 = dot(toCenter, toCenter);
+        if (distance2 <= light.radius * light.radius) {
+            continue;
+        }
+        float cosine = dot(toCenter / sqrt(distance2), hit.normal);
+        if (cosine <= 0.0) {
+            continue;
+        }
+        irradiance += light.emission * (cosine * light.radius * light.radius / distance2);
+    }
+    return irradiance;
+}
+
+/** The hit of the camera ray with the surface of a visibility buffer texel. */
+bool surfaceHit(uvec2 ids, vec3 origin, vec3 direction, out SurfaceHit hit)
+{
+    vec3 objectPoint;
+    return ids.x != 0u && reconstructHit(ids.x - 1u, ids.y, origin, direction, hit, objectPoint);
+}
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(vec2(pixel), viewportSize()))) {
+        return;
+    }
+    vec3 origin = frameData.cameraPosition.xyz;
+    vec3 direction = cameraDirection(vec2(pixel) + frameData.viewport.zw);
+
+    SurfaceHit primary;
+    bool hasPrimary = surfaceHit(imageLoad(visibility, pixel).xy, origin, direction, primary);
+    SurfaceHit pane;
+    bool hasPane = surfaceHit(imageLoad(glassVisibility, pixel).xy, origin, direction, pane) &&
+                   (!hasPrimary || pane.t < primary.t);
+
+    vec3 radiance = frameData.skyColor.rgb;
+    uint entityId = kNoEntityId;
+    if (hasPrimary) {
+        Material material = materialOf(primary.instanceIndex);
+        radiance = material.emission.rgb + material.albedo.rgb * irradianceAt(primary, direction);
+        entityId = instances[primary.instanceIndex].entityId;
+    }
+    if (hasPane) {
+        Material material = materialOf(pane.instanceIndex);
+        float transmitted = (1.0 - material.metallic) * material.transmission;
+        radiance = material.emission.rgb +
+                   material.albedo.rgb *
+                       (irradianceAt(pane, direction) * (1.0 - transmitted) + transmitted * radiance);
+        if (!isSeeThrough(material)) {
+            entityId = instances[pane.instanceIndex].entityId;
+        }
+    }
+
+    bool reset = (frameData.history.y & kHistoryReset) != 0u;
+    vec4 accumulated = (reset ? vec4(0.0) : imageLoad(accumulation, pixel)) + vec4(radiance, 1.0);
+    imageStore(accumulation, pixel, accumulated);
+
+    vec3 display =
+        toneMap(accumulated.rgb / accumulated.a * frameData.cameraRight.w, frameData.options.w);
+    if ((frameData.options.x & kFlagSrgb) != 0u) {
+        display = linearToSrgb(display);
+    }
+    // Quantize like packRgba8 (round half up) whatever rounding the GPU uses for UNORM stores.
+    vec3 quantized = floor(clamp(display, 0.0, 1.0) * 255.0 + 0.5);
+    imageStore(outputImage, pixel, vec4((quantized + 0.25) / 255.0, 1.0));
+    if ((frameData.options.x & kFlagWriteIds) != 0u) {
+        imageStore(entityIds, pixel, uvec4(entityId));
+    }
+}

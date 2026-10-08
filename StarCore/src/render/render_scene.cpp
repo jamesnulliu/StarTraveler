@@ -1,7 +1,6 @@
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
-#include <span>
-#include <type_traits>
 #include <unordered_map>
 
 #include <glm/geometric.hpp>
@@ -18,6 +17,8 @@ namespace
 {
 
 constexpr std::uint32_t kNone = ~0U;
+// The procedural unit sphere shared by all spheres (radius in the transform).
+constexpr std::uint32_t kSphereGeometry = 0;
 
 auto toRenderMaterial(const MaterialComponent* material) -> RenderMaterial
 {
@@ -34,20 +35,11 @@ auto toRenderMaterial(const MaterialComponent* material) -> RenderMaterial
     return result;
 }
 
-void addInstance(RenderScene& out, const Scene& scene, std::uint32_t geometryIndex,
-                 const Mat4& objectToWorld, const MaterialComponent* material,
-                 entt::entity entity)
+/** @brief Instance slot key: an entity may have both a sphere and a mesh. */
+auto instanceKey(entt::entity entity, GeometryKind kind) -> std::uint64_t
 {
-    RenderInstance instance;
-    instance.mask = layerBit(scene.layerOf(entity));
-    instance.objectToWorld = objectToWorld;
-    instance.worldToObject = glm::inverse(objectToWorld);
-    instance.worldBounds = out.geometries[geometryIndex].localBounds.transformed(objectToWorld);
-    instance.geometryIndex = geometryIndex;
-    instance.materialIndex = static_cast<std::uint32_t>(out.materials.size());
-    instance.entityId = entt::to_integral(entity);
-    out.materials.push_back(toRenderMaterial(material));
-    out.instances.push_back(instance);
+    return (static_cast<std::uint64_t>(entt::to_integral(entity)) << 1U) |
+           static_cast<std::uint64_t>(kind);
 }
 
 /** @brief The ray in an instance's object space (direction NOT renormalized: same t). */
@@ -57,7 +49,54 @@ auto toObjectSpace(const RenderInstance& instance, const Ray& ray) -> Ray
             Vec3(instance.worldToObject * Vec4(ray.direction, 0.0F))};
 }
 
+/**
+ * @brief Calls `visit(instanceIndex, tMax)` for the instances whose bounds the
+ *        ray enters before tMax: through the TLAS when it is current, else
+ *        all of them.
+ */
+template <typename Visit>
+void forEachInstance(const RenderScene& scene, const Ray& ray, float tMin, float& tMax,
+                     Visit&& visit)
+{
+    if (scene.tlasCurrent()) {
+        scene.tlas.traverse(ray, tMin, tMax, visit);
+        return;
+    }
+    const Vec3 inverseDirection = 1.0F / ray.direction;
+    for (std::uint32_t i = 0; i < scene.instances.size(); ++i) {
+        if (rayAabbEntry(ray, inverseDirection, scene.instances[i].worldBounds, tMin, tMax) !=
+            kInfinity) {
+            visit(i, tMax);
+        }
+    }
+}
+
+/** @brief Whether `intersect(instanceIndex)` holds for an instance the ray enters. */
+template <typename Intersect>
+auto anyInstance(const RenderScene& scene, const Ray& ray, float tMin, float tMax,
+                 Intersect&& intersect) -> bool
+{
+    if (scene.tlasCurrent()) {
+        return scene.tlas.traverseAny(ray, tMin, tMax, intersect);
+    }
+    const Vec3 inverseDirection = 1.0F / ray.direction;
+    for (std::uint32_t i = 0; i < scene.instances.size(); ++i) {
+        if (rayAabbEntry(ray, inverseDirection, scene.instances[i].worldBounds, tMin, tMax) !=
+                kInfinity &&
+            intersect(i)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 }  // namespace
+
+auto nextRenderStamp() noexcept -> std::uint64_t
+{
+    static std::atomic<std::uint64_t> counter{0};
+    return counter.fetch_add(1, std::memory_order_relaxed) + 1;
+}
 
 auto RenderScene::triangleCount() const -> std::size_t
 {
@@ -70,148 +109,282 @@ auto RenderScene::triangleCount() const -> std::size_t
     return count;
 }
 
-auto buildRenderScene(const Scene& scene) -> RenderScene
+void RenderScene::updateTlas()
 {
-    RenderScene out;
-    out.skyColor = scene.environment().skyColor;
-    out.sceneVersion = scene.version();
+    if (tlasCurrent()) {
+        return;
+    }
+    std::vector<Aabb> instanceBounds;
+    instanceBounds.reserve(instances.size());
+    for (const RenderInstance& instance : instances) {
+        instanceBounds.push_back(instance.worldBounds);
+    }
+    // Instance tests are expensive (transform + BLAS): keep TLAS leaves small.
+    tlas = Bvh::build(instanceBounds, {.maxLeafSize = 2});
+    tlasVersion = version;
+}
+
+// RenderSceneBuilder --------------------------------------------------------------------------------
+
+/** @brief What one update changed; all its changes share one stamp. */
+struct RenderSceneBuilder::Update
+{
+    std::uint64_t stamp = 0;
+    bool changed = false;         // Anything traced.
+    bool contentChanged = false;  // Anything but transforms.
+    bool lightsChanged = false;   // Sphere instances: the lights may differ.
+
+    auto stampNow() -> std::uint64_t
+    {
+        if (stamp == 0) {
+            stamp = nextRenderStamp();
+        }
+        return stamp;
+    }
+};
+
+auto RenderSceneBuilder::update(const Scene& scene) -> const RenderScene&
+{
+    if (&scene == m_source && scene.version() == m_sourceVersion && m_scene.version != 0) {
+        return m_scene;
+    }
+    m_source = &scene;
+    m_sourceVersion = scene.version();
+    ++m_pass;
+    Update update;
+
+    if (m_scene.geometries.empty()) {
+        m_scene.geometries.push_back(RenderGeometry{
+            .kind = GeometryKind::Sphere,
+            .localBounds = Aabb{Vec3(-1.0F), Vec3(1.0F)},
+        });
+        m_geometryUsers.push_back(0);
+        update.changed = true;
+        update.contentChanged = true;
+    }
+
     const auto& registry = scene.registry();
-
-    // One shared procedural unit sphere; the radius goes into the transform.
-    const auto sphereGeometry = static_cast<std::uint32_t>(out.geometries.size());
-    out.geometries.push_back(RenderGeometry{
-        .kind = GeometryKind::Sphere,
-        .localBounds = Aabb{Vec3(-1.0F), Vec3(1.0F)},
-    });
-
     for (const auto [entity, sphere] : registry.view<const SphereComponent>().each()) {
         Mat4 objectToWorld = scene.worldTransform(entity);
         objectToWorld[0] *= sphere.radius;
         objectToWorld[1] *= sphere.radius;
         objectToWorld[2] *= sphere.radius;
-        const auto* material = registry.try_get<MaterialComponent>(entity);
-        addInstance(out, scene, sphereGeometry, objectToWorld, material, entity);
-
-        // Emissive, (nearly) uniformly scaled spheres are sampled as lights.
-        const Vec3 emission = material != nullptr ? material->emission() : Vec3(0.0F);
-        const Vec3 axes{glm::length(Vec3(objectToWorld[0])), glm::length(Vec3(objectToWorld[1])),
-                        glm::length(Vec3(objectToWorld[2]))};
-        const float radius = std::max({axes.x, axes.y, axes.z});
-        const bool uniform = radius > 0.0F && std::min({axes.x, axes.y, axes.z}) > 0.999F * radius;
-        if (uniform && std::max({emission.r, emission.g, emission.b}) > 0.0F) {
-            out.lights.push_back(RenderLight{
-                .center = Vec3(objectToWorld[3]),
-                .radius = radius,
-                .emission = emission,
-                .instanceIndex = static_cast<std::uint32_t>(out.instances.size() - 1),
-            });
-        }
+        syncInstance(update, instanceKey(entity, GeometryKind::Sphere), GeometryKind::Sphere, {},
+                     objectToWorld, toRenderMaterial(registry.try_get<MaterialComponent>(entity)),
+                     entt::to_integral(entity), layerBit(scene.layerOf(entity)));
     }
-
-    // Each MeshData becomes one geometry (BLAS), shared by all its instances.
-    std::unordered_map<const MeshData*, std::uint32_t> meshGeometries;
     for (const auto [entity, component] : registry.view<const MeshComponent>().each()) {
         if (!component.mesh || component.mesh->triangleCount() == 0) {
             continue;
         }
-        const auto [it, inserted] = meshGeometries.try_emplace(
-            component.mesh.get(), static_cast<std::uint32_t>(out.geometries.size()));
-        if (inserted) {
-            out.geometries.push_back(RenderGeometry{
-                .kind = GeometryKind::Triangles,
-                .mesh = component.mesh,
-                .localBounds = component.mesh->bounds,
+        syncInstance(update, instanceKey(entity, GeometryKind::Triangles), GeometryKind::Triangles,
+                     component.mesh, scene.worldTransform(entity),
+                     toRenderMaterial(registry.try_get<MaterialComponent>(entity)),
+                     entt::to_integral(entity), layerBit(scene.layerOf(entity)));
+    }
+    // Instances whose entity, sphere or mesh is gone; from the back, so the
+    // instance moved into a removed slot was already seen.
+    for (auto index = static_cast<std::uint32_t>(m_scene.instances.size()); index-- > 0;) {
+        if (m_seen[index] != m_pass) {
+            removeInstance(update, index);
+        }
+    }
+
+    if (scene.environment().skyColor != m_scene.skyColor) {
+        m_scene.skyColor = scene.environment().skyColor;
+        update.changed = true;
+        update.contentChanged = true;
+    }
+    if (update.lightsChanged) {
+        syncLights(update);
+    }
+    if (update.changed) {
+        m_scene.version = update.stampNow();
+    }
+    if (update.contentChanged) {
+        m_scene.contentVersion = update.stampNow();
+    }
+    return m_scene;
+}
+
+void RenderSceneBuilder::syncInstance(Update& update, std::uint64_t key, GeometryKind kind,
+                                      const MeshHandle& mesh, const Mat4& objectToWorld,
+                                      const RenderMaterial& material, std::uint32_t entityId,
+                                      std::uint32_t mask)
+{
+    RenderScene& scene = m_scene;
+    const auto [slot, inserted] =
+        m_instanceOf.try_emplace(key, static_cast<std::uint32_t>(scene.instances.size()));
+    const std::uint32_t index = slot->second;
+    if (inserted) {
+        scene.instances.emplace_back();
+        scene.materials.emplace_back();
+        scene.lightOfInstance.push_back(-1);
+        scene.instanceVersions.push_back(0);
+        m_keys.push_back(key);
+        m_seen.push_back(0);
+    }
+    m_seen[index] = m_pass;
+    RenderInstance& instance = scene.instances[index];
+
+    std::uint32_t geometry = kSphereGeometry;
+    if (kind == GeometryKind::Triangles) {
+        if (!inserted && scene.geometries[instance.geometryIndex].mesh == mesh) {
+            geometry = instance.geometryIndex;
+        } else {
+            geometry = acquireGeometry(mesh);
+            if (!inserted) {
+                releaseGeometry(instance.geometryIndex);
+            }
+        }
+    }
+
+    const bool moved = inserted || instance.objectToWorld != objectToWorld;
+    const bool content = inserted || geometry != instance.geometryIndex ||
+                         instance.entityId != entityId || instance.mask != mask ||
+                         scene.materials[index] != material;
+    if (!moved && !content) {
+        return;
+    }
+    if (moved) {
+        instance.objectToWorld = objectToWorld;
+        instance.worldToObject = glm::inverse(objectToWorld);
+    }
+    instance.geometryIndex = geometry;
+    instance.materialIndex = index;
+    instance.entityId = entityId;
+    instance.mask = mask;
+    instance.worldBounds = scene.geometries[geometry].localBounds.transformed(instance.objectToWorld);
+    scene.materials[index] = material;
+    scene.instanceVersions[index] = update.stampNow();
+    update.changed = true;
+    update.contentChanged = update.contentChanged || content;
+    update.lightsChanged = update.lightsChanged || kind == GeometryKind::Sphere;
+}
+
+void RenderSceneBuilder::removeInstance(Update& update, std::uint32_t index)
+{
+    RenderScene& scene = m_scene;
+    const std::uint32_t geometry = scene.instances[index].geometryIndex;
+    if (geometry != kSphereGeometry) {
+        releaseGeometry(geometry);
+    }
+    m_instanceOf.erase(m_keys[index]);
+    const auto last = static_cast<std::uint32_t>(scene.instances.size() - 1);
+    if (index != last) {
+        scene.instances[index] = scene.instances[last];
+        scene.instances[index].materialIndex = index;
+        scene.materials[index] = scene.materials[last];
+        scene.lightOfInstance[index] = scene.lightOfInstance[last];
+        scene.instanceVersions[index] = update.stampNow();  // Another instance now.
+        m_keys[index] = m_keys[last];
+        m_seen[index] = m_seen[last];
+        m_instanceOf[m_keys[index]] = index;
+    }
+    scene.instances.pop_back();
+    scene.materials.pop_back();
+    scene.lightOfInstance.pop_back();
+    scene.instanceVersions.pop_back();
+    m_keys.pop_back();
+    m_seen.pop_back();
+    update.changed = true;
+    update.contentChanged = true;
+    update.lightsChanged = true;
+}
+
+void RenderSceneBuilder::syncLights(Update& update)
+{
+    RenderScene& scene = m_scene;
+    // Emissive, (nearly) uniformly scaled spheres are sampled as lights.
+    std::vector<RenderLight> lights;
+    for (std::uint32_t i = 0; i < scene.instances.size(); ++i) {
+        const RenderInstance& instance = scene.instances[i];
+        if (instance.geometryIndex != kSphereGeometry) {
+            continue;
+        }
+        const Vec3 emission(scene.materials[i].emission);
+        const Mat4& m = instance.objectToWorld;
+        const Vec3 axes{glm::length(Vec3(m[0])), glm::length(Vec3(m[1])), glm::length(Vec3(m[2]))};
+        const float radius = std::max({axes.x, axes.y, axes.z});
+        const bool uniform = radius > 0.0F && std::min({axes.x, axes.y, axes.z}) > 0.999F * radius;
+        if (uniform && std::max({emission.r, emission.g, emission.b}) > 0.0F) {
+            lights.push_back(RenderLight{
+                .center = Vec3(m[3]),
+                .radius = radius,
+                .emission = emission,
+                .instanceIndex = i,
             });
         }
-        addInstance(out, scene, it->second, scene.worldTransform(entity),
-                    registry.try_get<MaterialComponent>(entity), entity);
     }
-
-    out.lightOfInstance.assign(out.instances.size(), -1);
-    for (std::size_t i = 0; i < out.lights.size(); ++i) {
-        out.lightOfInstance[out.lights[i].instanceIndex] = static_cast<std::int32_t>(i);
+    if (lights != scene.lights) {
+        scene.lights = std::move(lights);
+        scene.lightsVersion = update.stampNow();
+        update.changed = true;
     }
-
-    std::vector<Aabb> instanceBounds;
-    instanceBounds.reserve(out.instances.size());
-    for (const RenderInstance& instance : out.instances) {
-        instanceBounds.push_back(instance.worldBounds);
+    // Light indices are part of the instances (their GPU records).
+    std::vector<std::int32_t> lightOfInstance(scene.instances.size(), -1);
+    for (std::size_t i = 0; i < scene.lights.size(); ++i) {
+        lightOfInstance[scene.lights[i].instanceIndex] = static_cast<std::int32_t>(i);
     }
-    // Instance tests are expensive (transform + BLAS): keep TLAS leaves small.
-    out.tlas = Bvh::build(instanceBounds, {.maxLeafSize = 2});
-    return out;
-}
-
-namespace
-{
-
-/** @brief FNV-1a over the raw bytes of trivially copyable data. */
-class Fnv1a
-{
-public:
-    template <typename T>
-    void add(std::span<const T> values)
-    {
-        static_assert(std::is_trivially_copyable_v<T>);
-        const auto bytes = std::as_bytes(values);
-        for (const std::byte b : bytes) {
-            m_hash = (m_hash ^ static_cast<std::uint64_t>(b)) * 1099511628211ULL;
+    for (std::size_t i = 0; i < lightOfInstance.size(); ++i) {
+        if (scene.lightOfInstance[i] != lightOfInstance[i]) {
+            scene.lightOfInstance[i] = lightOfInstance[i];
+            scene.instanceVersions[i] = update.stampNow();
+            update.changed = true;
         }
     }
-
-    template <typename T>
-    void add(const T& value)
-    {
-        add(std::span<const T>(&value, 1));
-    }
-
-    [[nodiscard]] auto value() const -> std::uint64_t
-    {
-        return m_hash;
-    }
-
-private:
-    std::uint64_t m_hash = 14695981039346656037ULL;
-};
-
-}  // namespace
-
-auto hashRenderScene(const RenderScene& scene) -> std::uint64_t
-{
-    Fnv1a hash;
-    for (const RenderGeometry& geometry : scene.geometries) {
-        // Meshes are immutable: their identity (plus size/bounds against
-        // address reuse) stands for their contents.
-        hash.add(geometry.kind);
-        hash.add(reinterpret_cast<std::uintptr_t>(geometry.mesh.get()));
-        hash.add(geometry.mesh ? geometry.mesh->triangleCount() : std::size_t{0});
-        hash.add(geometry.localBounds);
-    }
-    hash.add(std::span<const RenderInstance>(scene.instances));
-    hash.add(std::span<const RenderMaterial>(scene.materials));
-    hash.add(scene.skyColor);
-    return hash.value();
 }
 
-auto hashRenderSceneContent(const RenderScene& scene) -> std::uint64_t
+auto RenderSceneBuilder::acquireGeometry(const MeshHandle& mesh) -> std::uint32_t
 {
-    Fnv1a hash;
-    for (const RenderGeometry& geometry : scene.geometries) {
-        hash.add(geometry.kind);
-        hash.add(reinterpret_cast<std::uintptr_t>(geometry.mesh.get()));
-        hash.add(geometry.mesh ? geometry.mesh->triangleCount() : std::size_t{0});
-        hash.add(geometry.localBounds);
+    const auto [slot, inserted] = m_geometryOf.try_emplace(mesh.get(), 0U);
+    if (inserted) {
+        std::uint32_t index = 0;
+        if (!m_freeGeometries.empty()) {
+            index = m_freeGeometries.back();
+            m_freeGeometries.pop_back();
+        } else {
+            index = static_cast<std::uint32_t>(m_scene.geometries.size());
+            m_scene.geometries.emplace_back();
+            m_geometryUsers.push_back(0);
+        }
+        m_scene.geometries[index] = RenderGeometry{
+            .kind = GeometryKind::Triangles,
+            .mesh = mesh,
+            .localBounds = mesh->bounds,
+        };
+        slot->second = index;
     }
-    for (const RenderInstance& instance : scene.instances) {
-        hash.add(instance.geometryIndex);
-        hash.add(instance.materialIndex);
-        hash.add(instance.entityId);
-        hash.add(instance.mask);
-    }
-    hash.add(std::span<const RenderMaterial>(scene.materials));
-    hash.add(scene.skyColor);
-    return hash.value();
+    ++m_geometryUsers[slot->second];
+    return slot->second;
 }
+
+void RenderSceneBuilder::releaseGeometry(std::uint32_t index)
+{
+    if (--m_geometryUsers[index] > 0) {
+        return;
+    }
+    m_geometryOf.erase(m_scene.geometries[index].mesh.get());
+    m_scene.geometries[index] = RenderGeometry{};
+    m_freeGeometries.push_back(index);
+}
+
+auto RenderSceneBuilder::take() -> RenderScene
+{
+    RenderScene scene = std::move(m_scene);
+    *this = RenderSceneBuilder{};
+    return scene;
+}
+
+auto buildRenderScene(const Scene& scene) -> RenderScene
+{
+    RenderSceneBuilder builder;
+    builder.update(scene);
+    builder.updateTlas();
+    return builder.take();
+}
+
+// Queries ---------------------------------------------------------------------------------------------
 
 auto traceClosestHit(const RenderScene& scene, const Ray& ray, float tMin, float tMax,
                      std::uint32_t mask) -> std::optional<SurfaceHit>
@@ -227,7 +400,7 @@ auto traceClosestHit(const RenderScene& scene, const Ray& ray, float tMin, float
     };
     Candidate best;
 
-    scene.tlas.traverse(ray, tMin, tMax, [&](std::uint32_t instanceIndex, float& closest) {
+    forEachInstance(scene, ray, tMin, tMax, [&](std::uint32_t instanceIndex, float& closest) {
         const RenderInstance& instance = scene.instances[instanceIndex];
         if ((instance.mask & mask) == 0) {
             return;
@@ -301,7 +474,7 @@ auto traceClosestHit(const RenderScene& scene, const Ray& ray, float tMin, float
 auto traceAnyHit(const RenderScene& scene, const Ray& ray, float tMin, float tMax,
                  std::uint32_t mask) -> bool
 {
-    return scene.tlas.traverseAny(ray, tMin, tMax, [&](std::uint32_t instanceIndex) {
+    return anyInstance(scene, ray, tMin, tMax, [&](std::uint32_t instanceIndex) {
         const RenderInstance& instance = scene.instances[instanceIndex];
         if ((instance.mask & mask) == 0) {
             return false;

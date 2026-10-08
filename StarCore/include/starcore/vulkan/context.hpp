@@ -25,8 +25,8 @@ struct ContextConfig
     // rendering, tests).
     std::vector<std::string> surfaceExtensions;
     std::function<VkResult(VkInstance, VkSurfaceKHR*)> createSurface;
-    // Enable acceleration structures + ray queries (the GPU path tracer) when
-    // the device supports them.
+    // Enable acceleration structures + ray queries (the GPU renderer's
+    // ray-traced pipelines) when the device supports them.
     bool enableRayQuery = true;
     // Use the GPU whose name contains this (case-insensitive) instead of the
     // default (discrete first). The environment variable STARCORE_VULKAN_DEVICE
@@ -39,8 +39,11 @@ struct DeviceInfo
     std::string name;
     std::uint32_t apiVersion = 0;
     bool discrete = false;
-    // VK_KHR_acceleration_structure, VK_KHR_ray_query and VK_KHR_push_descriptor
-    // are enabled: the GPU path tracer can run.
+    // VK_KHR_push_descriptor is enabled: the GPU renderer can run (its
+    // rasterizing pipeline needs nothing else).
+    bool pushDescriptors = false;
+    // VK_KHR_acceleration_structure and VK_KHR_ray_query are enabled: so can
+    // its ray-traced pipelines.
     bool rayQuery = false;
     // VkPhysicalDeviceAccelerationStructurePropertiesKHR (0 without ray query).
     std::uint32_t scratchAlignment = 0;

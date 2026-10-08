@@ -233,12 +233,13 @@ auto Context::create(const ContextConfig& config)
     }
     vkb::PhysicalDevice& gpu = impl->physicalDevice;
 
-    // Ray queries: optional, the CPU path tracer works everywhere.
+    // Push descriptors (every GPU renderer pipeline) and ray queries: optional,
+    // the CPU path tracer works everywhere.
+    bool pushDescriptors = gpu.enable_extension_if_present(VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
     const char* rayQueryExtensions[] = {
         VK_KHR_ACCELERATION_STRUCTURE_EXTENSION_NAME,
         VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME,
         VK_KHR_RAY_QUERY_EXTENSION_NAME,
-        VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME,
     };
     bool rayQuery = config.enableRayQuery &&
                     std::ranges::all_of(rayQueryExtensions, [&](const char* extension) {
@@ -298,13 +299,15 @@ auto Context::create(const ContextConfig& config)
                      "vkGetAccelerationStructureDeviceAddressKHR");
         loadFunction(vkDevice, functions.cmdBuildAccelerationStructures,
                      "vkCmdBuildAccelerationStructuresKHR");
-        loadFunction(vkDevice, functions.cmdPushDescriptorSet, "vkCmdPushDescriptorSetKHR");
         rayQuery = functions.createAccelerationStructure != nullptr &&
                    functions.destroyAccelerationStructure != nullptr &&
                    functions.getAccelerationStructureBuildSizes != nullptr &&
                    functions.getAccelerationStructureDeviceAddress != nullptr &&
-                   functions.cmdBuildAccelerationStructures != nullptr &&
-                   functions.cmdPushDescriptorSet != nullptr;
+                   functions.cmdBuildAccelerationStructures != nullptr;
+    }
+    if (pushDescriptors) {
+        loadFunction(vkDevice, functions.cmdPushDescriptorSet, "vkCmdPushDescriptorSetKHR");
+        pushDescriptors = functions.cmdPushDescriptorSet != nullptr;
     }
 
     // Allocator -----------------------------------------------------------------------------------
@@ -335,6 +338,7 @@ auto Context::create(const ContextConfig& config)
     info.name = gpu.name;
     info.apiVersion = gpu.properties.apiVersion;
     info.discrete = gpu.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
+    info.pushDescriptors = pushDescriptors;
     info.rayQuery = rayQuery;
     if (rayQuery) {
         VkPhysicalDeviceAccelerationStructurePropertiesKHR accelerationProperties{};
@@ -352,11 +356,12 @@ auto Context::create(const ContextConfig& config)
         info.timestampPeriod = gpu.properties.limits.timestampPeriod;
     }
 
-    SC_CORE_INFO("Vulkan device: {} (API {}.{}.{}, {}, ray query: {}{}{})", info.name,
+    SC_CORE_INFO("Vulkan device: {} (API {}.{}.{}, {}, ray query: {}{}{}{})", info.name,
                  VK_API_VERSION_MAJOR(info.apiVersion), VK_API_VERSION_MINOR(info.apiVersion),
                  VK_API_VERSION_PATCH(info.apiVersion),
                  info.discrete ? "discrete" : "integrated/other",
-                 info.rayQuery ? "enabled" : "not available", headless ? ", headless" : "",
+                 info.rayQuery ? "enabled" : "not available",
+                 info.pushDescriptors ? "" : ", no push descriptors", headless ? ", headless" : "",
                  validation ? ", validation" : "");
 
     impl->validation = validation;

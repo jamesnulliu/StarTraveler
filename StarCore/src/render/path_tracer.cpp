@@ -412,7 +412,7 @@ auto CpuPathTracer::needsReset(const RenderScene& scene, const Camera& camera,
                                const PathTracerSettings& settings) const -> bool
 {
     return m_frameIndex == 0 || !settings.accumulate ||
-           scene.sceneVersion != m_lastSceneVersion || camera.view() != m_lastView ||
+           scene.version != m_lastSceneVersion || camera.view() != m_lastView ||
            camera.projection() != m_lastProjection || settings != m_lastSettings;
 }
 
@@ -431,7 +431,7 @@ void CpuPathTracer::render(const RenderScene& scene, const Camera& camera,
         m_idStride = 0;
         m_accumulation.fill(Vec4(0.0F));
     }
-    m_lastSceneVersion = scene.sceneVersion;
+    m_lastSceneVersion = scene.version;
     m_lastView = camera.view();
     m_lastProjection = camera.projection();
     m_lastSettings = settings;

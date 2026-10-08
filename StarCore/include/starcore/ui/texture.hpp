@@ -80,7 +80,7 @@ private:
 };
 
 /**
- * @brief An image rendered on the GPU (e.g. by GpuPathTracer), drawable with
+ * @brief An image rendered on the GPU (e.g. by GpuRenderer), drawable with
  *        ImGui::Image. Only registers a descriptor; the image is owned elsewhere.
  */
 class ImGuiImage

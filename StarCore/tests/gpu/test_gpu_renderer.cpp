@@ -1,8 +1,9 @@
-// GPU path tracer vs the CPU reference. The GPU runs the same estimator with
-// the same random streams, so the images agree almost bit for bit (on an RTX
-// 4060 and an Intel Arc iGPU, 8x8 block means differ by at most 1/64). Other
-// GPUs may round differently and let paths diverge, so the tolerances below
-// are statistical; primary visibility (entity ids) must agree almost everywhere.
+// GPU renderer vs the CPU reference. The GPU path tracer runs the same
+// estimator with the same random streams, so the images agree almost bit for
+// bit (on an RTX 4060 and an Intel Arc iGPU, 8x8 block means differ by at most
+// 1/64). Other GPUs may round differently and let paths diverge, so the
+// tolerances below are statistical; primary visibility (entity ids) must agree
+// almost everywhere.
 //
 // STARCORE_VULKAN_DEVICE=Intel (any part of a device name) picks another GPU.
 
@@ -14,7 +15,7 @@
 #include <glm/common.hpp>
 
 #include <starcore/asset/mesh.hpp>
-#include <starcore/gpu/gpu_path_tracer.hpp>
+#include <starcore/gpu/gpu_renderer.hpp>
 #include <starcore/math/color.hpp>
 #include <starcore/render/path_tracer.hpp>
 #include <starcore/scene/entity.hpp>
@@ -37,13 +38,34 @@ auto gpuContext() -> vulkan::Context*
     return context.get();
 }
 
-/** @brief Skips the test without ray queries; fails it on new validation errors. */
+/** @brief A context of the same GPU with ray queries left disabled. */
+auto contextWithoutRayQueries() -> vulkan::Context*
+{
+    static const std::unique_ptr<vulkan::Context> context = [] {
+        auto created = vulkan::Context::create({.applicationName = "StarCoreGpuTests",
+                                                .enableValidation = true,
+                                                .enableRayQuery = false});
+        return created ? std::move(*created) : nullptr;
+    }();
+    return context.get();
+}
+
+/**
+ * @brief Skips the test without a GPU renderer (or ray queries, if asked);
+ *        fails it on new validation errors.
+ */
 class GpuTest
 {
 public:
-    GpuTest() : m_context(gpuContext())
+    explicit GpuTest(bool rayTracing = true, vulkan::Context* context = gpuContext())
+        : m_context(context)
     {
-        if (m_context == nullptr || !m_context->deviceInfo().rayQuery) {
+        if (m_context == nullptr || !m_context->deviceInfo().pushDescriptors) {
+            m_context = nullptr;
+            SKIP("no Vulkan device for the GPU renderer");
+        }
+        if (rayTracing && !m_context->deviceInfo().rayQuery) {
+            m_context = nullptr;
             SKIP("no Vulkan device with ray query support");
         }
         m_errors = m_context->validationErrors();
@@ -61,10 +83,10 @@ public:
     {
         return *m_context;
     }
-    [[nodiscard]] auto makeTracer(std::uint32_t width, std::uint32_t height) const
-        -> std::unique_ptr<GpuPathTracer>
+    [[nodiscard]] auto makeRenderer(std::uint32_t width, std::uint32_t height) const
+        -> std::unique_ptr<GpuRenderer>
     {
-        auto tracer = GpuPathTracer::create(*m_context);
+        auto tracer = GpuRenderer::create(*m_context);
         REQUIRE(tracer.has_value());
         (*tracer)->resize(width, height);
         return std::move(*tracer);
@@ -234,7 +256,7 @@ TEST_CASE("GPU: emissive sphere on a sky", "[gpu]")
     ball.add<MaterialComponent>(MaterialComponent{
         .albedo = Vec3(0.0F), .emissionColor = {1.0F, 0.0F, 0.0F}, .emissionPower = 1.0F});
 
-    auto tracer = gpu.makeTracer(64, 48);
+    auto tracer = gpu.makeRenderer(64, 48);
     tracer->render(buildRenderScene(scene), makeCamera(64, 48), PathTracerSettings{});
     const ColorImage image = tracer->readImage();
     const IdImage ids = tracer->readEntityIds();
@@ -254,7 +276,7 @@ TEST_CASE("GPU: white furnace", "[gpu]")
     ball.add<SphereComponent>(3.0F);
     ball.add<MaterialComponent>(MaterialComponent{.albedo = Vec3(1.0F)});
 
-    auto tracer = gpu.makeTracer(32, 32);
+    auto tracer = gpu.makeRenderer(32, 32);
     const RenderScene renderScene = buildRenderScene(scene);
     const PathTracerSettings settings{.maxBounces = 16, .srgbOutput = false};
     for (int i = 0; i < 4; ++i) {
@@ -284,7 +306,7 @@ TEST_CASE("GPU: primary visibility matches the CPU", "[gpu]")
         CpuPathTracer cpu;
         cpu.resize(kWidth, kHeight);
         cpu.render(renderScene, camera, settings);
-        auto tracer = gpu.makeTracer(kWidth, kHeight);
+        auto tracer = gpu.makeRenderer(kWidth, kHeight);
         tracer->render(renderScene, camera, settings);
         const IdImage ids = tracer->readEntityIds();
 
@@ -315,7 +337,7 @@ TEST_CASE("GPU: path tracing converges to the CPU image", "[gpu]")
                        float blockTolerance, float meanTolerance) {
         CpuPathTracer cpu;
         cpu.resize(kWidth, kHeight);
-        auto tracer = gpu.makeTracer(kWidth, kHeight);
+        auto tracer = gpu.makeRenderer(kWidth, kHeight);
         for (std::uint32_t i = 0; i < frames; ++i) {
             cpu.render(renderScene, camera, settings);
             tracer->render(renderScene, camera, settings);
@@ -369,7 +391,7 @@ TEST_CASE("GPU: accumulation restarts and scenes update", "[gpu]")
     TestScene test;
     constexpr std::uint32_t kSize = 48;
     Camera camera = makeCamera(kSize, kSize);
-    auto tracer = gpu.makeTracer(kSize, kSize);
+    auto tracer = gpu.makeRenderer(kSize, kSize);
     const PathTracerSettings settings;
 
     // Before the first frame: black, no entities.
@@ -441,6 +463,57 @@ TEST_CASE("GPU: accumulation restarts and scenes update", "[gpu]")
     REQUIRE(tracer->readImage().size() == UVec2(20, 10));
 }
 
+TEST_CASE("GPU: scene updates upload only what changed", "[gpu]")
+{
+    const GpuTest gpu;
+    TestScene test;
+    constexpr std::uint32_t kSize = 64;
+    const Camera camera = makeCamera(kSize, kSize);
+    const PathTracerSettings settings{.mode = RenderMode::Preview};
+    RenderSceneBuilder builder;
+    const RenderScene& renderScene = builder.update(test.scene);
+    const auto instanceCount = static_cast<std::uint32_t>(renderScene.instances.size());
+    auto tracer = gpu.makeRenderer(kSize, kSize);
+
+    // The same image as a renderer given the whole scene anew.
+    auto requireUpToDate = [&] {
+        auto fresh = gpu.makeRenderer(kSize, kSize);
+        fresh->render(buildRenderScene(test.scene), camera, settings);
+        CHECK(idMismatch(tracer->readEntityIds(), fresh->readEntityIds()) == 0.0);
+        CHECK(meanDifference(tracer->readImage(), fresh->readImage()) == 0.0F);
+    };
+
+    tracer->render(renderScene, camera, settings);
+    REQUIRE(tracer->uploadedInstances() == instanceCount);
+    tracer->render(renderScene, camera, settings);
+    REQUIRE(tracer->uploadedInstances() == 0);
+
+    // Moving one entity uploads its instance.
+    test.mirror.patch<TransformComponent>([](auto& t) { t.translation.y += 0.5F; });
+    builder.update(test.scene);
+    tracer->render(renderScene, camera, settings);
+    REQUIRE(tracer->uploadedInstances() == 1);
+    requireUpToDate();
+
+    // New, changed and removed entities.
+    Entity ball = test.scene.createEntity("Ball");
+    ball.get<TransformComponent>().translation = {0.0F, 2.0F, 0.0F};
+    ball.add<SphereComponent>(0.5F);
+    builder.update(test.scene);
+    tracer->render(renderScene, camera, settings);
+    REQUIRE(tracer->uploadedInstances() == 1);
+    test.cube.patch<MaterialComponent>([](auto& m) { m.albedo = {0.2F, 0.4F, 1.0F}; });
+    test.scene.destroyEntity(test.glass);
+    builder.update(test.scene);
+    tracer->render(renderScene, camera, settings);
+    REQUIRE(tracer->uploadedInstances() == 2);  // The cube and the instance moved into the gap.
+    requireUpToDate();
+
+    // Another render scene is uploaded whole.
+    tracer->render(buildRenderScene(test.scene), camera, settings);
+    REQUIRE(tracer->uploadedInstances() == instanceCount);
+}
+
 // Hybrid pipeline ------------------------------------------------------------------------------------
 
 namespace
@@ -465,7 +538,7 @@ TEST_CASE("GPU hybrid: emissive sphere, sky and white furnace", "[gpu][hybrid]")
         ball.add<SphereComponent>(2.0F);
         ball.add<MaterialComponent>(MaterialComponent{
             .albedo = Vec3(0.0F), .emissionColor = {1.0F, 0.0F, 0.0F}, .emissionPower = 1.0F});
-        auto tracer = gpu.makeTracer(64, 48);
+        auto tracer = gpu.makeRenderer(64, 48);
         tracer->render(buildRenderScene(scene), makeCamera(64, 48), {}, hybridOptions());
         const ColorImage image = tracer->readImage();
         const IdImage ids = tracer->readEntityIds();
@@ -486,7 +559,7 @@ TEST_CASE("GPU hybrid: emissive sphere, sky and white furnace", "[gpu][hybrid]")
         Entity ball = scene.createEntity("Ball");
         ball.add<SphereComponent>(3.0F);
         ball.add<MaterialComponent>(MaterialComponent{.albedo = Vec3(1.0F)});
-        auto tracer = gpu.makeTracer(32, 32);
+        auto tracer = gpu.makeRenderer(32, 32);
         const RenderScene renderScene = buildRenderScene(scene);
         const PathTracerSettings settings{.maxBounces = 16, .srgbOutput = false};
         for (int i = 0; i < 4; ++i) {
@@ -512,9 +585,9 @@ TEST_CASE("GPU hybrid: rasterized visibility matches the path tracer", "[gpu][hy
 
     for (const std::uint32_t mask : {kAllInstances, kAllInstances & ~layerBit(3)}) {
         const PathTracerSettings settings{.instanceMask = mask};
-        auto reference = gpu.makeTracer(kWidth, kHeight);
+        auto reference = gpu.makeRenderer(kWidth, kHeight);
         reference->render(renderScene, camera, settings);
-        auto hybrid = gpu.makeTracer(kWidth, kHeight);
+        auto hybrid = gpu.makeRenderer(kWidth, kHeight);
         hybrid->render(renderScene, camera, settings, hybridOptions());
         const IdImage ids = hybrid->readEntityIds();
 
@@ -541,7 +614,7 @@ TEST_CASE("GPU hybrid: a still view converges to the path tracer's image", "[gpu
     const Camera camera = makeCamera(kWidth, kHeight);
     const PathTracerSettings settings{.samplesPerPixel = 8, .fireflyClamp = 8.0F};
 
-    auto reference = gpu.makeTracer(kWidth, kHeight);
+    auto reference = gpu.makeRenderer(kWidth, kHeight);
     for (int i = 0; i < 128; ++i) {
         reference->render(renderScene, camera, settings);
     }
@@ -549,7 +622,7 @@ TEST_CASE("GPU hybrid: a still view converges to the path tracer's image", "[gpu
 
     for (const bool spatial : {false, true}) {
         INFO("spatial filter: " << spatial);
-        auto hybrid = gpu.makeTracer(kWidth, kHeight);
+        auto hybrid = gpu.makeRenderer(kWidth, kHeight);
         for (int i = 0; i < 128; ++i) {
             hybrid->render(renderScene, camera, settings, hybridOptions(spatial));
         }
@@ -574,7 +647,7 @@ TEST_CASE("GPU hybrid: samples are reused while moving and filtered", "[gpu][hyb
     Camera moved = camera;
     moved.setPosition(camera.position() + Vec3(0.08F, 0.04F, -0.2F));
 
-    auto reference = gpu.makeTracer(kWidth, kHeight);
+    auto reference = gpu.makeRenderer(kWidth, kHeight);
     for (int i = 0; i < 128; ++i) {
         reference->render(renderScene, moved,
                           PathTracerSettings{.samplesPerPixel = 8, .fireflyClamp = 8.0F});
@@ -585,7 +658,7 @@ TEST_CASE("GPU hybrid: samples are reused while moving and filtered", "[gpu][hyb
     auto render = [&](bool spatial, bool temporal) {
         GpuRenderOptions options = hybridOptions(spatial);
         options.denoiser.temporal = temporal;
-        auto tracer = gpu.makeTracer(kWidth, kHeight);
+        auto tracer = gpu.makeRenderer(kWidth, kHeight);
         if (temporal) {
             for (int i = 0; i < 32; ++i) {
                 tracer->render(renderScene, camera, settings, options);
@@ -615,12 +688,13 @@ TEST_CASE("GPU hybrid: what restarts the accumulation", "[gpu][hybrid]")
 {
     const GpuTest gpu;
     TestScene test;
-    RenderScene renderScene = buildRenderScene(test.scene);
+    RenderSceneBuilder builder;
+    const RenderScene& renderScene = builder.update(test.scene);
     constexpr std::uint32_t kWidth = 48;
     constexpr std::uint32_t kHeight = 36;
     Camera camera = makeCamera(kWidth, kHeight);
     const PathTracerSettings settings;
-    auto hybrid = gpu.makeTracer(kWidth, kHeight);
+    auto hybrid = gpu.makeRenderer(kWidth, kHeight);
     for (int i = 0; i < 3; ++i) {
         hybrid->render(renderScene, camera, settings, hybridOptions());
     }
@@ -631,7 +705,7 @@ TEST_CASE("GPU hybrid: what restarts the accumulation", "[gpu][hybrid]")
     hybrid->render(renderScene, camera, settings, hybridOptions());
     test.mirror.get<TransformComponent>().translation += Vec3(0.05F, 0.0F, 0.0F);
     test.scene.markDirty();
-    renderScene = buildRenderScene(test.scene);
+    builder.update(test.scene);
     hybrid->render(renderScene, camera, settings, hybridOptions());
     PathTracerSettings display = settings;
     display.exposure = 2.0F;
@@ -643,7 +717,7 @@ TEST_CASE("GPU hybrid: what restarts the accumulation", "[gpu][hybrid]")
     // New content, estimator settings or the other pipeline start over.
     test.mirror.get<MaterialComponent>().albedo = {0.9F, 0.2F, 0.2F};
     test.scene.markDirty();
-    renderScene = buildRenderScene(test.scene);
+    builder.update(test.scene);
     hybrid->render(renderScene, camera, settings, hybridOptions());
     REQUIRE(hybrid->accumulatedFrames() == 1);
     hybrid->render(renderScene, camera, settings, hybridOptions());
@@ -663,10 +737,161 @@ TEST_CASE("GPU hybrid: what restarts the accumulation", "[gpu][hybrid]")
         hybrid->render(renderScene, camera, bounces, options);
     }
     REQUIRE(hybrid->accumulatedFrames() == 9);
+    // The same content rebuilt is new content (another render scene).
+    hybrid->render(buildRenderScene(test.scene), camera, bounces, hybridOptions());
+    REQUIRE(hybrid->accumulatedFrames() == 1);
     hybrid->resize(40, 30);
     Scene empty;
     empty.environment().skyColor = {1.0F, 0.0F, 0.0F};
     hybrid->render(buildRenderScene(empty), makeCamera(40, 30), settings, hybridOptions());
     const ColorImage sky = hybrid->readImage();
     REQUIRE(sky.at(10, 10) == packRgba8({1.0F, 0.0F, 0.0F, 1.0F}));
+}
+
+// Raster pipeline ------------------------------------------------------------------------------------
+
+namespace
+{
+
+const GpuRenderOptions kRaster{.pipeline = GpuPipeline::Raster};
+
+/**
+ * @brief Spheres, a cube and a window pane in front, lit by two sphere lights
+ *        that nothing occludes: preview shading has no shadows to cast.
+ */
+auto unshadowedScene(Scene& scene) -> Entity
+{
+    scene.environment().skyColor = {0.05F, 0.07F, 0.1F};
+    Entity ball = scene.createEntity("Ball");
+    ball.add<SphereComponent>(1.0F);
+    ball.add<MaterialComponent>(MaterialComponent{.albedo = {0.8F, 0.3F, 0.2F}});
+    Entity cube = scene.createEntity("Cube");
+    cube.get<TransformComponent>().translation = {2.5F, 0.0F, 0.0F};
+    cube.get<TransformComponent>().rotation = Quat(Vec3(0.3F, 0.6F, 0.0F));
+    cube.add<MeshComponent>(MeshComponent{.mesh = primitives::box(Vec3(0.6F)).build()});
+    cube.add<MaterialComponent>(MaterialComponent{.albedo = {0.3F, 0.8F, 0.4F}});
+    Entity pane = scene.createEntity("Pane");
+    pane.get<TransformComponent>().translation = {0.0F, 0.0F, 3.0F};
+    pane.add<MeshComponent>(MeshComponent{.mesh = primitives::quad(Vec2(1.2F)).build()});
+    pane.add<MaterialComponent>(MaterialComponent{
+        .albedo = {0.8F, 0.9F, 1.0F}, .roughness = 0.0F, .transmission = 1.0F, .thinWalled = true});
+    for (const auto& [x, power] : {std::pair{-3.0F, 30.0F}, std::pair{3.0F, 20.0F}}) {
+        Entity light = scene.createEntity("Light");
+        light.get<TransformComponent>().translation = {x, 4.0F, 4.0F};
+        light.add<SphereComponent>(0.5F);
+        light.add<MaterialComponent>(MaterialComponent{
+            .albedo = Vec3(1.0F), .emissionColor = Vec3(1.0F), .emissionPower = power});
+    }
+    return ball;
+}
+
+}  // namespace
+
+TEST_CASE("GPU raster: the CPU preview without shadows", "[gpu][raster]")
+{
+    const GpuTest gpu(false);
+    Scene scene;
+    const Entity ball = unshadowedScene(scene);
+    const RenderScene renderScene = buildRenderScene(scene);
+    constexpr std::uint32_t kWidth = 96;
+    constexpr std::uint32_t kHeight = 72;
+    const Camera camera = makeCamera(kWidth, kHeight);
+    const PathTracerSettings settings{.mode = RenderMode::Preview};
+
+    CpuPathTracer cpu;
+    cpu.resize(kWidth, kHeight);
+    auto raster = gpu.makeRenderer(kWidth, kHeight);
+    for (int i = 0; i < 32; ++i) {
+        cpu.render(renderScene, camera, settings);
+        raster->render(renderScene, camera, settings, kRaster);
+    }
+    REQUIRE(raster->accumulatedFrames() == 32);
+    const BlockDifference difference = blockDifference(raster->readImage(), cpu.image());
+    INFO("worst block " << difference.worst << ", mean " << difference.mean);
+    // Both anti-alias, with different sample positions: edges differ a little
+    // (measured: 0.4 levels at worst on an RTX 4060).
+    CHECK(difference.worst < 2.0F);
+    CHECK(difference.mean < 0.25F);
+    // Ids of the first frame (pixel centers): the pane is looked through.
+    const IdImage ids = raster->readEntityIds();
+    CHECK(idMismatch(ids, cpu.entityIds()) < 0.02);
+    CHECK(ids.at(kWidth / 2, kHeight / 2) == entt::to_integral(ball.handle()));
+}
+
+TEST_CASE("GPU raster: what restarts the accumulation", "[gpu][raster]")
+{
+    const GpuTest gpu(false);
+    TestScene test;
+    RenderSceneBuilder builder;
+    const RenderScene& renderScene = builder.update(test.scene);
+    Camera camera = makeCamera(48, 36);
+    const PathTracerSettings settings;
+    auto raster = gpu.makeRenderer(48, 36);
+    for (int i = 0; i < 4; ++i) {
+        raster->render(renderScene, camera, settings, kRaster);
+    }
+    REQUIRE(raster->accumulatedFrames() == 4);
+    if (gpu.context().deviceInfo().timestampPeriod > 0.0F) {
+        raster->waitIdle();
+        REQUIRE(raster->gpuTimeMs() > 0.0F);
+        REQUIRE(raster->traceTimeMs() < 0.01F);  // Nothing is traced.
+    }
+
+    // Display settings and things nothing traces keep it, anything seen restarts it.
+    PathTracerSettings display = settings;
+    display.exposure = 2.0F;
+    display.toneMapper = ToneMapper::Aces;
+    display.maxBounces = 1;
+    raster->render(renderScene, camera, display, kRaster);
+    REQUIRE(raster->accumulatedFrames() == 5);
+    test.mirror.patch<TransformComponent>([](auto& t) { t.translation.x += 0.1F; });
+    builder.update(test.scene);
+    raster->render(renderScene, camera, settings, kRaster);
+    REQUIRE(raster->accumulatedFrames() == 1);
+    camera.setPosition(camera.position() + Vec3(0.0F, 0.1F, 0.0F));
+    raster->render(renderScene, camera, settings, kRaster);
+    REQUIRE(raster->accumulatedFrames() == 1);
+    PathTracerSettings masked = settings;
+    masked.instanceMask = kAllInstances & ~layerBit(3);
+    raster->render(renderScene, camera, masked, kRaster);
+    REQUIRE(raster->accumulatedFrames() == 1);
+    const IdImage ids = raster->readEntityIds();
+    CHECK_FALSE(std::ranges::contains(
+        ids.pixels(), static_cast<std::uint32_t>(entt::to_integral(test.hidden.handle()))));
+    CHECK_FALSE(std::ranges::contains(
+        ids.pixels(), static_cast<std::uint32_t>(entt::to_integral(test.pane.handle()))));
+
+    // Switching pipelines both ways.
+    raster->render(renderScene, camera, settings, {.pipeline = GpuPipeline::Hybrid});
+    raster->render(renderScene, camera, settings, kRaster);
+    REQUIRE(raster->accumulatedFrames() == 1);
+}
+
+TEST_CASE("GPU raster: runs without ray queries", "[gpu][raster]")
+{
+    const GpuTest gpu(false, contextWithoutRayQueries());
+    TestScene test;
+    const RenderScene renderScene = buildRenderScene(test.scene);
+    const Camera camera = makeCamera(64, 48);
+    auto raster = gpu.makeRenderer(64, 48);
+    REQUIRE_FALSE(raster->rayTracing());
+    for (int i = 0; i < 8; ++i) {
+        raster->render(renderScene, camera, {}, kRaster);
+    }
+    const ColorImage image = raster->readImage();
+    const IdImage ids = raster->readEntityIds();
+
+    // The same as on the device with ray queries, if there is one.
+    vulkan::Context* withRayQueries = gpuContext();
+    if (withRayQueries != nullptr && withRayQueries->deviceInfo().rayQuery) {
+        const GpuTest reference;
+        auto expected = reference.makeRenderer(64, 48);
+        for (int i = 0; i < 8; ++i) {
+            expected->render(renderScene, camera, {}, kRaster);
+        }
+        CHECK(meanDifference(image, expected->readImage()) == 0.0F);
+        CHECK(idMismatch(ids, expected->readEntityIds()) == 0.0);
+    }
+    CHECK(std::ranges::contains(
+        ids.pixels(), static_cast<std::uint32_t>(entt::to_integral(test.cube.handle()))));
 }

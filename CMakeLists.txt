@@ -4,7 +4,7 @@
 # ==================================================================================================
 
 # Minimum required CMake version
-cmake_minimum_required(VERSION 3.30)
+cmake_minimum_required(VERSION 4.0)
 
 # Engine options, C++ standard and vcpkg (manifest: StarCore/vcpkg.json) -- before `project()`.
 include(${CMAKE_CURRENT_LIST_DIR}/StarCore/cmake/starcore-setup.cmake)

@@ -5,14 +5,14 @@
 #   StarCore::Core     Headless: math, assets (meshes, models), scene/ECS, CPU path tracer,
 #                      2D raster, collision detection, serialization.
 #                      No window / GPU dependencies, so Python bindings and tests can use it.
-#   StarCore::Gpu      Headless Vulkan (context, buffers, pipelines) and the GPU path tracer
-#                      (acceleration structures + ray queries in a compute shader).
+#   StarCore::Gpu      Headless Vulkan (context, buffers, pipelines) and the GPU renderer
+#                      (path tracing with ray queries, hybrid and raster pipelines).
 #   StarCore::Runtime  Window, input, ImGui, texture presentation, app/layers.
 #   starcore._core     Python extension module (python/), see STARCORE_BUILD_PYTHON.
 # ==================================================================================================
 
 # Minimum required CMake version
-cmake_minimum_required(VERSION 3.30)
+cmake_minimum_required(VERSION 4.0)
 
 # Options, C++ standard and vcpkg; a no-op when a workspace already included it.
 include(${CMAKE_CURRENT_LIST_DIR}/cmake/starcore-setup.cmake)

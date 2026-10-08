@@ -24,6 +24,7 @@ test = ["pytest>=8"]
 
 [tool.scikit-build]
 minimum-version = "build-system.requires"
+cmake.version = ">=4.0"
 build-dir = "build/{wheel_tag}"
 wheel.packages = ["python/starcore"]
 # One abi3 wheel for CPython >= 3.12 (nanobind STABLE_ABI).

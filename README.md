@@ -26,7 +26,7 @@ StarTraveler/                 repository root: a CMake workspace
 
 ## Building
 
-Requirements: Visual Studio 2026 (or 2022) with the C++ workload, CMake 3.30+,
+Requirements: Visual Studio 2026 (or 2022) with the C++ workload, CMake 4.0+,
 [vcpkg](https://github.com/microsoft/vcpkg) cloned somewhere with `VCPKG_ROOT`
 pointing at it, and for Python [uv](https://docs.astral.sh/uv/). All C++
 dependencies come from vcpkg (`StarCore/vcpkg.json`) on the first configure.

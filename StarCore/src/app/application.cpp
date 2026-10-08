@@ -3,6 +3,8 @@
 #include <ranges>
 #include <stdexcept>
 
+// vulkan.h must precede glfw3.h to get glfwCreateWindowSurface.
+#include <vulkan/vulkan.h>
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 #include <imgui.h>
@@ -49,10 +51,21 @@ Application::Application(ApplicationConfig config) : m_config(std::move(config))
     m_window = std::make_unique<Window>(WindowConfig{
         .title = m_config.name, .width = m_config.width, .height = m_config.height});
 
-    auto context = vulkan::Context::create(
-        {.applicationName = m_config.name,
-         .enableValidation = m_config.enableValidation},
-        m_window->handle());
+    std::uint32_t glfwExtensionCount = 0;
+    const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
+    if (glfwExtensions == nullptr) {
+        throw std::runtime_error("GLFW: Vulkan is not supported on this system");
+    }
+    GLFWwindow* window = m_window->handle();
+    auto context = vulkan::Context::create({
+        .applicationName = m_config.name,
+        .enableValidation = m_config.enableValidation,
+        .surfaceExtensions = {glfwExtensions, glfwExtensions + glfwExtensionCount},
+        .createSurface =
+            [window](VkInstance instance, VkSurfaceKHR* surface) {
+                return glfwCreateWindowSurface(instance, window, nullptr, surface);
+            },
+    });
     if (!context) {
         throw std::runtime_error("Vulkan initialization failed: " + context.error());
     }
@@ -266,7 +279,7 @@ void Application::renderFrame()
     vulkan::check(vkBeginCommandBuffer(fd.CommandBuffer, &beginInfo));
 
     // CPU-rendered images (path tracer output) -> GPU, before the UI samples them.
-    m_vulkan->recordTextureUploads(fd.CommandBuffer, wd.FrameIndex);
+    m_vulkan->recordFrame(fd.CommandBuffer, wd.FrameIndex);
 
     VkRenderPassBeginInfo passInfo{};
     passInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;

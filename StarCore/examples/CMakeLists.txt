@@ -9,3 +9,9 @@ target_link_libraries(
     ${PROJECT_NAMESPACE}CompileOptions
     CLI11::CLI11
 )
+
+# --gpu: render headless with the GPU path tracer.
+if(STARCORE_BUILD_GPU)
+    target_link_libraries(${TARGET_NAME} PRIVATE ${PROJECT_NAMESPACE}Gpu)
+    target_compile_definitions(${TARGET_NAME} PRIVATE STARCORE_RENDER_GPU)
+endif()

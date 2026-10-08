@@ -32,6 +32,7 @@ cmake.build-type = "Release"
 
 [tool.scikit-build.cmake.define]
 STARCORE_BUILD_PYTHON = "ON"
+STARCORE_BUILD_GPU = "OFF"
 STARCORE_BUILD_RUNTIME = "OFF"
 STARCORE_BUILD_TESTS = "OFF"
 STARCORE_BUILD_EXAMPLES = "OFF"

@@ -45,14 +45,17 @@ auto main(int argc, char** argv) -> int
     bool validation = false;
     bool noVsync = false;
     bool noViewports = false;
-    startraveler::AutomationOptions automation;
+    startraveler::GameOptions options;
     cli.add_option("scene", scenePath, "Scene file to open (.yaml)")->check(CLI::ExistingFile);
-    cli.add_flag("--validation", validation, "Enable Vulkan validation layers");
+    cli.add_flag("--cpu", options.cpuRenderer,
+                 "Path trace on the CPU (default: on the GPU if it supports ray queries)");
+    cli.add_flag("--validation", validation,
+                 "Enable Vulkan validation layers (configure with STARCORE_VULKAN_VALIDATION=ON)");
     cli.add_flag("--no-vsync", noVsync, "Present without vsync");
     cli.add_flag("--no-viewports", noViewports, "Keep all panels inside the main window");
-    cli.add_option("--frames", automation.exitAfterFrames,
+    cli.add_option("--frames", options.exitAfterFrames,
                    "Exit after this many frames (smoke tests)");
-    cli.add_option("--screenshot", automation.screenshotPath,
+    cli.add_option("--screenshot", options.screenshotPath,
                    "With --frames: save the viewport image as PNG before exiting");
     CLI11_PARSE(cli, argc, argv);
 
@@ -72,7 +75,7 @@ auto main(int argc, char** argv) -> int
             .enableViewports = !noViewports,
         });
         auto& game =
-            application.pushLayer<startraveler::GameLayer>(scenePath, assetRoot, automation);
+            application.pushLayer<startraveler::GameLayer>(scenePath, assetRoot, options);
         application.setMenubarCallback([&game] { game.drawMenuBar(); });
         application.run();
     } catch (const std::exception& error) {

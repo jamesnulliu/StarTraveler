@@ -17,10 +17,17 @@ include_guard(GLOBAL)
 include(${CMAKE_CURRENT_LIST_DIR}/utils/common.cmake)
 
 # Options -------------------------------------------------------------------------------------------
-option(STARCORE_BUILD_RUNTIME  "Build StarCore::Runtime (window, input, Vulkan, ImGui)" ON)
-option(STARCORE_BUILD_TESTS    "Build the C++ unit tests"                              ON)
-option(STARCORE_BUILD_EXAMPLES "Build the StarCore examples (e.g. starcore-render)"    ON)
-option(STARCORE_BUILD_PYTHON   "Build the Python extension module (starcore._core)"   OFF)
+option(STARCORE_BUILD_GPU      "Build StarCore::Gpu (headless Vulkan, GPU path tracer)" ON)
+option(STARCORE_BUILD_RUNTIME  "Build StarCore::Runtime (window, input, ImGui)"         ON)
+option(STARCORE_BUILD_TESTS    "Build the C++ unit tests"                               ON)
+option(STARCORE_BUILD_EXAMPLES "Build the StarCore examples (e.g. starcore-render)"     ON)
+option(STARCORE_BUILD_PYTHON   "Build the Python extension module (starcore._core)"    OFF)
+# Development aid: build VK_LAYER_KHRONOS_validation with vcpkg; tests and `--validation` use it.
+option(STARCORE_VULKAN_VALIDATION "Install the Vulkan validation layers (vcpkg)"        OFF)
+
+if(STARCORE_BUILD_RUNTIME AND NOT STARCORE_BUILD_GPU)
+    log_fatal("STARCORE_BUILD_RUNTIME requires STARCORE_BUILD_GPU (the runtime presents with Vulkan)")
+endif()
 
 # C++ standard --------------------------------------------------------------------------------------
 set(STARCORE_CXX_STANDARD 23 CACHE STRING "C++ standard: 23, or 26 (experimental)")
@@ -49,6 +56,12 @@ endif()
 set(VCPKG_MANIFEST_DIR "${CMAKE_CURRENT_LIST_DIR}/..")
 # Only install the dependencies of the parts we build.
 set(VCPKG_MANIFEST_NO_DEFAULT_FEATURES ON)
+if(STARCORE_BUILD_GPU)
+    list(APPEND VCPKG_MANIFEST_FEATURES "gpu")
+endif()
+if(STARCORE_BUILD_GPU AND STARCORE_VULKAN_VALIDATION)
+    list(APPEND VCPKG_MANIFEST_FEATURES "validation")
+endif()
 if(STARCORE_BUILD_RUNTIME)
     list(APPEND VCPKG_MANIFEST_FEATURES "runtime")
 endif()

@@ -1,0 +1,436 @@
+#version 460
+// GPU path tracer: one invocation per pixel, ray queries against the TLAS.
+// Port of tracePath / shadePreview / CpuPathTracer::renderTiles
+// (src/render/path_tracer.cpp) -- same estimator, same random streams, so the
+// two converge to the same image. Keep them in sync.
+
+#extension GL_GOOGLE_include_directive : require
+
+#include "scene.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// rgb = sum of samples, a = sample count (frames may differ in samples per pixel).
+layout(set = 0, binding = 1, rgba32f) uniform image2D accumulation;
+layout(set = 0, binding = 2, rgba8) uniform writeonly image2D outputImage;
+layout(set = 0, binding = 3, r32ui) uniform writeonly uimage2D entityIds;
+
+const uint kFlagPreview = 1u;
+const uint kFlagNextEvent = 2u;
+const uint kFlagSrgb = 4u;
+const uint kFlagWriteIds = 8u;
+
+/** gpu::PathTraceParams (112 bytes). */
+layout(push_constant) uniform Params
+{
+    vec4 cameraPosition;  // w: exposure
+    vec4 cameraForward;   // w: firefly clamp (0 = off)
+    vec4 cameraRight;     // right * aspect * tan(fov / 2)
+    vec4 cameraUp;        // up * tan(fov / 2)
+    vec4 skyColor;
+    uvec4 frame;    // frame index, seed, samples per pixel, max bounces
+    uvec4 options;  // flags, instance mask, light count, tone mapper
+}
+params;
+
+const uint kRussianRouletteStart = 3u;
+// Thin surfaces a shadow ray (or a preview ray) may pass through.
+const int kMaxThinLayers = 8;
+// Thin surfaces transmitting at least this much do not take the primary id.
+const float kSeeThrough = 0.5;
+
+const uint kLobeDiffuse = 0u;
+const uint kLobeSpecular = 1u;
+const uint kLobeTransmission = 2u;
+
+uint instanceMask()
+{
+    return params.options.y;
+}
+
+uint lightCount()
+{
+    return params.options.z;
+}
+
+/** Ray origin just off the surface, on the side `direction` leaves to. */
+vec3 offsetOrigin(vec3 position, vec3 geometricNormal, vec3 direction)
+{
+    float scale = 1e-4 + 2e-6 * maxComponent(abs(position));
+    return position +
+           geometricNormal * (dot(direction, geometricNormal) >= 0.0 ? scale : -scale);
+}
+
+Material materialOf(uint instanceIndex)
+{
+    return materials[instances[instanceIndex].materialIndex];
+}
+
+bool isThinTransmissive(Material m)
+{
+    return (m.flags & kMaterialThinWalled) != 0u && m.transmission > 0.0;
+}
+
+bool isSeeThrough(Material m)
+{
+    return (m.flags & kMaterialThinWalled) != 0u &&
+           m.transmission * (1.0 - m.metallic) >= kSeeThrough;
+}
+
+/** Entity of the first surface along a ray that is not see-through. */
+uint firstOpaqueEntity(vec3 origin, vec3 direction)
+{
+    for (int layer = 0; layer < kMaxThinLayers; ++layer) {
+        SurfaceHit hit;
+        if (!traceClosestHit(origin, direction, instanceMask(), hit)) {
+            break;
+        }
+        Instance instance = instances[hit.instanceIndex];
+        if (!isSeeThrough(materials[instance.materialIndex])) {
+            return instance.entityId;
+        }
+        origin = offsetOrigin(hit.position, hit.geometricNormal, direction);
+    }
+    return kNoEntityId;
+}
+
+/** Expected straight-through transmission of a thin-walled surface. */
+vec3 thinTransmittance(Material m, float cosTheta)
+{
+    float reflectance = fresnelDielectric(cosTheta, 1.0 / m.ior);
+    return m.albedo.rgb * ((1.0 - m.metallic) * m.transmission * (1.0 - reflectance));
+}
+
+/** Light from `lightInstance` arriving along the ray: attenuated by thin panes, 0 if blocked. */
+vec3 shadowTransmittance(vec3 origin, vec3 direction, uint lightInstance)
+{
+    vec3 transmittance = vec3(1.0);
+    for (int layer = 0; layer < kMaxThinLayers; ++layer) {
+        SurfaceHit hit;
+        if (!traceClosestHit(origin, direction, instanceMask(), hit)) {
+            return vec3(0.0);
+        }
+        if (hit.instanceIndex == lightInstance) {
+            return transmittance;
+        }
+        Material material = materialOf(hit.instanceIndex);
+        if (!isThinTransmissive(material)) {
+            return vec3(0.0);
+        }
+        transmittance *= thinTransmittance(material, abs(dot(direction, hit.geometricNormal)));
+        if (maxComponent(transmittance) <= 0.0) {
+            return vec3(0.0);
+        }
+        origin = offsetOrigin(hit.position, hit.geometricNormal, direction);
+    }
+    return vec3(0.0);
+}
+
+/** Solid-angle pdf of sampling light `index` from `position` (0 from inside it). */
+float directLightPdf(uint index, vec3 position)
+{
+    Light light = lights[index];
+    vec3 toCenter = light.center - position;
+    float distance2 = dot(toCenter, toCenter);
+    if (distance2 <= light.radius * light.radius) {
+        return 0.0;
+    }
+    return conePdf(coneOneMinusCos(light.radius, distance2)) / float(lightCount());
+}
+
+/** Next event estimation for the diffuse lobe (albedo applied by the caller). */
+vec3 sampleDirectLight(SurfaceHit hit, inout uint rng)
+{
+    uint count = lightCount();
+    uint index = min(count - 1u, uint(nextFloat(rng) * float(count)));
+    Light light = lights[index];
+    vec3 toCenter = light.center - hit.position;
+    float distance2 = dot(toCenter, toCenter);
+    float u1 = nextFloat(rng);
+    float u2 = nextFloat(rng);
+    if (distance2 <= light.radius * light.radius) {
+        return vec3(0.0);
+    }
+    float oneMinusCos = coneOneMinusCos(light.radius, distance2);
+    vec3 direction = sampleCone(toCenter / sqrt(distance2), oneMinusCos, u1, u2);
+    float cosine = dot(direction, hit.normal);
+    if (cosine <= 0.0 || dot(direction, hit.geometricNormal) <= 0.0) {
+        return vec3(0.0);
+    }
+    vec3 transmittance = shadowTransmittance(
+        offsetOrigin(hit.position, hit.geometricNormal, direction), direction,
+        light.instanceIndex);
+    if (maxComponent(transmittance) <= 0.0) {
+        return vec3(0.0);
+    }
+    float lightPdf = conePdf(oneMinusCos) / float(count);
+    float bsdfPdf = cosine / kPi;
+    return light.emission * transmittance * (cosine / kPi) *
+           (powerHeuristic(lightPdf, bsdfPdf) / lightPdf);
+}
+
+struct Scatter
+{
+    vec3 direction;
+    vec3 weight;  // BSDF * cos / (pdf * lobe probability).
+    uint lobe;
+    // Straight through a thin sheet: the path keeps its MIS state.
+    bool passThrough;
+};
+
+/** Mirror wo about h, folding multiply-scattered light back above the surface. */
+vec3 reflectLocal(vec3 wo, vec3 h)
+{
+    vec3 wi = 2.0 * dot(wo, h) * h - wo;
+    wi.z = abs(wi.z);
+    return wi;
+}
+
+/** See sampleBsdf in path_tracer.cpp. Returns false when the path is absorbed. */
+bool sampleBsdf(Material material, vec3 wo, SurfaceHit hit, inout uint rng, out Scatter scatter)
+{
+    scatter.direction = vec3(0.0);
+    scatter.weight = vec3(0.0);
+    scatter.lobe = kLobeDiffuse;
+    scatter.passThrough = false;
+
+    vec3 baseColor = material.albedo.rgb;
+    Frame frame = makeFrame(hit.normal);
+    vec3 woLocal = toLocal(frame, wo);
+    woLocal.z = max(woLocal.z, 1e-5);
+    woLocal = normalize(woLocal);
+    float alpha = roughnessToAlpha(material.roughness);
+
+    float u1 = nextFloat(rng);
+    float u2 = nextFloat(rng);
+    vec3 h = sampleGgxVisibleNormal(woLocal, alpha, u1, u2);
+    if (nextFloat(rng) < material.metallic) {
+        vec3 world = toWorld(frame, reflectLocal(woLocal, h));
+        if (dot(world, hit.geometricNormal) <= 0.0) {
+            return false;
+        }
+        scatter.direction = world;
+        scatter.weight = fresnelSchlick(baseColor, dot(woLocal, h));
+        scatter.lobe = kLobeSpecular;
+        return true;
+    }
+
+    bool thin = (material.flags & kMaterialThinWalled) != 0u;
+    // n_incident / n_transmitted: entering the volume through its front face.
+    float eta = thin || hit.frontFace ? 1.0 / material.ior : material.ior;
+    float reflectance = fresnelDielectric(dot(woLocal, h), eta);
+    if (nextFloat(rng) < reflectance) {
+        vec3 world = toWorld(frame, reflectLocal(woLocal, h));
+        if (dot(world, hit.geometricNormal) <= 0.0) {
+            return false;
+        }
+        scatter.direction = world;
+        scatter.weight = vec3(1.0);
+        scatter.lobe = kLobeSpecular;
+        return true;
+    }
+
+    if (nextFloat(rng) < material.transmission) {
+        vec3 transmitted;
+        if (thin) {
+            // A sheet: refracting in and out cancels; mirror the reflection.
+            transmitted = reflectLocal(woLocal, h);
+        } else if (!refractDirection(-woLocal, h, eta, transmitted)) {
+            return false;  // Unreachable: the Fresnel term was 1.
+        }
+        transmitted.z = -abs(transmitted.z);  // Always through the surface.
+        vec3 world = normalize(toWorld(frame, transmitted));
+        if (dot(world, hit.geometricNormal) > 0.0) {
+            return false;
+        }
+        scatter.direction = world;
+        scatter.weight = baseColor;
+        scatter.lobe = kLobeTransmission;
+        scatter.passThrough = thin;
+        return true;
+    }
+
+    vec3 direction = cosineHemisphere(hit.normal, rng);
+    if (dot(direction, hit.geometricNormal) <= 0.0) {
+        return false;
+    }
+    scatter.direction = direction;
+    scatter.weight = baseColor;
+    scatter.lobe = kLobeDiffuse;
+    return true;
+}
+
+/** Indirect light (two or more scattering events) is optionally clamped against fireflies. */
+vec3 clampContribution(vec3 contribution, uint scatteringEvents)
+{
+    float limit = params.cameraForward.w;
+    if (limit > 0.0 && scatteringEvents > 1u) {
+        float peak = maxComponent(contribution);
+        if (peak > limit) {
+            contribution *= limit / peak;
+        }
+    }
+    return contribution;
+}
+
+vec3 tracePath(vec3 origin, vec3 direction, inout uint rng)
+{
+    vec3 radiance = vec3(0.0);
+    vec3 throughput = vec3(1.0);
+    bool nextEvent = (params.options.x & kFlagNextEvent) != 0u && lightCount() > 0u;
+
+    // Scattering events so far (straight passes through window panes don't count).
+    uint scatterings = 0u;
+    // Last diffuse vertex, to MIS-weight lights found by BSDF sampling.
+    bool fromDiffuse = false;
+    vec3 diffusePosition = vec3(0.0);
+    float diffusePdf = 0.0;
+
+    for (uint bounce = 0u; bounce < params.frame.w; ++bounce) {
+        SurfaceHit hit;
+        if (!traceClosestHit(origin, direction, instanceMask(), hit)) {
+            radiance += clampContribution(throughput * params.skyColor.rgb, scatterings);
+            break;
+        }
+        Instance instance = instances[hit.instanceIndex];
+        Material material = materials[instance.materialIndex];
+
+        vec3 emission = material.emission.rgb;
+        if (maxComponent(emission) > 0.0) {
+            float weight = 1.0;
+            if (nextEvent && fromDiffuse && instance.lightIndex >= 0) {
+                weight = powerHeuristic(diffusePdf,
+                                        directLightPdf(uint(instance.lightIndex), diffusePosition));
+            }
+            radiance += clampContribution(throughput * emission * weight, scatterings);
+        }
+
+        vec3 wo = -normalize(direction);
+        Scatter scatter;
+        if (!sampleBsdf(material, wo, hit, rng, scatter)) {
+            break;  // Absorbed.
+        }
+        if (scatter.lobe == kLobeDiffuse && nextEvent) {
+            radiance += clampContribution(
+                throughput * material.albedo.rgb * sampleDirectLight(hit, rng), scatterings + 1u);
+        }
+        throughput *= scatter.weight;
+        if (!scatter.passThrough) {
+            ++scatterings;
+        }
+        if (scatter.lobe == kLobeDiffuse) {
+            fromDiffuse = true;
+            diffusePosition = hit.position;
+            diffusePdf = max(0.0, dot(scatter.direction, hit.normal)) / kPi;
+        } else if (!scatter.passThrough) {
+            fromDiffuse = false;
+        }
+
+        if (bounce >= kRussianRouletteStart) {
+            float survival = min(1.0, maxComponent(throughput));
+            if (nextFloat(rng) >= survival) {
+                break;
+            }
+            throughput /= survival;
+        }
+        origin = offsetOrigin(hit.position, hit.geometricNormal, scatter.direction);
+        direction = scatter.direction;
+    }
+    return radiance;
+}
+
+/** RenderMode::Preview: direct light + ambient + headlight, deterministic. */
+vec3 shadePreview(vec3 origin, vec3 direction)
+{
+    const float kAmbient = 0.04;
+    const float kHeadlight = 0.15;
+    vec3 sky = params.skyColor.rgb;
+    vec3 result = vec3(0.0);
+    vec3 throughput = vec3(1.0);
+    for (int layer = 0; layer < kMaxThinLayers; ++layer) {
+        SurfaceHit hit;
+        if (!traceClosestHit(origin, direction, instanceMask(), hit)) {
+            return result + throughput * sky;
+        }
+        Material material = materialOf(hit.instanceIndex);
+
+        vec3 irradiance = sky + vec3(kAmbient) +
+                          vec3(kHeadlight * max(0.0, -dot(hit.normal, direction)));
+        for (uint i = 0u; i < lightCount(); ++i) {
+            Light light = lights[i];
+            vec3 toCenter = light.center - hit.position;
+            float distance2 = dot(toCenter, toCenter);
+            if (distance2 <= light.radius * light.radius) {
+                continue;
+            }
+            vec3 toLight = toCenter / sqrt(distance2);
+            float cosine = dot(toLight, hit.normal);
+            if (cosine <= 0.0) {
+                continue;
+            }
+            irradiance += light.emission * (cosine * light.radius * light.radius / distance2) *
+                          shadowTransmittance(
+                              offsetOrigin(hit.position, hit.geometricNormal, toLight), toLight,
+                              light.instanceIndex);
+        }
+
+        float transmitted = isThinTransmissive(material)
+                                ? (1.0 - material.metallic) * material.transmission
+                                : 0.0;
+        result += throughput * (material.emission.rgb +
+                                material.albedo.rgb * irradiance * (1.0 - transmitted));
+        if (transmitted <= 0.0) {
+            return result;
+        }
+        throughput *= material.albedo.rgb * transmitted;
+        origin = offsetOrigin(hit.position, hit.geometricNormal, direction);
+    }
+    return result;
+}
+
+void main()
+{
+    uvec2 size = uvec2(imageSize(outputImage));
+    uvec2 pixel = gl_GlobalInvocationID.xy;
+    if (pixel.x >= size.x || pixel.y >= size.y) {
+        return;
+    }
+    uint flags = params.options.x;
+    bool preview = (flags & kFlagPreview) != 0u;
+    bool writeIds = (flags & kFlagWriteIds) != 0u;
+    uint samples = preview ? 1u : max(1u, params.frame.z);
+    uint frameIndex = params.frame.x;
+    uint rng = rngForPixel(pixel.x, pixel.y, frameIndex, params.frame.y);
+
+    vec3 origin = params.cameraPosition.xyz;
+    vec3 color = vec3(0.0);
+    uint entityId = kNoEntityId;
+    for (uint s = 0u; s < samples; ++s) {
+        // Jittered position in the pixel: anti-aliasing for free.
+        vec2 position = vec2(pixel) + vec2(nextFloat(rng), nextFloat(rng));
+        float ndcX = 2.0 * position.x / float(size.x) - 1.0;
+        float ndcY = 1.0 - 2.0 * position.y / float(size.y);  // Pixel +y is down.
+        vec3 direction = normalize(params.cameraForward.xyz + params.cameraRight.xyz * ndcX +
+                                   params.cameraUp.xyz * ndcY);
+        if (s == 0u && writeIds) {
+            entityId = firstOpaqueEntity(origin, direction);
+        }
+        color += preview ? shadePreview(origin, direction) : tracePath(origin, direction, rng);
+    }
+
+    vec4 accumulated = frameIndex == 0u ? vec4(0.0) : imageLoad(accumulation, ivec2(pixel));
+    accumulated += vec4(color, float(samples));
+    imageStore(accumulation, ivec2(pixel), accumulated);
+
+    vec3 display = toneMap(accumulated.rgb / accumulated.a * params.cameraPosition.w,
+                           params.options.w);
+    if ((flags & kFlagSrgb) != 0u) {
+        display = linearToSrgb(display);
+    }
+    // Quantize like packRgba8 (round half up) whatever rounding the GPU uses for UNORM stores.
+    vec3 quantized = floor(clamp(display, 0.0, 1.0) * 255.0 + 0.5);
+    imageStore(outputImage, ivec2(pixel), vec4((quantized + 0.25) / 255.0, 1.0));
+    if (writeIds) {
+        imageStore(entityIds, ivec2(pixel), uvec4(entityId));
+    }
+}

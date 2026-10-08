@@ -5,7 +5,9 @@
 #   StarCore::Core     Headless: math, assets (meshes, models), scene/ECS, CPU path tracer,
 #                      2D raster, collision detection, serialization.
 #                      No window / GPU dependencies, so Python bindings and tests can use it.
-#   StarCore::Runtime  Window, input, Vulkan context, ImGui, texture presentation, app/layers.
+#   StarCore::Gpu      Headless Vulkan (context, buffers, pipelines) and the GPU path tracer
+#                      (acceleration structures + ray queries in a compute shader).
+#   StarCore::Runtime  Window, input, ImGui, texture presentation, app/layers.
 #   starcore._core     Python extension module (python/), see STARCORE_BUILD_PYTHON.
 # ==================================================================================================
 
@@ -88,9 +90,49 @@ target_link_libraries(StarCoreCore
         fastgltf::fastgltf
 )
 
+# StarCore::Gpu ------------------------------------------------------------------------------------
+if(STARCORE_BUILD_GPU)
+    include(${PROJECT_SOURCE_DIR}/cmake/utils/shaders.cmake)
+
+    set(GPU_MODULES vulkan gpu)
+    set(GPU_SOURCES)
+    foreach(MODULE IN LISTS GPU_MODULES)
+        file(GLOB_RECURSE MODULE_SOURCES CONFIGURE_DEPENDS
+            ${PROJECT_SOURCE_DIR}/src/${MODULE}/*.cpp)
+        list(APPEND GPU_SOURCES ${MODULE_SOURCES})
+    endforeach()
+
+    add_library(StarCoreGpu STATIC ${GPU_SOURCES})
+    add_library(${PROJECT_NAMESPACE}Gpu ALIAS StarCoreGpu)
+    set_target_properties(StarCoreGpu PROPERTIES OUTPUT_NAME starcore_gpu)
+    target_link_libraries(StarCoreGpu
+        PUBLIC
+            ${PROJECT_NAMESPACE}Core
+            Vulkan::Vulkan
+        PRIVATE
+            ${PROJECT_NAMESPACE}CompileOptions
+            vk-bootstrap::vk-bootstrap
+            GPUOpen::VulkanMemoryAllocator
+    )
+
+    file(GLOB SHADER_INCLUDES CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/shaders/*.glsl)
+    starcore_add_shaders(StarCoreGpu
+        SOURCES ${PROJECT_SOURCE_DIR}/shaders/path_trace.comp
+        INCLUDE_DIRS ${PROJECT_SOURCE_DIR}/shaders
+        DEPENDS ${SHADER_INCLUDES}
+    )
+
+    if(STARCORE_VULKAN_VALIDATION)
+        # Context::create points the Vulkan loader here when validation is requested.
+        target_compile_definitions(StarCoreGpu PRIVATE
+            STARCORE_VULKAN_LAYER_DIR="${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/bin"
+        )
+    endif()
+endif()
+
 # StarCore::Runtime --------------------------------------------------------------------------------
 if(STARCORE_BUILD_RUNTIME)
-    set(RUNTIME_MODULES app platform vulkan ui)
+    set(RUNTIME_MODULES app platform ui)
     set(RUNTIME_SOURCES)
     foreach(MODULE IN LISTS RUNTIME_MODULES)
         file(GLOB_RECURSE MODULE_SOURCES CONFIGURE_DEPENDS
@@ -103,13 +145,11 @@ if(STARCORE_BUILD_RUNTIME)
     set_target_properties(StarCoreRuntime PROPERTIES OUTPUT_NAME starcore_runtime)
     target_link_libraries(StarCoreRuntime
         PUBLIC
-            ${PROJECT_NAMESPACE}Core
-            Vulkan::Vulkan
+            ${PROJECT_NAMESPACE}Gpu
             imgui::imgui
         PRIVATE
             ${PROJECT_NAMESPACE}CompileOptions
             glfw
-            vk-bootstrap::vk-bootstrap
             GPUOpen::VulkanMemoryAllocator
     )
 endif()

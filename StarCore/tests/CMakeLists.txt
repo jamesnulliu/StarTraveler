@@ -1,6 +1,7 @@
 set(TARGET_NAME "StarCoreTests")
 
-file(GLOB_RECURSE TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp)
+# Headless CPU tests; the GPU tests (gpu/) are a separate executable.
+file(GLOB TEST_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/*.cpp)
 
 add_executable(${TARGET_NAME} ${TEST_SOURCES})
 
@@ -19,3 +20,7 @@ target_compile_options(${TARGET_NAME} PRIVATE $<$<CXX_COMPILER_ID:MSVC>:/wd4723>
 include(Catch)
 # PRE_TEST: discover test cases when ctest runs instead of after every build.
 catch_discover_tests(${TARGET_NAME} DISCOVERY_MODE PRE_TEST)
+
+if(STARCORE_BUILD_GPU)
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/gpu)
+endif()

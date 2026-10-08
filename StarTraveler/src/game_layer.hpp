@@ -9,11 +9,12 @@
 #include <starcore/app/layer.hpp>
 #include <starcore/asset/model.hpp>
 #include <starcore/common/image.hpp>
+#include <starcore/gpu/gpu_path_tracer.hpp>
 #include <starcore/render/camera.hpp>
 #include <starcore/render/path_tracer.hpp>
 #include <starcore/render/render_scene.hpp>
 #include <starcore/scene/entity.hpp>
-#include <starcore/vulkan/texture.hpp>
+#include <starcore/ui/texture.hpp>
 
 #include "editor/editor_context.hpp"
 #include "editor/selection.hpp"
@@ -24,13 +25,16 @@
 namespace startraveler
 {
 
-/** @brief Command-line driven automation (smoke tests, CI). */
-struct AutomationOptions
+/** @brief Command-line options. */
+struct GameOptions
 {
-    // Close the application after this many frames (0 = run normally).
+    // Close the application after this many frames (0 = run normally); for
+    // smoke tests and CI.
     std::uint32_t exitAfterFrames = 0;
     // Write the composed viewport image here when closing via exitAfterFrames.
     std::filesystem::path screenshotPath;
+    // Start with the CPU path tracer even if the GPU supports ray queries.
+    bool cpuRenderer = false;
 };
 
 struct RenderOptions
@@ -39,8 +43,15 @@ struct RenderOptions
     bool liveRender = true;
     // false: draw the 2D overlay over the plain sky color (fast 2D mode).
     bool rayTracing = true;
+    // Path trace on the GPU (ray queries) when available, else on the CPU.
+    bool gpu = true;
     // Preview shading while the view moves, the chosen mode once it is still.
-    bool adaptive = true;
+    // The CPU needs it; the GPU path traces in real time.
+    bool adaptiveCpu = true;
+    bool adaptiveGpu = false;
+    // GPU: samples per pixel follow this much GPU time per frame (0: use
+    // tracer.samplesPerPixel).
+    float gpuBudgetMs = 8.0F;
     starcore::PathTracerSettings tracer{.fireflyClamp = 8.0F};
 };
 
@@ -61,7 +72,7 @@ class GameLayer final : public starcore::Layer
 public:
     /** @param assetRoot Directory with the game's models/ and scenes/. */
     GameLayer(std::filesystem::path scenePath, std::filesystem::path assetRoot,
-              AutomationOptions automation = {});
+              GameOptions options = {});
     ~GameLayer() override;
 
     void onAttach() override;
@@ -93,7 +104,12 @@ private:
     void updateCamera();
     void updateViewportSize(starcore::UVec2 size);
     void handleViewportInput();
+    [[nodiscard]] auto usingGpu() const -> bool;
+    [[nodiscard]] auto adaptive() const -> bool;
     void composeFrame();
+    void drawOverlay(starcore::ColorImage& target);
+    /** @brief The viewport image as shown (GPU frames are read back). */
+    [[nodiscard]] auto captureFrame() -> starcore::ColorImage;
     void drawHud(starcore::Vec2 origin);
     [[nodiscard]] auto makeContext() -> EditorContext;
     void setTool(ToolKind kind);
@@ -127,6 +143,8 @@ private:
     bool m_cameraActive = false;
 
     starcore::CpuPathTracer m_tracer;
+    std::unique_ptr<starcore::GpuPathTracer> m_gpuTracer;  // Null without ray queries.
+    std::string m_gpuUnavailable;                           // Why it is null.
     starcore::RenderScene m_renderScene;
     starcore::Mat4 m_lastView{0.0F};
     bool m_previewing = false;  // Adaptive rendering is showing the preview.
@@ -135,9 +153,16 @@ private:
     bool m_frozen = false;    // Keep the displayed frame (seed fill paints on it).
     bool m_stepOnce = false;  // Trace one frame while live rendering is off.
 
+    // CPU: the traced image with the overlay drawn in (also a frozen frame).
     starcore::ColorImage m_frame;
-    starcore::IdImage m_ids;
-    std::unique_ptr<starcore::vulkan::Texture2D> m_texture;
+    std::unique_ptr<starcore::ui::Texture2D> m_texture;
+    // GPU: the traced image stays on the GPU; the overlay is a second,
+    // transparent texture on top.
+    starcore::ui::ImGuiImage m_gpuImage;
+    starcore::ColorImage m_overlay;
+    starcore::ColorImage m_uploadedOverlay;
+    std::unique_ptr<starcore::ui::Texture2D> m_overlayTexture;
+    starcore::IdImage m_ids;  // Overlay shapes, for picking.
 
     ViewportState m_viewport;
     std::optional<entt::entity> m_hovered;  // Entity under the mouse.
@@ -158,7 +183,7 @@ private:
     starcore::Quat m_eulerSource{1.0F, 0.0F, 0.0F, 0.0F};
     starcore::Vec3 m_eulerDegrees{0.0F};
 
-    AutomationOptions m_automation;
+    GameOptions m_gameOptions;
     std::uint32_t m_frameCount = 0;
     bool m_layoutChecked = false;
 

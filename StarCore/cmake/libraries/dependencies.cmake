@@ -3,7 +3,8 @@
 # @brief Find third-party packages (provided by vcpkg, see `vcpkg.json`).
 #
 # @note Values MUST be set BEFORE including this file:
-#         - `STARCORE_BUILD_RUNTIME`, `STARCORE_BUILD_TESTS`: Which optional parts are built.
+#         - `STARCORE_BUILD_GPU`, `STARCORE_BUILD_RUNTIME`, `STARCORE_BUILD_TESTS`: Which optional
+#           parts are built.
 #           They select the vcpkg manifest features, see `../starcore-setup.cmake`.
 # ==================================================================================================
 
@@ -23,14 +24,28 @@ add_library(starcore_stb INTERFACE)
 add_library(${PROJECT_NAMESPACE}Stb ALIAS starcore_stb)
 target_include_directories(starcore_stb SYSTEM INTERFACE ${Stb_INCLUDE_DIR})
 
-# Runtime (window / Vulkan / ImGui) ----------------------------------------------------------------
-if(STARCORE_BUILD_RUNTIME)
+# GPU (headless Vulkan) ----------------------------------------------------------------------------
+if(STARCORE_BUILD_GPU)
     find_package(Vulkan                         REQUIRED)  # Vulkan::Vulkan, Vulkan::Headers
-    find_package(glfw3                   CONFIG REQUIRED)  # glfw
-    find_package(imgui                   CONFIG REQUIRED)  # imgui::imgui
     find_package(vk-bootstrap            CONFIG REQUIRED)  # vk-bootstrap::vk-bootstrap
     find_package(VulkanMemoryAllocator   CONFIG REQUIRED)  # GPUOpen::VulkanMemoryAllocator
     log_info("Vulkan headers: ${Vulkan_VERSION}")
+
+    # Shader compiler: a vcpkg host tool (manifest feature "gpu"). VCPKG_HOST_TRIPLET is only
+    # defined when set explicitly, so look in the tools of every installed triplet.
+    file(GLOB GLSLANG_HINTS LIST_DIRECTORIES true "${VCPKG_INSTALLED_DIR}/*/tools/glslang")
+    find_program(STARCORE_GLSLANG_EXECUTABLE
+        NAMES glslang glslangValidator
+        HINTS ${GLSLANG_HINTS}
+        REQUIRED
+    )
+    log_info("glslang: ${STARCORE_GLSLANG_EXECUTABLE}")
+endif()
+
+# Runtime (window / ImGui) -------------------------------------------------------------------------
+if(STARCORE_BUILD_RUNTIME)
+    find_package(glfw3                   CONFIG REQUIRED)  # glfw
+    find_package(imgui                   CONFIG REQUIRED)  # imgui::imgui
 endif()
 
 # Tests --------------------------------------------------------------------------------------------

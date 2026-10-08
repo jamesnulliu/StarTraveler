@@ -88,12 +88,28 @@ auto planeMesh(float size) -> MeshComponent
     return MeshComponent{.mesh = primitives::plane(Vec2(size)).build()};
 }
 
+/** @brief Alpha-blend `overlay` (straight alpha) over the opaque `base`. */
+void compositeOver(ColorImage& base, const ColorImage& overlay)
+{
+    for (std::size_t i = 0; i < base.pixels().size(); ++i) {
+        const std::uint32_t top = overlay.pixels()[i];
+        const std::uint32_t alpha = top >> 24U;
+        if (alpha == 255U) {
+            base.pixels()[i] = top;
+        } else if (alpha != 0U) {
+            const Vec4 a = unpackRgba8(top);
+            const Vec4 b = unpackRgba8(base.pixels()[i]);
+            base.pixels()[i] = packRgba8(Vec4(Vec3(a) * a.a + Vec3(b) * (1.0F - a.a), 1.0F));
+        }
+    }
+}
+
 }  // namespace
 
 GameLayer::GameLayer(std::filesystem::path scenePath, std::filesystem::path assetRoot,
-                     AutomationOptions automation)
+                     GameOptions options)
     : m_scenePath(std::move(scenePath)), m_assetRoot(std::move(assetRoot)),
-      m_automation(std::move(automation))
+      m_gameOptions(std::move(options))
 {
 }
 
@@ -101,7 +117,16 @@ GameLayer::~GameLayer() = default;
 
 void GameLayer::onAttach()
 {
-    m_texture = std::make_unique<vulkan::Texture2D>(Application::get().vulkan());
+    vulkan::Context& vulkan = Application::get().vulkan();
+    m_texture = std::make_unique<ui::Texture2D>(vulkan);
+    m_overlayTexture = std::make_unique<ui::Texture2D>(vulkan);
+    if (auto tracer = GpuPathTracer::create(vulkan)) {
+        m_gpuTracer = std::move(*tracer);
+    } else {
+        m_gpuUnavailable = tracer.error();
+        SC_WARN("GPU path tracer unavailable ({}); using the CPU", m_gpuUnavailable);
+    }
+    m_options.gpu = m_gpuTracer != nullptr && !m_gameOptions.cpuRenderer;
     resetCamera();
     if (!m_scenePath.empty()) {
         openScene(m_scenePath);
@@ -338,7 +363,11 @@ void GameLayer::updateViewportSize(UVec2 size)
     m_viewport.size = size;
     m_camera.setViewport(size.x, size.y);
     m_tracer.resize(size.x, size.y);
+    if (m_gpuTracer) {
+        m_gpuTracer->resize(size.x, size.y);
+    }
     m_frame.resize(size.x, size.y, 0U);
+    m_overlay.resize(size.x, size.y, 0U);
     m_ids.resize(size.x, size.y, kNoEntityId);
     m_frozen = false;
 }
@@ -351,6 +380,9 @@ void GameLayer::handleViewportInput()
         if (context.viewport.acceptsInput() && input::isMouseClicked(ImGuiMouseButton_Left)) {
             // Seed fill paints the displayed frame, so freeze it (legacy only
             // allowed seed fill while rendering was stopped).
+            if (!m_frozen) {
+                m_frame = captureFrame();
+            }
             m_frozen = true;
             const std::size_t filled = raster::floodFill(
                 m_frame, raster::toPixel(m_viewport.mouse), packRgba8(m_stroke.primary));
@@ -374,6 +406,28 @@ void GameLayer::handleViewportInput()
     m_selection.update(context, m_hovered);
 }
 
+auto GameLayer::usingGpu() const -> bool
+{
+    return m_gpuTracer != nullptr && m_options.gpu && m_options.rayTracing;
+}
+
+auto GameLayer::adaptive() const -> bool
+{
+    return usingGpu() ? m_options.adaptiveGpu : m_options.adaptiveCpu;
+}
+
+void GameLayer::drawOverlay(ColorImage& target)
+{
+    const SceneLayers& layers = m_scene.layers();
+    m_ids.fill(kNoEntityId);
+    renderOverlay(m_scene, m_camera, target, &m_ids, layers.visibleMask(),
+                  layers.pickableMask());
+    if (m_tool) {
+        renderOverlay(m_tool->previewScene(), m_camera, target);
+    }
+    m_selection.drawHandles(makeContext(), target);
+}
+
 void GameLayer::composeFrame()
 {
     if (m_frozen) {
@@ -386,41 +440,65 @@ void GameLayer::composeFrame()
         m_renderSceneSourceVersion = m_scene.version();
     }
 
-    const SceneLayers& layers = m_scene.layers();
     PathTracerSettings settings = m_options.tracer;
-    settings.instanceMask = layers.visibleMask();
+    settings.instanceMask = m_scene.layers().visibleMask();
     // Adaptive: noise-free preview while moving, accumulate once still.
-    m_previewing = m_options.adaptive && m_camera.view() != m_lastView;
+    m_previewing = adaptive() && m_camera.view() != m_lastView;
     m_lastView = m_camera.view();
     if (m_previewing) {
         settings.mode = RenderMode::Preview;
     }
-    if (m_options.rayTracing) {
-        if (m_options.liveRender || m_stepOnce) {
-            const auto start = std::chrono::steady_clock::now();
+    const bool gpu = usingGpu();
+    if (m_options.rayTracing && (m_options.liveRender || m_stepOnce)) {
+        const auto start = std::chrono::steady_clock::now();
+        if (gpu) {
+            if (m_options.gpuBudgetMs > 0.0F) {
+                settings.samplesPerPixel = m_gpuTracer->samplesForBudget(m_options.gpuBudgetMs);
+            }
+            m_gpuTracer->render(m_renderScene, m_camera, settings);
+        } else {
             // Coarse first passes and a per-frame time budget keep the UI
             // responsive while the image converges.
             m_tracer.render(m_renderScene, m_camera, settings,
                             {.timeBudgetMs = 30.0F, .firstPassStride = m_previewing ? 3U : 4U});
-            m_traceMs = std::chrono::duration<float, std::milli>(
-                            std::chrono::steady_clock::now() - start)
-                            .count();
-            m_stepOnce = false;
         }
+        m_traceMs = std::chrono::duration<float, std::milli>(
+                        std::chrono::steady_clock::now() - start)
+                        .count();
+        m_stepOnce = false;
+    }
+
+    if (gpu) {
+        // The traced image never leaves the GPU; only the overlay is uploaded
+        // (when it changed).
+        m_overlay.fill(0U);
+        drawOverlay(m_overlay);
+        if (!std::ranges::equal(m_overlay.pixels(), m_uploadedOverlay.pixels())) {
+            m_overlayTexture->setPixels(m_overlay.pixels(), m_overlay.width(), m_overlay.height());
+            m_uploadedOverlay = m_overlay;
+        }
+        m_gpuImage.set(m_gpuTracer->outputView(), GpuPathTracer::kOutputLayout);
+        return;
+    }
+
+    if (m_options.rayTracing) {
         std::ranges::copy(m_tracer.image().pixels(), m_frame.pixels().begin());
     } else {
         const Vec3 sky = linearToSrgb(glm::clamp(m_scene.environment().skyColor, 0.0F, 1.0F));
         m_frame.fill(packRgba8(Vec4(sky, 1.0F)));
     }
-
-    m_ids.fill(kNoEntityId);
-    renderOverlay(m_scene, m_camera, m_frame, &m_ids, layers.visibleMask(),
-                  layers.pickableMask());
-    if (m_tool) {
-        renderOverlay(m_tool->previewScene(), m_camera, m_frame);
-    }
-    m_selection.drawHandles(makeContext(), m_frame);
+    drawOverlay(m_frame);
     m_texture->setPixels(m_frame.pixels(), m_frame.width(), m_frame.height());
+}
+
+auto GameLayer::captureFrame() -> ColorImage
+{
+    if (m_frozen || !usingGpu()) {
+        return m_frame;
+    }
+    ColorImage frame = m_gpuTracer->readImage();
+    compositeOver(frame, m_overlay);
+    return frame;
 }
 
 void GameLayer::buildDefaultLayoutIfNeeded()
@@ -476,17 +554,26 @@ void GameLayer::onUIRender()
     drawFileDialog();
 
     ++m_frameCount;
-    if (m_automation.exitAfterFrames != 0 &&
-        m_frameCount >= m_automation.exitAfterFrames) {
-        if (!m_automation.screenshotPath.empty()) {
-            if (auto written = writePng(m_frame, m_automation.screenshotPath); !written) {
+    if (m_gameOptions.exitAfterFrames != 0 &&
+        m_frameCount >= m_gameOptions.exitAfterFrames) {
+        if (!m_gameOptions.screenshotPath.empty()) {
+            if (auto written = writePng(captureFrame(), m_gameOptions.screenshotPath); !written) {
                 SC_ERROR("{}", written.error());
             } else {
-                SC_INFO("Screenshot written to {}", m_automation.screenshotPath.string());
+                SC_INFO("Screenshot written to {}", m_gameOptions.screenshotPath.string());
             }
         }
-        SC_INFO("Exiting after {} frames ({} accumulated)", m_frameCount,
-                m_tracer.accumulatedFrames());
+        if (usingGpu()) {
+            SC_INFO("Exiting after {} frames ({} accumulated on the GPU, last {:.2f} ms for "
+                    "{} samples per pixel)",
+                    m_frameCount, m_gpuTracer->accumulatedFrames(), m_gpuTracer->gpuTimeMs(),
+                    m_options.gpuBudgetMs > 0.0F
+                        ? m_gpuTracer->samplesForBudget(m_options.gpuBudgetMs)
+                        : m_options.tracer.samplesPerPixel);
+        } else {
+            SC_INFO("Exiting after {} frames ({} accumulated on the CPU)", m_frameCount,
+                    m_tracer.accumulatedFrames());
+        }
         Application::get().close();
     }
 }
@@ -555,10 +642,19 @@ void GameLayer::drawViewport()
     handleViewportInput();
     composeFrame();
 
-    if (m_texture->imguiTexture() != 0) {
-        ImGui::Image(m_texture->imguiTexture(),
-                     ImVec2(static_cast<float>(m_viewport.size.x),
-                            static_cast<float>(m_viewport.size.y)));
+    const ImVec2 imageSize(static_cast<float>(m_viewport.size.x),
+                           static_cast<float>(m_viewport.size.y));
+    if (usingGpu() && !m_frozen) {
+        if (m_gpuImage.imguiTexture() != 0) {
+            ImGui::Image(m_gpuImage.imguiTexture(), imageSize);
+        }
+        if (m_overlayTexture->imguiTexture() != 0) {
+            ImGui::GetWindowDrawList()->AddImage(
+                m_overlayTexture->imguiTexture(), origin,
+                ImVec2(origin.x + imageSize.x, origin.y + imageSize.y));
+        }
+    } else if (m_texture->imguiTexture() != 0) {
+        ImGui::Image(m_texture->imguiTexture(), imageSize);
     }
     drawHud({origin.x, origin.y});
 
@@ -632,8 +728,19 @@ void GameLayer::drawRenderPanel()
     ImGui::Begin("Render");
     const auto& device = Application::get().vulkan().deviceInfo();
     ImGui::Text("GPU: %s", device.name.c_str());
-    ImGui::Text("Ray query: %s (GPU renderer planned)",
-                device.rayQuerySupported ? "supported" : "not supported");
+    if (m_gpuTracer) {
+        ImGui::TextUnformatted("Path tracer:");
+        ImGui::SameLine();
+        if (ImGui::RadioButton("GPU (ray queries)", m_options.gpu)) {
+            m_options.gpu = true;
+        }
+        ImGui::SameLine();
+        if (ImGui::RadioButton("CPU", !m_options.gpu)) {
+            m_options.gpu = false;
+        }
+    } else {
+        ImGui::TextDisabled("CPU path tracer (GPU: %s)", m_gpuUnavailable.c_str());
+    }
     ImGui::Separator();
 
     ImGui::Checkbox("Ray tracing", &m_options.rayTracing);
@@ -646,6 +753,9 @@ void GameLayer::drawRenderPanel()
     ImGui::SameLine();
     if (ImGui::Button("Reset")) {
         m_tracer.resetAccumulation();
+        if (m_gpuTracer) {
+            m_gpuTracer->resetAccumulation();
+        }
     }
     if (m_frozen) {
         ImGui::TextColored(ImVec4(1.0F, 0.7F, 0.2F, 1.0F), "Frame frozen (seed fill)");
@@ -654,7 +764,8 @@ void GameLayer::drawRenderPanel()
             m_frozen = false;
         }
     }
-    ImGui::Checkbox("Adaptive (preview while moving)", &m_options.adaptive);
+    ImGui::Checkbox("Adaptive (preview while moving)",
+                    usingGpu() ? &m_options.adaptiveGpu : &m_options.adaptiveCpu);
 
     auto& settings = m_options.tracer;
     enumCombo("Mode", settings.mode);
@@ -665,9 +776,18 @@ void GameLayer::drawRenderPanel()
     if (ImGui::SliderInt("Bounces", &bounces, 1, 16)) {
         settings.maxBounces = static_cast<std::uint32_t>(bounces);
     }
-    int samples = static_cast<int>(settings.samplesPerPixel);
-    if (ImGui::SliderInt("Samples / frame", &samples, 1, 16)) {
-        settings.samplesPerPixel = static_cast<std::uint32_t>(samples);
+    if (usingGpu()) {
+        ImGui::SliderFloat("GPU ms / frame", &m_options.gpuBudgetMs, 0.0F, 30.0F,
+                           m_options.gpuBudgetMs > 0.0F ? "%.1f" : "off");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Samples per frame follow this GPU time (off: the slider below)");
+        }
+    }
+    if (!usingGpu() || m_options.gpuBudgetMs <= 0.0F) {
+        int samples = static_cast<int>(settings.samplesPerPixel);
+        if (ImGui::SliderInt("Samples / frame", &samples, 1, 16)) {
+            settings.samplesPerPixel = static_cast<std::uint32_t>(samples);
+        }
     }
     ImGui::DragFloat("Exposure", &settings.exposure, 0.01F, 0.01F, 16.0F);
     ImGui::DragFloat("Firefly clamp", &settings.fireflyClamp, 0.1F, 0.0F, 100.0F,
@@ -681,8 +801,18 @@ void GameLayer::drawRenderPanel()
     ImGui::Separator();
     ImGui::Text("Frame: %.2f ms (%.0f FPS)", 1000.0F * Application::get().deltaTime(),
                 ImGui::GetIO().Framerate);
-    ImGui::Text("Trace: %.2f ms on %u threads", m_traceMs, m_tracer.threadCount());
-    ImGui::Text("Accumulated frames: %u", m_tracer.accumulatedFrames());
+    if (usingGpu()) {
+        ImGui::Text("Trace: %.2f ms on the GPU (%.2f ms to submit)", m_gpuTracer->gpuTimeMs(),
+                    m_traceMs);
+        ImGui::Text("Accumulated frames: %u (%u samples / frame)",
+                    m_gpuTracer->accumulatedFrames(),
+                    m_options.gpuBudgetMs > 0.0F
+                        ? m_gpuTracer->samplesForBudget(m_options.gpuBudgetMs)
+                        : settings.samplesPerPixel);
+    } else {
+        ImGui::Text("Trace: %.2f ms on %u threads", m_traceMs, m_tracer.threadCount());
+        ImGui::Text("Accumulated frames: %u", m_tracer.accumulatedFrames());
+    }
     ImGui::Text("Instances: %zu, lights: %zu, triangles: %zu", m_renderScene.instances.size(),
                 m_renderScene.lights.size(), m_renderScene.triangleCount());
     ImGui::End();

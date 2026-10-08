@@ -16,12 +16,28 @@
         "yaml-cpp"
     ],
     "default-features": [
+        "gpu",
         "runtime",
         "tests"
     ],
     "features": {
+        "gpu": {
+            "description": "Headless Vulkan and the GPU path tracer (StarCore::Gpu)",
+            "dependencies": [
+                {
+                    "name": "glslang",
+                    "host": true,
+                    "features": [
+                        "tools"
+                    ]
+                },
+                "vk-bootstrap",
+                "vulkan",
+                "vulkan-memory-allocator"
+            ]
+        },
         "runtime": {
-            "description": "Window, input, Vulkan and ImGui runtime (StarCore::Runtime)",
+            "description": "Window, input and ImGui runtime (StarCore::Runtime)",
             "dependencies": [
                 "glfw3",
                 {
@@ -31,16 +47,19 @@
                         "glfw-binding",
                         "vulkan-binding"
                     ]
-                },
-                "vk-bootstrap",
-                "vulkan",
-                "vulkan-memory-allocator"
+                }
             ]
         },
         "tests": {
             "description": "C++ unit tests",
             "dependencies": [
                 "catch2"
+            ]
+        },
+        "validation": {
+            "description": "Vulkan validation layers for development (VK_LAYER_KHRONOS_validation)",
+            "dependencies": [
+                "vulkan-validationlayers"
             ]
         }
     }

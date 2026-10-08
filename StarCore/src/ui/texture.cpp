@@ -4,12 +4,13 @@
 #include <vk_mem_alloc.h>
 
 #include "starcore/common/assert.hpp"
+#include "starcore/ui/texture.hpp"
 #include "starcore/vulkan/check.hpp"
-#include "starcore/vulkan/context.hpp"
-#include "starcore/vulkan/texture.hpp"
 
-namespace starcore::vulkan
+namespace starcore::ui
 {
+
+using vulkan::check;
 
 namespace
 {
@@ -18,14 +19,14 @@ constexpr VkFormat kFormat = VK_FORMAT_R8G8B8A8_UNORM;
 
 }  // namespace
 
-Texture2D::Texture2D(Context& context) : m_context(&context)
+Texture2D::Texture2D(vulkan::Context& context) : m_context(&context)
 {
-    m_context->registerTexture(this);
+    m_context->registerFrameRecorder(this);
 }
 
 Texture2D::~Texture2D()
 {
-    m_context->unregisterTexture(this);
+    m_context->unregisterFrameRecorder(this);
     if (m_image != VK_NULL_HANDLE || !m_staging.empty()) {
         // Frames in flight may still sample the image or read staging.
         m_context->waitIdle();
@@ -75,9 +76,7 @@ void Texture2D::createImage(std::uint32_t width, std::uint32_t height)
     imageInfo.arrayLayers = 1;
     imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
     imageInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    // STORAGE: the planned GPU path tracer will write this image directly.
-    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                      VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_STORAGE_BIT;
+    imageInfo.usage = VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
 
     VmaAllocationCreateInfo allocationInfo{};
@@ -126,8 +125,7 @@ void Texture2D::destroyStaging(StagingBuffer& staging)
     staging = {};
 }
 
-void Texture2D::recordUpload(VkCommandBuffer commandBuffer,
-                             std::uint32_t frameSlot)
+void Texture2D::recordFrame(VkCommandBuffer commandBuffer, std::uint32_t frameSlot)
 {
     if (!m_dirty || m_image == VK_NULL_HANDLE) {
         return;
@@ -197,4 +195,37 @@ void Texture2D::recordUpload(VkCommandBuffer commandBuffer,
     m_layoutInitialized = true;
 }
 
-}  // namespace starcore::vulkan
+// ImGuiImage --------------------------------------------------------------------------------------
+
+ImGuiImage::~ImGuiImage()
+{
+    reset();
+}
+
+void ImGuiImage::set(VkImageView view, VkImageLayout layout)
+{
+    if (view == m_view) {
+        return;
+    }
+    reset();
+    if (view != VK_NULL_HANDLE) {
+        m_descriptor = ImGui_ImplVulkan_AddTexture(view, layout);
+        m_view = view;
+    }
+}
+
+void ImGuiImage::reset()
+{
+    if (m_descriptor != VK_NULL_HANDLE) {
+        ImGui_ImplVulkan_RemoveTexture(m_descriptor);
+    }
+    m_descriptor = VK_NULL_HANDLE;
+    m_view = VK_NULL_HANDLE;
+}
+
+auto ImGuiImage::imguiTexture() const noexcept -> ImTextureID
+{
+    return static_cast<ImTextureID>(reinterpret_cast<std::uintptr_t>(m_descriptor));
+}
+
+}  // namespace starcore::ui

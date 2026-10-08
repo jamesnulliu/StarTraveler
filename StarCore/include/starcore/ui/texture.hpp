@@ -7,27 +7,27 @@
 #include <imgui.h>
 #include <vulkan/vulkan.h>
 
+#include "starcore/vulkan/context.hpp"
+
 typedef struct VmaAllocation_T* VmaAllocation;  // NOLINT(modernize-use-using)
 
-namespace starcore::vulkan
+namespace starcore::ui
 {
-
-class Context;
 
 /**
  * @brief RGBA8 texture fed from the CPU every frame and drawable with
  *        ImGui::Image (replaces Walnut::Image).
  *
  * setPixels() only copies into a CPU buffer; the GPU copy is recorded into
- * the frame's command buffer before the UI pass (Context::
- * recordTextureUploads), through a staging buffer per frame in flight, so the
- * GPU is never stalled (Walnut waited for the queue on every upload).
- * Resizing recreates the image (after a device wait, which is rare).
+ * the frame's command buffer before the UI pass (vulkan::FrameRecorder),
+ * through a staging buffer per frame in flight, so the GPU is never stalled
+ * (Walnut waited for the queue on every upload). Resizing recreates the image
+ * (after a device wait, which is rare).
  */
-class Texture2D
+class Texture2D final : public vulkan::FrameRecorder
 {
 public:
-    explicit Texture2D(Context& context);
+    explicit Texture2D(vulkan::Context& context);
     ~Texture2D();
     Texture2D(const Texture2D&) = delete;
     auto operator=(const Texture2D&) -> Texture2D& = delete;
@@ -49,8 +49,7 @@ public:
         return m_height;
     }
 
-    /** @brief Called by Context::recordTextureUploads. */
-    void recordUpload(VkCommandBuffer commandBuffer, std::uint32_t frameSlot);
+    void recordFrame(VkCommandBuffer commandBuffer, std::uint32_t frameSlot) override;
 
 private:
     struct StagingBuffer
@@ -65,7 +64,7 @@ private:
     void destroyImage();
     void destroyStaging(StagingBuffer& staging);
 
-    Context* m_context;
+    vulkan::Context* m_context;
     std::uint32_t m_width = 0;
     std::uint32_t m_height = 0;
 
@@ -80,4 +79,32 @@ private:
     std::vector<StagingBuffer> m_staging;  // One per frame in flight.
 };
 
-}  // namespace starcore::vulkan
+/**
+ * @brief An image rendered on the GPU (e.g. by GpuPathTracer), drawable with
+ *        ImGui::Image. Only registers a descriptor; the image is owned elsewhere.
+ */
+class ImGuiImage
+{
+public:
+    ImGuiImage() = default;
+    ~ImGuiImage();
+    ImGuiImage(const ImGuiImage&) = delete;
+    auto operator=(const ImGuiImage&) -> ImGuiImage& = delete;
+
+    /**
+     * @brief Show `view` (sampled in `layout`). A different view replaces the
+     *        descriptor: the old view must no longer be in use by the GPU
+     *        (renderers wait for the device before recreating their images).
+     */
+    void set(VkImageView view, VkImageLayout layout);
+    void reset();
+
+    /** @brief For ImGui::Image; 0 before set(). */
+    [[nodiscard]] auto imguiTexture() const noexcept -> ImTextureID;
+
+private:
+    VkImageView m_view = VK_NULL_HANDLE;
+    VkDescriptorSet m_descriptor = VK_NULL_HANDLE;
+};
+
+}  // namespace starcore::ui

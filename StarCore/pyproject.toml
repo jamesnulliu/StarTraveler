@@ -13,7 +13,8 @@ build-backend = "scikit_build_core.build"
 [project]
 name = "starcore"
 dynamic = ["version"]
-description = "StarCore render engine: scene/ECS, CPU path tracer and 2D raster algorithms"
+description = "StarCore render engine: scene/ECS, glTF assets, CPU path tracer, 2D raster, physics"
+readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 dependencies = ["numpy>=2.0"]

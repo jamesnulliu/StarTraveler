@@ -1,0 +1,128 @@
+# StarTraveler
+
+**StarCore** is a small render engine: an ECS scene, glTF models, a CPU path
+tracer, the classic 2D raster algorithms and collision detection, usable from
+C++ and from Python. **StarTraveler** is a game built on it in C++: fly a ship
+through a path-traced universe from its 3D cockpit, draw shapes in space and
+open portals. It is the modern rewrite of
+[XDrawBoard](https://github.com/jamesnulliu/XDrawBoard-Legacy).
+
+```
+StarTraveler/                 repository root: a CMake workspace
+├─ CMakeLists.txt             adds StarCore and StarTraveler
+├─ CMakePresets.json          msvc, msvc-vs2022, msvc-ninja, mingw, linux-gcc, linux-clang
+├─ StarCore/                  the engine; also builds on its own
+│  ├─ CMakeLists.txt  vcpkg.json  pyproject.toml  cmake/
+│  ├─ include/starcore/  src/    StarCore::Core (headless) and StarCore::Runtime
+│  ├─ tests/  examples/          Catch2 tests, starcore-render (CLI path tracer)
+│  └─ python/                    the `starcore` package: bindings/, starcore/, tests/
+└─ StarTraveler/              the game (C++ frontend of StarCore)
+   ├─ src/  tests/
+   ├─ assets/                 scenes/ (YAML), models/cockpit.glb
+   └─ tools/build_cockpit.py  generates the ship model with the Python API
+```
+
+## Building
+
+Requirements: Visual Studio 2026 (or 2022) with the C++ workload, CMake 3.30+,
+[vcpkg](https://github.com/microsoft/vcpkg) cloned somewhere with `VCPKG_ROOT`
+pointing at it, and for Python [uv](https://docs.astral.sh/uv/). All C++
+dependencies come from vcpkg (`StarCore/vcpkg.json`) on the first configure.
+
+```powershell
+cmake --preset msvc                  # Visual Studio 18 2026 / MSBuild, x64-windows-static-md
+cmake --build --preset msvc-release
+ctest --preset msvc-release
+build\msvc\bin\Release\StarTraveler.exe
+```
+
+Other presets: `msvc-vs2022`, `msvc-ninja` (inside a VS developer shell),
+`mingw` (GCC from `scoop install mingw-winlibs`), and `linux-gcc` /
+`linux-clang` (not tested yet). C++23 is the default; `-DSTARCORE_CXX_STANDARD=26`
+opts into C++26.
+
+### Python
+
+The `starcore` package wraps `StarCore::Core` with nanobind and is built by
+scikit-build-core through the same CMake project:
+
+```powershell
+uv venv
+uv pip install -e "./StarCore[test]"
+uv run pytest StarCore/python/tests
+```
+
+```python
+import starcore as sc
+
+scene = sc.Scene()
+ball = scene.create_entity("Ball")
+ball.add(sc.Sphere(radius=1.0))
+ball.add(sc.Material(albedo=(1.0, 0.75, 0.3), metallic=1.0, roughness=0.4))
+
+camera = sc.Camera()
+camera.set_viewport(320, 180)
+tracer = sc.CpuPathTracer()
+tracer.resize(320, 180)
+for _ in range(64):
+    tracer.render(sc.build_render_scene(scene), camera, sc.PathTracerSettings())
+sc.write_png(tracer.image(), "ball.png")   # tracer.image() is a numpy array
+```
+
+For C++/Python iteration without reinstalling, the `msvc-python` preset builds
+the extension into `StarCore/python/starcore` (`$env:PYTHONPATH = "StarCore/python"`).
+
+## Playing
+
+| Input | Pilot view (default) | Free camera |
+|---|---|---|
+| W/S, A/D, E/Q | thrust forward/back, strafe, up/down | fly (while RMB is held) |
+| hold RMB + mouse | steer the ship | look around |
+| Shift | boost | |
+| C | switch to the free camera | back to the cockpit |
+| T | open a portal in front (two portals link up) | |
+| Ctrl+N/O/S, Ctrl+D, Del, Esc | new/open/save scene, duplicate, delete, cancel tool | |
+
+The drawing tools (line, ellipse, arc, polygon, curve, group, seed fill) work
+in both views; shapes are placed `Draw depth` units in front of the camera. The
+viewport shows a noise-free preview while moving and path traces when still.
+Layers (panel "Layers") control visibility, locking and which layers collide;
+the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
+
+`StarTraveler.exe [scene.yaml] [--frames N --screenshot out.png] [--validation]`
+
+## Engine overview
+
+- **Scene / ECS** (EnTT): entities with plain-data components -- transform,
+  hierarchy, layer, material, sphere, mesh, collider, 2D shapes, portal. YAML
+  scene files; meshes from models are saved as references to their glTF file.
+- **Assets**: immutable shared `MeshData` (with its BVH), procedural primitives,
+  glTF 2.0 loading (fastgltf) and `.glb` writing, an `AssetLibrary` cache.
+- **Rendering**: a render-scene snapshot shaped like Vulkan ray tracing input
+  (BLAS per mesh, TLAS over instances, 8-bit instance masks); a progressive,
+  multi-threaded CPU path tracer with a GGX metal/dielectric BSDF, thin and
+  refracting glass, next event estimation of sphere lights with MIS, a
+  preview mode, coarse-to-fine passes and a per-frame time budget.
+- **2D raster**: Bresenham/midpoint/DDA lines, midpoint ellipses, Bezier and
+  B-spline curves, Cohen-Sutherland / midpoint-subdivision / Sutherland-Hodgman
+  clipping, scan-line and flood fill -- the algorithms of the original drawing
+  board, drawn as a world-space overlay.
+- **Physics**: sphere, box and mesh colliders; raycasts, continuous sphere
+  casts, overlaps and collide-and-slide, filtered by the layer collision matrix.
+- **Runtime**: GLFW window, Vulkan (vk-bootstrap, VMA), Dear ImGui docking with
+  multi-viewports, an application/layer framework.
+
+Planned: a Vulkan compute + ray query renderer building BLAS/TLAS from the
+same render scene, and Python bindings of the runtime for games written in
+Python.
+
+## Regenerating the ship model
+
+```powershell
+uv run python StarTraveler/tools/build_cockpit.py
+```
+
+The script assembles the cockpit and hull from StarCore primitives and writes
+`StarTraveler/assets/models/cockpit.glb`. Any glTF with a "Cockpit" and a "Hull"
+root node in the same ship-local frame (-Z forward, eyes at (0, 0.42, 0.15)) can
+replace it, e.g. a model exported from Blender.

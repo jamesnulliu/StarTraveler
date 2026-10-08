@@ -19,7 +19,8 @@ struct ComponentList
 
 // Components whose changes affect rendering/serialization.
 using TrackedComponents =
-    ComponentList<TransformComponent, HierarchyComponent, LayerComponent, MaterialComponent,
+    ComponentList<TransformComponent, HierarchyComponent, LayerComponent, ColliderComponent,
+                  MaterialComponent,
                   SphereComponent, MeshComponent, StrokeComponent,
                   LineShapeComponent, EllipseShapeComponent, ArcShapeComponent,
                   CurveShapeComponent, PolygonShapeComponent,
@@ -94,7 +95,8 @@ namespace
 // Data components duplicated by Scene::copyEntity (identity and hierarchy
 // are handled separately).
 using CopiedComponents =
-    ComponentList<LayerComponent, MaterialComponent, SphereComponent, MeshComponent,
+    ComponentList<LayerComponent, ColliderComponent, MaterialComponent, SphereComponent,
+                  MeshComponent,
                   StrokeComponent, LineShapeComponent, EllipseShapeComponent,
                   ArcShapeComponent, CurveShapeComponent, PolygonShapeComponent,
                   PointShapeComponent, PortalComponent>;

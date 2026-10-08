@@ -4,6 +4,7 @@
 #include <array>
 #include <optional>
 
+#include <glm/common.hpp>
 #include <glm/geometric.hpp>
 
 #include "starcore/math/types.hpp"
@@ -122,6 +123,59 @@ struct TriangleHit
     float u = 0.0F;
     float v = 0.0F;
 };
+
+/**
+ * @brief Closest point of triangle abc to p (Ericson, "Real-Time Collision
+ *        Detection", 5.1.5): checks the Voronoi regions of vertices and edges.
+ */
+[[nodiscard]] inline auto closestPointOnTriangle(Vec3 p, Vec3 a, Vec3 b, Vec3 c) -> Vec3
+{
+    const Vec3 ab = b - a;
+    const Vec3 ac = c - a;
+    const Vec3 ap = p - a;
+    const float d1 = glm::dot(ab, ap);
+    const float d2 = glm::dot(ac, ap);
+    if (d1 <= 0.0F && d2 <= 0.0F) {
+        return a;
+    }
+    const Vec3 bp = p - b;
+    const float d3 = glm::dot(ab, bp);
+    const float d4 = glm::dot(ac, bp);
+    if (d3 >= 0.0F && d4 <= d3) {
+        return b;
+    }
+    const float vc = d1 * d4 - d3 * d2;
+    if (vc <= 0.0F && d1 >= 0.0F && d3 <= 0.0F) {
+        return a + ab * (d1 / (d1 - d3));
+    }
+    const Vec3 cp = p - c;
+    const float d5 = glm::dot(ab, cp);
+    const float d6 = glm::dot(ac, cp);
+    if (d6 >= 0.0F && d5 <= d6) {
+        return c;
+    }
+    const float vb = d5 * d2 - d1 * d6;
+    if (vb <= 0.0F && d2 >= 0.0F && d6 <= 0.0F) {
+        return a + ac * (d2 / (d2 - d6));
+    }
+    const float va = d3 * d6 - d5 * d4;
+    if (va <= 0.0F && (d4 - d3) >= 0.0F && (d5 - d6) >= 0.0F) {
+        return b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6)));
+    }
+    const float denominator = va + vb + vc;
+    if (denominator == 0.0F) {
+        return a;  // Degenerate triangle.
+    }
+    const float v = vb / denominator;
+    const float w = vc / denominator;
+    return a + ab * v + ac * w;
+}
+
+/** @brief Closest point of the solid box [-halfExtents, halfExtents] to p (p if inside). */
+[[nodiscard]] inline auto closestPointOnBox(Vec3 p, Vec3 halfExtents) -> Vec3
+{
+    return glm::clamp(p, -halfExtents, halfExtents);
+}
 
 /** @brief Double-sided Moller-Trumbore ray/triangle test in (tMin, tMax). */
 [[nodiscard]] inline auto intersectTriangle(const Ray& ray, Vec3 v0, Vec3 v1,

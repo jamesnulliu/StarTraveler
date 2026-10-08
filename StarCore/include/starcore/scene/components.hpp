@@ -4,6 +4,7 @@
 // Transform + LineShape + Stroke). Systems (renderers, serializer, editor)
 // operate on views over the components they care about.
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -115,6 +116,33 @@ struct MeshComponent
 {
     MeshHandle mesh;
     MeshSource source;
+};
+
+// Physics ------------------------------------------------------------------------------------------
+
+enum class ColliderShape : std::uint8_t
+{
+    Sphere,  // `radius` around the entity origin (times the largest world scale).
+    Box,     // `halfExtents` around the origin, oriented and scaled by the transform.
+    Mesh,    // The entity's MeshComponent (its BVH), as a hollow surface.
+};
+
+template <>
+struct EnumNames<ColliderShape>
+{
+    static constexpr std::array kNames = {"Sphere", "Box", "Mesh"};
+};
+
+/**
+ * @brief Collision shape. Colliders on layers that collide (see SceneLayers)
+ *        block each other; triggers only report overlaps.
+ */
+struct ColliderComponent
+{
+    ColliderShape shape = ColliderShape::Sphere;
+    float radius = 1.0F;
+    Vec3 halfExtents{0.5F};
+    bool trigger = false;
 };
 
 // 2D overlay shapes --------------------------------------------------------------------------------

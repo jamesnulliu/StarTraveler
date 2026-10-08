@@ -764,6 +764,25 @@ void GameLayer::drawInspectorPanel()
             entity.remove<MeshComponent>();
         }
     }
+    if (auto* collider = entity.tryGet<ColliderComponent>()) {
+        const auto [open, remove] = componentHeader("Collider", true);
+        if (open) {
+            changed |= enumCombo("Shape", collider->shape);
+            if (collider->shape == ColliderShape::Sphere) {
+                changed |= ImGui::DragFloat("Radius##collider", &collider->radius, 0.01F, 0.001F,
+                                            10000.0F);
+            } else if (collider->shape == ColliderShape::Box) {
+                changed |= ImGui::DragFloat3("Half extents", &collider->halfExtents.x, 0.01F,
+                                             0.001F, 10000.0F);
+            } else if (!entity.has<MeshComponent>()) {
+                ImGui::TextColored(ImVec4(1.0F, 0.7F, 0.2F, 1.0F), "Needs a Mesh component");
+            }
+            changed |= ImGui::Checkbox("Trigger (no blocking)", &collider->trigger);
+        }
+        if (remove) {
+            entity.remove<ColliderComponent>();
+        }
+    }
     if (auto* stroke = entity.tryGet<StrokeComponent>()) {
         const auto [open, remove] = componentHeader("Stroke", true);
         if (open) {
@@ -877,6 +896,14 @@ void GameLayer::drawInspectorPanel()
             }
         };
         addItem("Material", MaterialComponent{});
+        // A collider matching the visible shape.
+        if (const auto* sphere = entity.tryGet<SphereComponent>()) {
+            addItem("Collider", ColliderComponent{.radius = sphere->radius});
+        } else if (entity.has<MeshComponent>()) {
+            addItem("Collider", ColliderComponent{.shape = ColliderShape::Mesh});
+        } else {
+            addItem("Collider", ColliderComponent{.shape = ColliderShape::Box});
+        }
         addItem("Sphere", SphereComponent{});
         addItem("Mesh (cube)", cubeMesh());
         addItem("Stroke", StrokeComponent{});

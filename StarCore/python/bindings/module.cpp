@@ -39,4 +39,5 @@ NB_MODULE(_core, m)
     starcore::python::bindModel(m);
     starcore::python::bindRender(m);
     starcore::python::bindRaster(m);
+    starcore::python::bindPhysics(m);
 }

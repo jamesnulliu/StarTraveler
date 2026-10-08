@@ -372,8 +372,30 @@ void bindComponents(nb::module_& m)
         .def_rw("layer", &LayerComponent::layer)
         .def("__repr__", [](nb::handle self) { return describe("Layer", self, {"layer"}); });
 
+    bindEnum<ColliderShape>(m, "ColliderShape", {"SPHERE", "BOX", "MESH"});
+    {
+        const ColliderComponent d{};
+        nb::class_<ColliderComponent>(m, "Collider",
+                                      "Collision shape: SPHERE (radius), BOX (half_extents, "
+                                      "oriented by the transform) or MESH (the entity's Mesh).")
+            .def(
+                "__init__",
+                [](ColliderComponent* self, ColliderShape shape, float radius, Vec3 halfExtents,
+                   bool trigger) { new (self) ColliderComponent{shape, radius, halfExtents, trigger}; },
+                "shape"_a = d.shape, nb::kw_only(), "radius"_a = d.radius,
+                "half_extents"_a = d.halfExtents, "trigger"_a = d.trigger)
+            .def_rw("shape", &ColliderComponent::shape)
+            .def_rw("radius", &ColliderComponent::radius)
+            .def_rw("half_extents", &ColliderComponent::halfExtents)
+            .def_rw("trigger", &ColliderComponent::trigger, "Reports overlaps but never blocks.")
+            .def("__repr__", [](nb::handle self) {
+                return describe("Collider", self, {"shape", "radius", "half_extents", "trigger"});
+            });
+    }
+
     registerComponent<TransformComponent>();
     registerComponent<LayerComponent>();
+    registerComponent<ColliderComponent>();
     registerComponent<MaterialComponent>();
     registerComponent<SphereComponent>();
     registerComponent<MeshComponent>();
@@ -592,6 +614,12 @@ void bindSceneClass(nb::module_& m)
             "find_entity",
             [](Scene& scene, std::uint64_t uuid) { return wrap(scene, scene.findEntity(Uuid{uuid})); },
             "uuid"_a)
+        .def(
+            "entity_from_handle",
+            [](Scene& scene, std::uint32_t handle) {
+                return wrap(scene, scene.wrap(static_cast<entt::entity>(handle)));
+            },
+            "handle"_a, "The entity of a handle (from id images, picking, physics), or None.")
         .def(
             "find_entity_by_name",
             [](Scene& scene, const std::string& name) {

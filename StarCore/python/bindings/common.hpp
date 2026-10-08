@@ -250,5 +250,6 @@ void bindScene(nb::module_& m);
 void bindModel(nb::module_& m);  // Models (after the components they contain).
 void bindRender(nb::module_& m);
 void bindRaster(nb::module_& m);
+void bindPhysics(nb::module_& m);
 
 }  // namespace starcore::python

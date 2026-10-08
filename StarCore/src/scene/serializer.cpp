@@ -213,6 +213,19 @@ void writeEntity(YAML::Emitter& out, const Scene& scene, entt::entity entity,
         mesh != nullptr && mesh->mesh) {
         out << YAML::Key << "Mesh" << YAML::Value << writeMesh(*mesh, context);
     }
+    if (const auto* collider = registry.try_get<ColliderComponent>(entity)) {
+        YAML::Node node;
+        node["Shape"] = encodeEnum(collider->shape);
+        if (collider->shape == ColliderShape::Sphere) {
+            node["Radius"] = collider->radius;
+        } else if (collider->shape == ColliderShape::Box) {
+            node["HalfExtents"] = collider->halfExtents;
+        }
+        if (collider->trigger) {
+            node["Trigger"] = true;
+        }
+        out << YAML::Key << "Collider" << YAML::Value << node;
+    }
     if (const auto* s = registry.try_get<StrokeComponent>(entity)) {
         YAML::Node node;
         node["Color"] = s->color;
@@ -310,6 +323,13 @@ void readEntity(const YAML::Node& node, Scene& scene,
     }
     if (const auto m = node["Mesh"]) {
         entity.add<MeshComponent>(readMesh(m, context));
+    }
+    if (const auto c = node["Collider"]) {
+        auto& collider = entity.add<ColliderComponent>();
+        collider.shape = decodeEnum(c["Shape"], collider.shape);
+        collider.radius = read(c["Radius"], collider.radius);
+        collider.halfExtents = read(c["HalfExtents"], collider.halfExtents);
+        collider.trigger = read(c["Trigger"], collider.trigger);
     }
     if (const auto s = node["Stroke"]) {
         auto& stroke = entity.add<StrokeComponent>();

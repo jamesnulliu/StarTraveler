@@ -93,6 +93,7 @@ private:
     void drawHierarchyPanel();
     void drawHierarchyNode(starcore::Entity entity);
     void drawInspectorPanel();
+    void drawLayersPanel();
     void drawFileDialog();
 
     // Creation helpers (Create menu).
@@ -122,6 +123,8 @@ private:
 
     StrokeDefaults m_stroke;
     float m_drawDepth = 5.0F;
+    std::uint32_t m_activeLayer = 0;  // New drawings and created entities go here.
+    bool m_layerRecursive = true;      // Inspector: layer changes include children.
     ToolKind m_toolKind = ToolKind::None;
     std::unique_ptr<Tool> m_tool;
     Selection m_selection;

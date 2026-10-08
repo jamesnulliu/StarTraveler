@@ -46,6 +46,12 @@ struct TransformComponent
     }
 };
 
+/** @brief Layer (0-7, see scene/layers.hpp); entities without one are on layer 0. */
+struct LayerComponent
+{
+    std::uint8_t layer = 0;
+};
+
 /** @brief Parent/child links; maintained by Scene::setParent(). */
 struct HierarchyComponent
 {

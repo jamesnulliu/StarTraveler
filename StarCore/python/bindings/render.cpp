@@ -179,7 +179,8 @@ void bindOverlay(nb::module_& m)
 {
     m.def(
         "render_overlay",
-        [](const Scene& scene, const Camera& camera, std::optional<RgbaInput> background) {
+        [](const Scene& scene, const Camera& camera, std::optional<RgbaInput> background,
+           std::uint32_t visibleLayers, std::uint32_t pickableLayers) {
             ColorImage color;
             if (background) {
                 color = fromArray(*background);
@@ -188,10 +189,11 @@ void bindOverlay(nb::module_& m)
                 color.resize(size.x, size.y, 0U);
             }
             IdImage ids(color.width(), color.height(), kNoEntityId);
-            renderOverlay(scene, camera, color, &ids);
+            renderOverlay(scene, camera, color, &ids, visibleLayers, pickableLayers);
             return std::pair(toArray(color), toIdArray(ids));
         },
-        "scene"_a, "camera"_a, "background"_a = nb::none(),
+        "scene"_a, "camera"_a, "background"_a = nb::none(), "visible_layers"_a = kAllLayers,
+        "pickable_layers"_a = kAllLayers,
         "Rasterize the 2D shapes of a scene over `background` (or a transparent image of "
         "the camera's viewport size). Returns (rgba, entity_ids).");
 

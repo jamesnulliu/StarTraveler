@@ -19,7 +19,7 @@ struct ComponentList
 
 // Components whose changes affect rendering/serialization.
 using TrackedComponents =
-    ComponentList<TransformComponent, HierarchyComponent, MaterialComponent,
+    ComponentList<TransformComponent, HierarchyComponent, LayerComponent, MaterialComponent,
                   SphereComponent, MeshComponent, StrokeComponent,
                   LineShapeComponent, EllipseShapeComponent, ArcShapeComponent,
                   CurveShapeComponent, PolygonShapeComponent,
@@ -94,7 +94,7 @@ namespace
 // Data components duplicated by Scene::copyEntity (identity and hierarchy
 // are handled separately).
 using CopiedComponents =
-    ComponentList<MaterialComponent, SphereComponent, MeshComponent,
+    ComponentList<LayerComponent, MaterialComponent, SphereComponent, MeshComponent,
                   StrokeComponent, LineShapeComponent, EllipseShapeComponent,
                   ArcShapeComponent, CurveShapeComponent, PolygonShapeComponent,
                   PointShapeComponent, PortalComponent>;
@@ -142,6 +142,7 @@ void Scene::clear()
     m_registry.clear();
     m_uuidMap.clear();
     m_environment = {};
+    m_layers = {};
     ++m_version;
 }
 
@@ -199,6 +200,32 @@ auto Scene::worldTransform(entt::entity handle) const -> Mat4
         current = hierarchy != nullptr ? hierarchy->parent : entt::null;
     }
     return world;
+}
+
+auto Scene::layerOf(entt::entity entity) const -> std::uint32_t
+{
+    const auto* layer = m_registry.try_get<LayerComponent>(entity);
+    return layer != nullptr ? layer->layer : 0U;
+}
+
+void Scene::setLayer(Entity entity, std::uint32_t layer, bool recursive)
+{
+    if (!entity.isValid()) {
+        return;
+    }
+    const auto value = static_cast<std::uint8_t>(layer % kLayerCount);
+    if (value == 0) {
+        entity.remove<LayerComponent>();  // Layer 0 is the implicit default.
+    } else {
+        entity.addOrReplace<LayerComponent>(value);
+    }
+    if (recursive) {
+        const auto children = childrenOf(entity);
+        const std::vector<entt::entity> copy(children.begin(), children.end());
+        for (const auto child : copy) {
+            setLayer(wrap(child), layer, true);
+        }
+    }
 }
 
 auto Scene::setParent(Entity child, Entity parent) -> bool

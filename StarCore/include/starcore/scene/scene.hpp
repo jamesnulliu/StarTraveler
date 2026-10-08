@@ -9,6 +9,7 @@
 #include <entt/entity/registry.hpp>
 
 #include "starcore/math/types.hpp"
+#include "starcore/scene/layers.hpp"
 #include "starcore/scene/uuid.hpp"
 
 namespace starcore
@@ -51,7 +52,7 @@ public:
      */
     auto copyEntity(Entity source) -> Entity;
 
-    /** @brief Destroy all entities and reset the environment. */
+    /** @brief Destroy all entities and reset the environment and layers. */
     void clear();
 
     [[nodiscard]] auto findEntity(Uuid uuid) -> Entity;
@@ -71,6 +72,20 @@ public:
     [[nodiscard]] auto childrenOf(Entity entity) const
         -> std::span<const entt::entity>;
     [[nodiscard]] auto worldTransform(entt::entity entity) const -> Mat4;
+
+    // Layers --------------------------------------------------------------------------------------
+
+    /** @brief Layer of an entity (0 without a LayerComponent). */
+    [[nodiscard]] auto layerOf(entt::entity entity) const -> std::uint32_t;
+    /** @brief Move an entity (and optionally its descendants) to a layer. */
+    void setLayer(Entity entity, std::uint32_t layer, bool recursive = false);
+
+    /** @brief Per-layer names, visibility, pickability and collision matrix. */
+    template <typename Self>
+    [[nodiscard]] auto layers(this Self& self) -> auto&
+    {
+        return self.m_layers;
+    }
 
     // Access --------------------------------------------------------------------------------------
 
@@ -109,6 +124,7 @@ private:
     entt::registry m_registry;
     std::unordered_map<Uuid, entt::entity> m_uuidMap;
     SceneEnvironment m_environment;
+    SceneLayers m_layers;
     std::uint64_t m_version = 0;
 };
 

@@ -29,10 +29,11 @@ constexpr std::size_t kFullCircleArcSegments = 128;
 class OverlayRenderer
 {
 public:
-    OverlayRenderer(const Scene& scene, const Camera& camera,
-                    ColorImage& color, IdImage* ids)
+    OverlayRenderer(const Scene& scene, const Camera& camera, ColorImage& color, IdImage* ids,
+                    std::uint32_t visibleLayers, std::uint32_t pickableLayers)
         : m_scene(scene), m_camera(camera), m_color(color), m_ids(ids),
-          m_viewport{Vec2(0.0F), Vec2(color.size())}
+          m_viewport{Vec2(0.0F), Vec2(color.size())}, m_visibleLayers(visibleLayers),
+          m_pickableLayers(pickableLayers)
     {
     }
 
@@ -42,14 +43,15 @@ public:
 
         for (const auto [entity, polygon] :
              registry.view<const PolygonShapeComponent>().each()) {
-            if (polygon.filled) {
+            if (polygon.filled && visible(entity)) {
                 fillPolygon(entity, polygon);
             }
         }
 
         for (const auto [entity, polygon] :
              registry.view<const PolygonShapeComponent>().each()) {
-            if (const auto* stroke = registry.try_get<StrokeComponent>(entity)) {
+            if (const auto* stroke = registry.try_get<StrokeComponent>(entity);
+                stroke != nullptr && visible(entity)) {
                 const auto world = toWorld(entity, polygon.vertices);
                 auto writer = makeWriter(entity, *stroke);
                 drawPolyline(world, /*closed=*/true, LineAlgorithm::Bresenham,
@@ -59,6 +61,9 @@ public:
 
         for (const auto [entity, line] :
              registry.view<const LineShapeComponent>().each()) {
+            if (!visible(entity)) {
+                continue;
+            }
             const auto stroke = strokeOf(entity);
             auto writer = makeWriter(entity, stroke);
             const Mat4 world = m_scene.worldTransform(entity);
@@ -69,16 +74,23 @@ public:
 
         for (const auto [entity, ellipse] :
              registry.view<const EllipseShapeComponent>().each()) {
-            drawEllipse(entity, ellipse);
+            if (visible(entity)) {
+                drawEllipse(entity, ellipse);
+            }
         }
 
         for (const auto [entity, arc] :
              registry.view<const ArcShapeComponent>().each()) {
-            drawArc(entity, arc);
+            if (visible(entity)) {
+                drawArc(entity, arc);
+            }
         }
 
         for (const auto [entity, curve] :
              registry.view<const CurveShapeComponent>().each()) {
+            if (!visible(entity)) {
+                continue;
+            }
             const auto local = raster::sampleCurve<Vec3>(
                 curve.type, curve.controlPoints, curve.order, kCurveSegments);
             const auto stroke = strokeOf(entity);
@@ -89,6 +101,9 @@ public:
 
         for (const auto [entity, point] :
              registry.view<const PointShapeComponent>().each()) {
+            if (!visible(entity)) {
+                continue;
+            }
             const auto stroke = strokeOf(entity);
             auto writer = makeWriter(entity, stroke);
             const Vec3 world = Vec3(m_scene.worldTransform(entity) *
@@ -100,6 +115,11 @@ public:
     }
 
 private:
+    [[nodiscard]] auto visible(entt::entity entity) const -> bool
+    {
+        return (m_visibleLayers & layerBit(m_scene.layerOf(entity))) != 0U;
+    }
+
     [[nodiscard]] auto strokeOf(entt::entity entity) const -> StrokeComponent
     {
         const auto* stroke = m_scene.registry().try_get<StrokeComponent>(entity);
@@ -110,7 +130,10 @@ private:
                                   const StrokeComponent& stroke)
         -> raster::StrokeWriter
     {
-        return {m_color,         m_ids,
+        // Shapes on locked layers are drawn but cannot be picked.
+        IdImage* ids =
+            (m_pickableLayers & layerBit(m_scene.layerOf(entity))) != 0U ? m_ids : nullptr;
+        return {m_color,         ids,
                 packRgba8(stroke.color), entt::to_integral(entity),
                 stroke.thickness, stroke.pattern};
     }
@@ -282,19 +305,21 @@ private:
     ColorImage& m_color;
     IdImage* m_ids;
     Rect m_viewport;
+    std::uint32_t m_visibleLayers;
+    std::uint32_t m_pickableLayers;
 };
 
 }  // namespace
 
-void renderOverlay(const Scene& scene, const Camera& camera, ColorImage& color,
-                   IdImage* ids)
+void renderOverlay(const Scene& scene, const Camera& camera, ColorImage& color, IdImage* ids,
+                   std::uint32_t visibleLayers, std::uint32_t pickableLayers)
 {
     if (color.empty()) {
         return;
     }
     SC_ASSERT(ids == nullptr || ids->size() == color.size(),
               "id image must match the color image size");
-    OverlayRenderer(scene, camera, color, ids).run();
+    OverlayRenderer(scene, camera, color, ids, visibleLayers, pickableLayers).run();
 }
 
 auto pickEntity(const RenderScene& renderScene, const Camera& camera,

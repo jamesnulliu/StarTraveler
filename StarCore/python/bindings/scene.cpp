@@ -359,7 +359,21 @@ void bindComponents(nb::module_& m)
         .def("__repr__",
              [](nb::handle self) { return describe("Portal", self, {"size", "linked_portal"}); });
 
+    nb::class_<LayerComponent>(m, "Layer", "Layer (0-7) of an entity; see Scene.layers.")
+        .def(
+            "__init__",
+            [](LayerComponent* self, std::uint32_t layer) {
+                if (layer >= kLayerCount) {
+                    throw nb::value_error("layers are 0..7");
+                }
+                new (self) LayerComponent{static_cast<std::uint8_t>(layer)};
+            },
+            "layer"_a = 0U)
+        .def_rw("layer", &LayerComponent::layer)
+        .def("__repr__", [](nb::handle self) { return describe("Layer", self, {"layer"}); });
+
     registerComponent<TransformComponent>();
+    registerComponent<LayerComponent>();
     registerComponent<MaterialComponent>();
     registerComponent<SphereComponent>();
     registerComponent<MeshComponent>();
@@ -495,6 +509,58 @@ void bindEntity(nb::module_& m)
         });
 }
 
+void bindLayers(nb::module_& m)
+{
+    m.attr("LAYER_COUNT") = kLayerCount;
+    m.attr("ALL_LAYERS") = kAllLayers;
+    m.def("layer_bit", &layerBit, "layer"_a, "Mask bit of a layer (1 << layer).");
+
+    nb::class_<LayerSettings>(m, "LayerSettings")
+        .def(
+            "__init__",
+            [](LayerSettings* self, std::string name, bool visible, bool pickable) {
+                new (self) LayerSettings{std::move(name), visible, pickable};
+            },
+            "name"_a = "", "visible"_a = true, "pickable"_a = true)
+        .def_rw("name", &LayerSettings::name)
+        .def_rw("visible", &LayerSettings::visible)
+        .def_rw("pickable", &LayerSettings::pickable, "False = locked (not selectable).")
+        .def("__eq__", [](const LayerSettings& a, const LayerSettings& b) { return a == b; })
+        .def("__repr__", [](nb::handle self) {
+            return describe("LayerSettings", self, {"name", "visible", "pickable"});
+        });
+
+    nb::class_<SceneLayers>(m, "SceneLayers",
+                            "Per-layer settings and the symmetric collision matrix (a value: "
+                            "assign Scene.layers to apply changes).")
+        .def(nb::init<>())
+        .def(
+            "__getitem__",
+            [](const SceneLayers& layers, std::size_t index) {
+                if (index >= kLayerCount) {
+                    throw nb::index_error();
+                }
+                return layers.layers[index];
+            },
+            "index"_a)
+        .def(
+            "__setitem__",
+            [](SceneLayers& layers, std::size_t index, const LayerSettings& settings) {
+                if (index >= kLayerCount) {
+                    throw nb::index_error();
+                }
+                layers.layers[index] = settings;
+            },
+            "index"_a, "settings"_a)
+        .def("__len__", [](const SceneLayers&) { return kLayerCount; })
+        .def("visible_mask", &SceneLayers::visibleMask)
+        .def("pickable_mask", &SceneLayers::pickableMask)
+        .def("collision_mask", &SceneLayers::collisionMask, "layer"_a)
+        .def("collides", &SceneLayers::collides, "a"_a, "b"_a)
+        .def("set_collides", &SceneLayers::setCollides, "a"_a, "b"_a, "collide"_a)
+        .def("__eq__", [](const SceneLayers& a, const SceneLayers& b) { return a == b; });
+}
+
 void bindSceneClass(nb::module_& m)
 {
     nb::class_<Scene>(m, "Scene", "Owns all entities (an EnTT registry) and their hierarchy.")
@@ -553,6 +619,29 @@ void bindSceneClass(nb::module_& m)
             "child"_a, "parent"_a.none(),
             "Re-parent `child` (None detaches it) keeping its world transform; False if this "
             "would create a cycle.")
+        .def_prop_rw(
+            "layers", [](const Scene& scene) { return scene.layers(); },
+            [](Scene& scene, const SceneLayers& layers) {
+                scene.layers() = layers;
+                scene.markDirty();
+            },
+            "A copy of the layer settings; assign to apply changes.")
+        .def(
+            "layer_of",
+            [](Scene& scene, const PyEntity& entity) {
+                return scene.layerOf(unwrapOptional(scene, entity).handle());
+            },
+            "entity"_a)
+        .def(
+            "set_layer",
+            [](Scene& scene, const PyEntity& entity, std::uint32_t layer, bool recursive) {
+                if (layer >= kLayerCount) {
+                    throw nb::value_error("layers are 0..7");
+                }
+                scene.setLayer(unwrapOptional(scene, entity), layer, recursive);
+            },
+            "entity"_a, "layer"_a, "recursive"_a = false,
+            "Move an entity (and optionally its descendants) to a layer.")
         .def_prop_rw(
             "sky_color", [](const Scene& scene) { return scene.environment().skyColor; },
             [](Scene& scene, Vec3 color) {
@@ -620,6 +709,7 @@ void bindSceneClass(nb::module_& m)
 
 void bindScene(nb::module_& m)
 {
+    bindLayers(m);
     bindComponents(m);
     bindEntity(m);
     bindSceneClass(m);

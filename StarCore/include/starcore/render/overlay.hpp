@@ -7,6 +7,7 @@
 #include "starcore/common/image.hpp"
 #include "starcore/render/camera.hpp"
 #include "starcore/render/render_scene.hpp"
+#include "starcore/scene/layers.hpp"
 
 namespace starcore
 {
@@ -23,9 +24,12 @@ class Scene;
  * pixel also stores the entity id (for picking).
  *
  * Draw order: polygon fills, then strokes, then points (markers on top).
+ * Only shapes on `visibleLayers` are drawn, and only those on
+ * `pickableLayers` write ids.
  */
 void renderOverlay(const Scene& scene, const Camera& camera, ColorImage& color,
-                   IdImage* ids = nullptr);
+                   IdImage* ids = nullptr, std::uint32_t visibleLayers = kAllLayers,
+                   std::uint32_t pickableLayers = kAllLayers);
 
 /**
  * @brief Entity under a pixel: overlay shapes (via `overlayIds`) win over

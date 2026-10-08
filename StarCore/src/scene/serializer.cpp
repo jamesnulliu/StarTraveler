@@ -187,6 +187,9 @@ void writeEntity(YAML::Emitter& out, const Scene& scene, entt::entity entity,
         node["Scale"] = t->scale;
         out << YAML::Key << "Transform" << YAML::Value << node;
     }
+    if (const auto* layer = registry.try_get<LayerComponent>(entity); layer != nullptr) {
+        out << YAML::Key << "Layer" << YAML::Value << static_cast<int>(layer->layer);
+    }
     if (const auto* m = registry.try_get<MaterialComponent>(entity)) {
         YAML::Node node;
         node["Albedo"] = m->albedo;
@@ -288,6 +291,9 @@ void readEntity(const YAML::Node& node, Scene& scene,
         transform.rotation = read(t["Rotation"], Quat(1.0F, 0.0F, 0.0F, 0.0F));
         transform.scale = read(t["Scale"], Vec3(1.0F));
     }
+    if (const auto layer = node["Layer"]) {
+        scene.setLayer(entity, static_cast<std::uint32_t>(layer.as<int>()));
+    }
     if (const auto m = node["Material"]) {
         auto& material = entity.add<MaterialComponent>();
         material.albedo = read(m["Albedo"], material.albedo);
@@ -366,6 +372,21 @@ auto serializeScene(const Scene& scene, const std::filesystem::path& baseDirecto
         << YAML::Node(scene.environment().skyColor);
     out << YAML::EndMap;
 
+    if (scene.layers() != SceneLayers{}) {
+        out << YAML::Key << "Layers" << YAML::Value << YAML::BeginSeq;
+        for (std::size_t i = 0; i < kLayerCount; ++i) {
+            const LayerSettings& layer = scene.layers().layers[i];
+            out << YAML::Flow << YAML::BeginMap;
+            out << YAML::Key << "Name" << YAML::Value << layer.name;
+            out << YAML::Key << "Visible" << YAML::Value << layer.visible;
+            out << YAML::Key << "Pickable" << YAML::Value << layer.pickable;
+            out << YAML::Key << "CollisionMask" << YAML::Value
+                << static_cast<int>(scene.layers().collisionMasks[i]);
+            out << YAML::EndMap;
+        }
+        out << YAML::EndSeq;
+    }
+
     // Write in creation order (parents are linked after loading, so the
     // order is only cosmetic).
     std::vector<entt::entity> ordered;
@@ -406,6 +427,18 @@ auto deserializeScene(std::string_view yaml, Scene& scene,
         if (const auto environment = root["Environment"]) {
             scene.environment().skyColor =
                 read(environment["SkyColor"], scene.environment().skyColor);
+        }
+
+        if (const auto layers = root["Layers"]) {
+            for (std::size_t i = 0; i < std::min<std::size_t>(layers.size(), kLayerCount); ++i) {
+                const YAML::Node layer = layers[i];
+                LayerSettings& settings = scene.layers().layers[i];
+                settings.name = read(layer["Name"], settings.name);
+                settings.visible = read(layer["Visible"], settings.visible);
+                settings.pickable = read(layer["Pickable"], settings.pickable);
+                scene.layers().collisionMasks[i] = static_cast<std::uint8_t>(
+                    read(layer["CollisionMask"], static_cast<int>(kAllLayers)));
+            }
         }
 
         std::vector<std::pair<entt::entity, Uuid>> parentLinks;

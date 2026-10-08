@@ -277,6 +277,7 @@ void GameLayer::handleViewportInput()
     if (m_tool) {
         const ToolResult result = m_tool->update(context);
         if (result.finished) {
+            m_scene.setLayer(result.created, m_activeLayer, /*recursive=*/true);
             m_status = std::format("Created {}", result.created.name());
             // Stay in the tool to draw more shapes of the same kind.
         }
@@ -298,6 +299,8 @@ void GameLayer::composeFrame()
         m_renderSceneSourceVersion = m_scene.version();
     }
 
+    const SceneLayers& layers = m_scene.layers();
+    m_options.tracer.instanceMask = layers.visibleMask();
     if (m_options.rayTracing) {
         if (m_options.liveRender || m_stepOnce) {
             const auto start = std::chrono::steady_clock::now();
@@ -314,7 +317,8 @@ void GameLayer::composeFrame()
     }
 
     m_ids.fill(kNoEntityId);
-    renderOverlay(m_scene, m_camera, m_frame, &m_ids);
+    renderOverlay(m_scene, m_camera, m_frame, &m_ids, layers.visibleMask(),
+                  layers.pickableMask());
     if (m_tool) {
         renderOverlay(m_tool->previewScene(), m_camera, m_frame);
     }
@@ -355,6 +359,7 @@ void GameLayer::buildDefaultLayoutIfNeeded()
     ImGui::DockBuilderDockWindow("Viewport", center);
     ImGui::DockBuilderDockWindow("Tools", left);
     ImGui::DockBuilderDockWindow("Hierarchy", leftBottom);
+    ImGui::DockBuilderDockWindow("Layers", leftBottom);
     ImGui::DockBuilderDockWindow("Inspector", right);
     ImGui::DockBuilderDockWindow("Render", rightBottom);
     ImGui::DockBuilderDockWindow("Status", rightBottom);
@@ -373,6 +378,7 @@ void GameLayer::onUIRender()
     drawStatusPanel();
     drawHierarchyPanel();
     drawInspectorPanel();
+    drawLayersPanel();
     drawFileDialog();
 
     ++m_frameCount;
@@ -423,7 +429,9 @@ void GameLayer::drawViewport()
     // Entity under the mouse, for the status bar and the next click.
     m_hovered.reset();
     if (m_viewport.hovered) {
-        m_hovered = pickEntity(m_renderScene, m_camera, &m_ids, m_viewport.mouse);
+        const SceneLayers& layers = m_scene.layers();
+        m_hovered = pickEntity(m_renderScene, m_camera, &m_ids, m_viewport.mouse,
+                               layers.visibleMask() & layers.pickableMask());
         if (m_hovered && !m_scene.registry().valid(*m_hovered)) {
             m_hovered.reset();
         }
@@ -696,6 +704,23 @@ void GameLayer::drawInspectorPanel()
         changed |= ImGui::DragFloat3("Scale", &transform.scale.x, 0.01F);
     }
 
+    {
+        const std::uint32_t current = m_scene.layerOf(entity.handle());
+        const auto& layers = m_scene.layers().layers;
+        if (ImGui::BeginCombo("Layer", layers[current].name.c_str())) {
+            for (std::uint32_t i = 0; i < kLayerCount; ++i) {
+                ImGui::PushID(static_cast<int>(i));
+                if (ImGui::Selectable(layers[i].name.c_str(), i == current)) {
+                    m_scene.setLayer(entity, i, m_layerRecursive);
+                }
+                ImGui::PopID();
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        ImGui::Checkbox("+children", &m_layerRecursive);
+    }
+
     if (auto* material = entity.tryGet<MaterialComponent>()) {
         const auto [open, remove] = componentHeader("Material", true);
         if (open) {
@@ -870,6 +895,73 @@ void GameLayer::drawInspectorPanel()
     ImGui::End();
 }
 
+void GameLayer::drawLayersPanel()
+{
+    ImGui::Begin("Layers");
+    SceneLayers& layers = m_scene.layers();
+    constexpr ImGuiTableFlags kTableFlags =
+        ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV;
+    if (ImGui::BeginTable("layers", 4, kTableFlags)) {
+        ImGui::TableSetupColumn("Active");
+        ImGui::TableSetupColumn("Show");
+        ImGui::TableSetupColumn("Lock");
+        ImGui::TableSetupColumn("Name", ImGuiTableColumnFlags_WidthStretch);
+        ImGui::TableHeadersRow();
+        for (std::uint32_t i = 0; i < kLayerCount; ++i) {
+            LayerSettings& layer = layers.layers[i];
+            ImGui::PushID(static_cast<int>(i));
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            if (ImGui::RadioButton("##active", m_activeLayer == i)) {
+                m_activeLayer = i;
+            }
+            ImGui::TableNextColumn();
+            ImGui::Checkbox("##visible", &layer.visible);
+            ImGui::TableNextColumn();
+            bool locked = !layer.pickable;
+            if (ImGui::Checkbox("##locked", &locked)) {
+                layer.pickable = !locked;
+            }
+            ImGui::TableNextColumn();
+            ImGui::SetNextItemWidth(-FLT_MIN);
+            ImGui::InputText("##name", &layer.name);
+            ImGui::PopID();
+        }
+        ImGui::EndTable();
+    }
+    ImGui::TextDisabled("New drawings go to the active layer. Locked layers cannot be "
+                        "selected in the viewport.");
+
+    if (ImGui::CollapsingHeader("Collision matrix")) {
+        // Lower triangle: row i, column j <= i (the matrix is symmetric).
+        if (ImGui::BeginTable("collisions", static_cast<int>(kLayerCount) + 1,
+                              ImGuiTableFlags_SizingFixedFit)) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            for (std::uint32_t j = 0; j < kLayerCount; ++j) {
+                ImGui::TableNextColumn();
+                ImGui::Text("%u", j);
+            }
+            for (std::uint32_t i = 0; i < kLayerCount; ++i) {
+                ImGui::TableNextRow();
+                ImGui::TableNextColumn();
+                ImGui::Text("%u %s", i, layers.layers[i].name.c_str());
+                for (std::uint32_t j = 0; j <= i; ++j) {
+                    ImGui::TableNextColumn();
+                    ImGui::PushID(static_cast<int>(i * kLayerCount + j));
+                    bool collide = layers.collides(i, j);
+                    if (ImGui::Checkbox("##c", &collide)) {
+                        layers.setCollides(i, j, collide);
+                    }
+                    ImGui::PopID();
+                }
+            }
+            ImGui::EndTable();
+        }
+    }
+    ImGui::End();
+}
+
 void GameLayer::drawFileDialog()
 {
     if (m_fileDialog == FileDialog::None) {
@@ -908,6 +1000,7 @@ auto GameLayer::createAtCursor(const std::string& name) -> Entity
     Entity entity = m_scene.createEntity(name);
     entity.get<TransformComponent>().translation =
         m_camera.position() + m_camera.forward() * m_drawDepth;
+    m_scene.setLayer(entity, m_activeLayer);
     setTool(ToolKind::None);
     m_selection.select(entity);
     return entity;

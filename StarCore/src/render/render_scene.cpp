@@ -34,10 +34,12 @@ auto toRenderMaterial(const MaterialComponent* material) -> RenderMaterial
     return result;
 }
 
-void addInstance(RenderScene& out, std::uint32_t geometryIndex, const Mat4& objectToWorld,
-                 const MaterialComponent* material, entt::entity entity)
+void addInstance(RenderScene& out, const Scene& scene, std::uint32_t geometryIndex,
+                 const Mat4& objectToWorld, const MaterialComponent* material,
+                 entt::entity entity)
 {
     RenderInstance instance;
+    instance.mask = layerBit(scene.layerOf(entity));
     instance.objectToWorld = objectToWorld;
     instance.worldToObject = glm::inverse(objectToWorld);
     instance.worldBounds = out.geometries[geometryIndex].localBounds.transformed(objectToWorld);
@@ -88,7 +90,7 @@ auto buildRenderScene(const Scene& scene) -> RenderScene
         objectToWorld[1] *= sphere.radius;
         objectToWorld[2] *= sphere.radius;
         const auto* material = registry.try_get<MaterialComponent>(entity);
-        addInstance(out, sphereGeometry, objectToWorld, material, entity);
+        addInstance(out, scene, sphereGeometry, objectToWorld, material, entity);
 
         // Emissive, (nearly) uniformly scaled spheres are sampled as lights.
         const Vec3 emission = material != nullptr ? material->emission() : Vec3(0.0F);
@@ -121,7 +123,7 @@ auto buildRenderScene(const Scene& scene) -> RenderScene
                 .localBounds = component.mesh->bounds,
             });
         }
-        addInstance(out, it->second, scene.worldTransform(entity),
+        addInstance(out, scene, it->second, scene.worldTransform(entity),
                     registry.try_get<MaterialComponent>(entity), entity);
     }
 

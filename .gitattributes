@@ -11,3 +11,5 @@
 *.exr binary
 *.ttf binary
 *.spv binary
+*.glb binary
+*.bin binary

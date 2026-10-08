@@ -1,28 +1,29 @@
-#include <algorithm>
-#include <chrono>
-#include <format>
-#include <iterator>
-#include <ranges>
-#include <vector>
+module;
 
-#include <glm/geometric.hpp>
-#include <glm/gtc/quaternion.hpp>
-#include <glm/trigonometric.hpp>
+#include <entt/entity/registry.hpp>
 #include <imgui.h>
 #include <imgui_internal.h>  // DockBuilder API
 #include <imgui_stdlib.h>
 
-#include <starcore/app/application.hpp>
-#include <starcore/common/log.hpp>
-#include <starcore/math/color.hpp>
-#include <starcore/physics/physics_world.hpp>
-#include <starcore/platform/input.hpp>
-#include <starcore/render/overlay.hpp>
-#include <starcore/scene/serializer.hpp>
+#include "starcore/common/log.hpp"
 
-#include "game_layer.hpp"
+module startraveler.game;
 
+import std;
+import glm;
+import starcore.app;
+import starcore.asset;
+import starcore.common;
+import starcore.gpu;
+import starcore.math;
+import starcore.physics;
+import starcore.platform;
 import starcore.raster;
+import starcore.render;
+import starcore.scene;
+import starcore.vulkan;
+import startraveler.editor;
+import startraveler.gameplay;
 
 namespace startraveler
 {

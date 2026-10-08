@@ -1,4 +1,5 @@
-#include <cstdlib>
+// Not a module unit: it defines what starcore/common/assert.hpp declares (the
+// header stays a header for its macros).
 
 #include "starcore/common/assert.hpp"
 #include "starcore/common/log.hpp"
@@ -11,6 +12,8 @@
 #else
     #define SC_DEBUG_BREAK() std::abort()
 #endif
+
+import std;
 
 namespace starcore::detail
 {

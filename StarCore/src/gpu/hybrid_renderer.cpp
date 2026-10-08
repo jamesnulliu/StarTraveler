@@ -1,9 +1,14 @@
-#include <algorithm>
-#include <span>
+module;
 
-#include "hybrid_renderer.hpp"
-#include "starcore/vulkan/check.hpp"
-#include "starcore/vulkan/context.hpp"
+#include <vulkan/vulkan.h>
+
+module starcore.gpu;
+
+import std;
+import starcore.math;
+import starcore.render;
+import starcore.vulkan;
+import :hybrid_renderer;
 
 namespace starcore::gpu
 {

@@ -1,6 +1,10 @@
+module;
+
 #include <imgui.h>
 
-#include "starcore/ui/theme.hpp"
+module starcore.ui;
+
+import std;
 
 namespace starcore::ui
 {

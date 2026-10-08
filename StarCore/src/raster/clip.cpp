@@ -1,22 +1,9 @@
 // Line and polygon clipping (module starcore.raster).
 
-module;
-
-// An implementation unit sees what the module imports, not what its global
-// module fragment includes: it includes for itself.
-#ifndef STARCORE_IMPORT_STD
-#include <cstddef>
-#include <optional>
-#include <span>
-#include <utility>
-#include <vector>
-#endif
-
-#include <glm/geometric.hpp>
-
-#include "starcore/math/types.hpp"
-
 module starcore.raster;
+
+import std;
+import starcore.math;
 
 namespace starcore::raster
 {

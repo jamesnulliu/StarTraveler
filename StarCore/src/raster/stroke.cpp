@@ -1,16 +1,10 @@
 // The overlay's pixel writer (module starcore.raster).
 
-module;
-
-#ifndef STARCORE_IMPORT_STD
-#include <algorithm>
-#include <cstdint>
-#endif
-
-#include "starcore/common/image.hpp"
-#include "starcore/raster/types.hpp"
-
 module starcore.raster;
+
+import std;
+import starcore.common;
+import starcore.math;
 
 namespace starcore::raster
 {

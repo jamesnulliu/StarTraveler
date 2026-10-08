@@ -1,5 +1,4 @@
-// The 2D raster algorithms of the original drawing board, as a C++20 named
-// module: `import starcore.raster;` instead of including their headers.
+// starcore.raster -- the 2D raster algorithms of the original drawing board:
 //
 //   lines      Bresenham, midpoint and DDA, every octant, in order from a to b
 //   ellipses   the midpoint algorithm, by symmetry
@@ -9,54 +8,16 @@
 //   filling    flood ("seed") and boundary fill
 //   strokes    the overlay's pixel writer: dash patterns, thickness, entity ids
 //
-// The vocabulary shared with the scene (LineAlgorithm, CurveType, ...) stays in
-// starcore/raster/types.hpp -- components use it -- and is re-exported here.
-// Definitions that are not templates live in implementation units
-// (src/raster/*.cpp: `module starcore.raster;`).
-
-module;
-
-// Global module fragment: what the module uses through headers. With
-// STARCORE_IMPORT_STD the standard library comes from `import std;` below
-// (the engine's headers still include parts of it, which compilers merge).
-#ifndef STARCORE_IMPORT_STD
-#include <algorithm>
-#include <cmath>
-#include <concepts>
-#include <cstddef>
-#include <cstdint>
-#include <cstdlib>
-#include <optional>
-#include <span>
-#include <utility>
-#include <vector>
-#endif
-
-#include "starcore/common/image.hpp"
-#include "starcore/math/types.hpp"
-#include "starcore/raster/types.hpp"
+// :types holds the vocabulary shared with the scene's components
+// (LineAlgorithm, CurveType, ...). Definitions that are not templates live in
+// implementation units (src/raster/*.cpp: `module starcore.raster;`).
 
 export module starcore.raster;
 
-#ifdef STARCORE_IMPORT_STD
 import std;
-#endif
-
-// The vocabulary of starcore/raster/types.hpp, for those who only import.
-export namespace starcore
-{
-using starcore::CurveType;
-using starcore::EllipseAlgorithm;
-using starcore::LineAlgorithm;
-using starcore::LinePattern;
-}  // namespace starcore
-
-export namespace starcore::raster
-{
-using raster::PixelPlotter;
-using raster::roundToInt;
-using raster::toPixel;
-}  // namespace starcore::raster
+import starcore.common;
+import starcore.math;
+export import :types;
 
 export namespace starcore::raster
 {

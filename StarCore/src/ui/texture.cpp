@@ -1,11 +1,15 @@
-#include <cstring>
+module;
 
 #include <imgui_impl_vulkan.h>
 #include <vk_mem_alloc.h>
+#include <imgui.h>
 
 #include "starcore/common/assert.hpp"
-#include "starcore/ui/texture.hpp"
-#include "starcore/vulkan/check.hpp"
+
+module starcore.ui;
+
+import std;
+import starcore.vulkan;
 
 namespace starcore::ui
 {

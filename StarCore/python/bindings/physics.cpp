@@ -1,14 +1,21 @@
-#include <format>
-#include <optional>
-#include <vector>
+module;
 
+#include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
+#include <entt/entity/registry.hpp>
 
-#include <starcore/physics/physics_world.hpp>
-#include <starcore/scene/scene.hpp>
+#include "casters.hpp"
 
-#include "common.hpp"
+module starcore.python;
+
+import std;
+import starcore.math;
+import starcore.physics;
+import starcore.scene;
+
+using namespace nb::literals;
 
 namespace starcore::python
 {

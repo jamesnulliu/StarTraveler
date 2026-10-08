@@ -1,10 +1,7 @@
-#include <cmath>
+module starcore.math;
 
-#include <glm/geometric.hpp>
-#include <glm/gtc/matrix_transform.hpp>
-#include <glm/gtx/quaternion.hpp>
-
-#include "starcore/math/transform.hpp"
+import std;
+import glm;
 
 namespace starcore
 {
@@ -48,8 +45,9 @@ auto rotationBetween(Vec3 from, Vec3 to) -> Quat
     if (fromLength == 0.0F || toLength == 0.0F) {
         return {1.0F, 0.0F, 0.0F, 0.0F};
     }
-    // glm::rotation picks an arbitrary orthogonal axis for opposite vectors.
-    return glm::rotation(from / fromLength, to / toLength);
+    // rotation() picks an arbitrary orthogonal axis for opposite vectors. It is an experimental
+    // extension: glm's module exports those in glm::gtx (see CMakeLists.txt).
+    return glm::gtx::rotation(from / fromLength, to / toLength);
 }
 
 }  // namespace starcore

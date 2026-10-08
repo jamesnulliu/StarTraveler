@@ -1,10 +1,12 @@
-#include <algorithm>
-#include <ranges>
+module;
 
-#include <glm/matrix.hpp>
+#include <entt/entity/registry.hpp>
 
-#include "starcore/scene/entity.hpp"
-#include "starcore/scene/scene.hpp"
+module starcore.scene;
+
+import std;
+import glm;
+import starcore.math;
 
 namespace starcore
 {

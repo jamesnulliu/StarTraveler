@@ -1,40 +1,40 @@
-#include <format>
-#include <fstream>
-#include <sstream>
-#include <unordered_map>
-#include <vector>
+module;
 
+#include <entt/entity/registry.hpp>
 #include <yaml-cpp/yaml.h>
 
-#include "starcore/asset/model.hpp"
-#include "starcore/scene/entity.hpp"
-#include "starcore/scene/serializer.hpp"
+module starcore.scene;
+
+import std;
+import starcore.asset;
+import starcore.common;
+import starcore.math;
 
 // YAML conversions for glm types ------------------------------------------------------------------
 
 namespace YAML
 {
 
-template <glm::length_t L>
-struct convert<glm::vec<L, float, glm::defaultp>>
+// `auto L`: glm's module does not export glm::length_t (nor glm::defaultp).
+template <auto L, glm::qualifier Q>
+struct convert<glm::vec<L, float, Q>>
 {
-    static auto encode(const glm::vec<L, float, glm::defaultp>& v) -> Node
+    static auto encode(const glm::vec<L, float, Q>& v) -> Node
     {
         Node node(NodeType::Sequence);
-        for (glm::length_t i = 0; i < L; ++i) {
+        for (decltype(L) i = 0; i < L; ++i) {
             node.push_back(v[i]);
         }
         node.SetStyle(EmitterStyle::Flow);
         return node;
     }
 
-    static auto decode(const Node& node, glm::vec<L, float, glm::defaultp>& v)
-        -> bool
+    static auto decode(const Node& node, glm::vec<L, float, Q>& v) -> bool
     {
         if (!node.IsSequence() || node.size() != static_cast<std::size_t>(L)) {
             return false;
         }
-        for (glm::length_t i = 0; i < L; ++i) {
+        for (decltype(L) i = 0; i < L; ++i) {
             v[i] = node[static_cast<std::size_t>(i)].as<float>();
         }
         return true;

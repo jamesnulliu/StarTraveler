@@ -1,11 +1,11 @@
-#include <algorithm>
-
 #include <catch2/catch_test_macros.hpp>
+#include <entt/entity/registry.hpp>
 
-#include <starcore/render/overlay.hpp>
-#include <starcore/render/path_tracer.hpp>
-#include <starcore/scene/entity.hpp>
-#include <starcore/scene/serializer.hpp>
+import std;
+import starcore.common;
+import starcore.math;
+import starcore.render;
+import starcore.scene;
 
 using namespace starcore;
 

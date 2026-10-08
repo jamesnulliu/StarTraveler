@@ -1,14 +1,12 @@
-#include <algorithm>
-#include <cmath>
-
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
-#include <glm/geometric.hpp>
-#include <glm/gtc/quaternion.hpp>
 
-#include <starcore/math/random.hpp>
-#include <starcore/physics/physics_world.hpp>
-#include <starcore/scene/entity.hpp>
+import std;
+import glm;
+import starcore.asset;
+import starcore.math;
+import starcore.physics;
+import starcore.scene;
 
 using namespace starcore;
 using Catch::Matchers::WithinAbs;

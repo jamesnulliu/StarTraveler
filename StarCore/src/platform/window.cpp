@@ -1,10 +1,14 @@
-#include <stdexcept>
+module;
 
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
 #include "starcore/common/log.hpp"
-#include "starcore/platform/window.hpp"
+
+module starcore.platform;
+
+import std;
+import starcore.math;
 
 namespace starcore
 {

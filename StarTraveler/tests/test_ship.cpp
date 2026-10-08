@@ -1,17 +1,15 @@
 // The player's ship: spawning the cockpit model, flight, collisions, portals.
 
-#include <filesystem>
-
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
-#include <glm/geometric.hpp>
 
-#include <starcore/render/path_tracer.hpp>
-#include <starcore/scene/entity.hpp>
-#include <starcore/scene/serializer.hpp>
-
-#include "gameplay/portals.hpp"
-#include "gameplay/ship.hpp"
+import std;
+import glm;
+import starcore.math;
+import starcore.physics;
+import starcore.render;
+import starcore.scene;
+import startraveler.gameplay;
 
 using namespace starcore;
 using namespace startraveler;

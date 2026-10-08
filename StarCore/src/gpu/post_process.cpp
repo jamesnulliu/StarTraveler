@@ -1,7 +1,13 @@
-#include <algorithm>
+module;
 
-#include "post_process.hpp"
-#include "starcore/vulkan/context.hpp"
+#include <vulkan/vulkan.h>
+
+module starcore.gpu;
+
+import std;
+import starcore.math;
+import starcore.vulkan;
+import :post_process;
 
 namespace starcore::gpu
 {

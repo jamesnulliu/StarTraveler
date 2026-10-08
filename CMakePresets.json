@@ -87,6 +87,7 @@
         {
             "name": "mingw",
             "displayName": "MinGW-w64 GCC + Ninja",
+            "description": "Currently refused at configure time: GCC (16.2) cannot link C++ modules on Windows, see StarCore/cmake/starcore-modules.cmake",
             "inherits": "windows-base",
             "generator": "Ninja Multi-Config",
             "cacheVariables": {

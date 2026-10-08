@@ -1,7 +1,4 @@
-#include <chrono>
-#include <iterator>
-#include <ranges>
-#include <stdexcept>
+module;
 
 // vulkan.h must precede glfw3.h to get glfwCreateWindowSurface.
 #include <vulkan/vulkan.h>
@@ -11,11 +8,16 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_vulkan.h>
 
-#include "starcore/app/application.hpp"
 #include "starcore/common/assert.hpp"
 #include "starcore/common/log.hpp"
-#include "starcore/ui/theme.hpp"
-#include "starcore/vulkan/check.hpp"
+
+module starcore.app;
+
+import std;
+import starcore.math;
+import starcore.platform;
+import starcore.ui;
+import starcore.vulkan;
 
 // Frame loop adapted from Dear ImGui's example_glfw_vulkan (v1.92).
 

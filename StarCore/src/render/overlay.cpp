@@ -1,16 +1,17 @@
-#include <algorithm>
-#include <cmath>
-#include <span>
-#include <vector>
+module;
 
-#include <glm/geometric.hpp>
+#include <entt/entity/registry.hpp>
 
-#include "starcore/math/color.hpp"
-#include "starcore/render/overlay.hpp"
-#include "starcore/scene/components.hpp"
-#include "starcore/scene/scene.hpp"
+#include "starcore/common/assert.hpp"
 
+module starcore.render;
+
+import std;
+import glm;
+import starcore.common;
+import starcore.math;
 import starcore.raster;
+import starcore.scene;
 
 namespace starcore
 {

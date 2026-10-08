@@ -1,8 +1,15 @@
-#include <starcore/math/color.hpp>
-#include <starcore/math/geometry.hpp>
-#include <starcore/math/transform.hpp>
+module;
 
-#include "common.hpp"
+#include <nanobind/nanobind.h>
+#include <nanobind/ndarray.h>
+#include "casters.hpp"
+
+module starcore.python;
+
+import std;
+import starcore.math;
+
+using namespace nb::literals;
 
 namespace starcore::python
 {

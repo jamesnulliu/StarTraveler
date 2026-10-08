@@ -1,15 +1,14 @@
-#include <algorithm>
-
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
-#include <glm/geometric.hpp>
+#include <entt/entity/registry.hpp>
 
-#include <starcore/math/color.hpp>
-#include <starcore/render/camera.hpp>
-#include <starcore/render/overlay.hpp>
-#include <starcore/render/path_tracer.hpp>
-#include <starcore/render/render_scene.hpp>
-#include <starcore/scene/entity.hpp>
+import std;
+import glm;
+import starcore.asset;
+import starcore.common;
+import starcore.math;
+import starcore.render;
+import starcore.scene;
 
 using namespace starcore;
 using Catch::Matchers::WithinAbs;

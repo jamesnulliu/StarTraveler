@@ -14,8 +14,10 @@ StarTraveler/                 repository root: a CMake workspace
 ├─ CMakePresets.json          msvc, msvc-vs2022, msvc-ninja, mingw, linux-gcc, linux-clang
 ├─ StarCore/                  the engine; also builds on its own
 │  ├─ CMakeLists.txt  vcpkg.json  pyproject.toml  cmake/
-│  ├─ include/starcore/  src/    StarCore::Core (headless), ::Gpu (Vulkan), ::Runtime (window)
-│  ├─ modules/                   C++20 named modules (starcore.raster)
+│  ├─ modules/                   module interfaces: starcore.<component>.cppm + partitions
+│  ├─ src/                       implementation units; StarCore::Core (headless), ::Gpu
+│  │                             (Vulkan), ::Runtime (window)
+│  ├─ include/starcore/          the only headers: logging and assertion macros
 │  ├─ shaders/                   GLSL shaders, compiled to SPIR-V at build time
 │  ├─ tests/  examples/          Catch2 tests (tests/gpu: GPU vs CPU), starcore-render (CLI)
 │  └─ python/                    the `starcore` package: bindings/, starcore/, tests/
@@ -39,20 +41,42 @@ ctest --preset msvc-release
 build\msvc\bin\Release\StarTraveler.exe
 ```
 
-Other presets: `msvc-vs2022`, `msvc-ninja` (inside a VS developer shell),
-`mingw` (GCC from `scoop install mingw-winlibs`), and `linux-gcc` /
-`linux-clang` (not tested yet). C++23 is the default; `-DSTARCORE_CXX_STANDARD=26`
-opts into C++26.
+Other presets: `msvc-vs2022`, `msvc-ninja` (inside a VS developer shell), and
+`linux-gcc` / `linux-clang` (not tested yet). C++23 is the default;
+`-DSTARCORE_CXX_STANDARD=26` opts into C++26.
 
-C++20 modules: the 2D raster algorithms are the named module `starcore.raster`
-(`StarCore/modules/`), imported by the overlay renderer, the editor, the tests
-and the Python bindings (`import starcore.raster;`); the rest of the engine is
-still headers. With `STARCORE_IMPORT_STD` (default ON) the module's units
-`import std;` where the toolchain can: with Visual Studio MSBuild builds the
-standard library module; with Ninja CMake does, behind an experimental gate
-whose key changes with CMake's version (known for CMake 4.2 and 4.4; others
-fall back to including the standard headers). Toggling it needs a fresh
-configure (`cmake --preset mingw --fresh`): the compiler check is cached.
+### C++ modules
+
+The engine and the game are C++20 named modules: code says
+`import starcore.scene;`, not `#include`. Every component is one module --
+`starcore.common`, `.math`, `.raster`, `.asset`, `.scene`, `.render`,
+`.physics` (StarCore::Core), `.vulkan`, `.gpu` (StarCore::Gpu), `.platform`,
+`.ui`, `.app` (StarCore::Runtime), and the game's `startraveler.editor`,
+`.gameplay`, `.game`. Its primary interface (`modules/starcore.<component>.cppm`)
+exports one partition per former header (`modules/<component>/*.cppm`), and
+`src/<component>/` holds the implementation units (`module starcore.scene;`)
+and internal partitions (the GPU pipelines). Only macros, which modules cannot
+export, are still headers: `starcore/common/log.hpp` and `assert.hpp`.
+
+- The standard library is `import std;` everywhere. Visual Studio's MSBuild
+  builds the module itself; with Ninja, CMake does, behind an experimental gate
+  whose key changes with CMake's version (known for 4.2 and 4.4, see
+  `StarCore/cmake/starcore-setup.cmake`). Configuring fails with an explanation
+  when neither is available.
+- glm comes from its own module (`import glm;`, glm's `glm.cppm`, compiled into
+  StarCore::Core), which `starcore.math` re-exports. EnTT has none:
+  `starcore.scene` exports what users need (`entt::entity`, `entt::null`,
+  `entt::registry`, `entt::to_integral` and EnTT's operators), and code that uses
+  more of it (views) includes all of `<entt/entity/registry.hpp>`. Libraries
+  that ship no module (Vulkan, GLFW, ImGui, nanobind, Catch2, ...) are
+  included where they are used; the bindings' nanobind type casters stay a
+  header too (`python/bindings/casters.hpp`: MSVC crashes compiling nanobind's
+  calls when they come from a module).
+- MinGW: GCC 16.2 cannot link modules on Windows -- it emits the function-local
+  statics of imported inline functions (e.g. `std::make_shared`'s, EnTT's type
+  ids) without COMDAT, so every importer defines them again. The `mingw` preset
+  therefore stops at configure time until GCC is fixed (details and a 3-line
+  reproduction in `StarCore/cmake/starcore-modules.cmake`).
 
 GPU path tracing needs a GPU with `VK_KHR_ray_query` (NVIDIA RTX, AMD RDNA2+,
 Intel Arc); without one path tracing falls back to the CPU, the GPU only

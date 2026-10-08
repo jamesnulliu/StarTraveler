@@ -1,18 +1,14 @@
-#include <algorithm>
-#include <atomic>
-#include <cctype>
-#include <cstdlib>
-#include <filesystem>
-#include <format>
-#include <optional>
+module;
 
 #include <VkBootstrap.h>
 #include <vk_mem_alloc.h>
 
 #include "starcore/common/assert.hpp"
 #include "starcore/common/log.hpp"
-#include "starcore/vulkan/check.hpp"
-#include "starcore/vulkan/context.hpp"
+
+module starcore.vulkan;
+
+import std;
 
 namespace starcore::vulkan
 {

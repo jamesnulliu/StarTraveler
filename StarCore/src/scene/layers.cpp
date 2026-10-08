@@ -1,6 +1,6 @@
-#include <format>
+module starcore.scene;
 
-#include "starcore/scene/layers.hpp"
+import std;
 
 namespace starcore
 {

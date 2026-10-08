@@ -13,6 +13,8 @@ include(${CMAKE_CURRENT_LIST_DIR}/../utils/common.cmake)
 
 # Core (headless) ----------------------------------------------------------------------------------
 find_package(glm      CONFIG REQUIRED)  # glm::glm
+# glm's module interface (glm >= 1.0), compiled into StarCore::Core for `import glm;`.
+find_path(STARCORE_GLM_MODULE_DIR NAMES glm.cppm PATH_SUFFIXES glm REQUIRED)
 find_package(EnTT     CONFIG REQUIRED)  # EnTT::EnTT
 find_package(spdlog   CONFIG REQUIRED)  # spdlog::spdlog (std::format backend)
 find_package(yaml-cpp CONFIG REQUIRED)  # yaml-cpp::yaml-cpp

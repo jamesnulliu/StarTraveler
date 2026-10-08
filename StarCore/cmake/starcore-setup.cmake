@@ -40,18 +40,18 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS        OFF)
 
 # C++ modules ---------------------------------------------------------------------------------------
-# StarCore::Core provides named modules (modules/*.cppm, e.g. `import starcore.raster;`); their
-# importers need dependency scanning too.
+# StarCore is made of named modules (modules/: `import starcore.scene;`, ...); every target
+# that imports them needs dependency scanning too.
 set(CMAKE_CXX_SCAN_FOR_MODULES  ON)
-# `import std;` inside those modules (experimental): MSBuild builds the standard library module
-# itself; with the other generators CMake does, behind a gate whose key changes with CMake's
-# version -- known keys below, other versions fall back to including the standard headers.
-option(STARCORE_IMPORT_STD "StarCore's modules `import std;` where the toolchain can" ON)
+# Every source does `import std;`. MSBuild builds the standard library module itself; with the
+# other generators CMake does, behind an experimental gate whose key changes with CMake's
+# version -- the known keys are below (starcore-modules.cmake checks the result after
+# `project()`).
 set(_STARCORE_IMPORT_STD_GATES
     "4.2" "d0edc3af-4c50-42ea-a356-e2862fe7a444"
     "4.4" "f35a9ac6-8463-4d38-8eec-5d6008153e7d"
 )
-if(STARCORE_IMPORT_STD AND NOT CMAKE_GENERATOR MATCHES "^Visual Studio")
+if(NOT CMAKE_GENERATOR MATCHES "^Visual Studio")
     set(_version "${CMAKE_MAJOR_VERSION}.${CMAKE_MINOR_VERSION}")
     list(FIND _STARCORE_IMPORT_STD_GATES "${_version}" _index)
     if(_index GREATER_EQUAL 0)

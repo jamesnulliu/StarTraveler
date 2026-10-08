@@ -1,11 +1,9 @@
-#include <algorithm>
-#include <chrono>
-#include <optional>
+module starcore.render;
 
-#include <glm/geometric.hpp>
-
-#include "starcore/render/path_tracer.hpp"
-#include "starcore/render/sampling.hpp"
+import std;
+import glm;
+import starcore.common;
+import starcore.math;
 
 namespace starcore
 {

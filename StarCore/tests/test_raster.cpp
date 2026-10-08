@@ -1,18 +1,11 @@
-#include <cmath>
-#include <cstdlib>
-#include <set>
-#include <utility>
-#include <vector>
-
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
-#include <glm/geometric.hpp>
 
-#include <starcore/common/image.hpp>
-#include <starcore/raster/types.hpp>
-
-// The raster algorithms are a C++20 module.
+import std;
+import glm;
+import starcore.common;
+import starcore.math;
 import starcore.raster;
 
 using namespace starcore;

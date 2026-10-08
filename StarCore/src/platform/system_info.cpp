@@ -1,11 +1,13 @@
-#include <format>
+module;
 
 #include <GLFW/glfw3.h>
 #include <VkBootstrap.h>
 #include <imgui.h>
 #include <vulkan/vulkan.h>
 
-#include "starcore/platform/system_info.hpp"
+module starcore.platform;
+
+import std;
 
 namespace starcore::platform
 {

@@ -1,11 +1,12 @@
-#include <memory>
-#include <mutex>
-#include <vector>
+// Not a module unit: it defines what starcore/common/log.hpp declares (the
+// header stays a header for its macros).
 
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 
 #include "starcore/common/log.hpp"
+
+import std;
 
 namespace starcore::log
 {

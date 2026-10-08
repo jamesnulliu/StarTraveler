@@ -1,12 +1,8 @@
-#include <algorithm>
-#include <cmath>
+module starcore.render;
 
-#include <glm/geometric.hpp>
-#include <glm/gtc/matrix_transform.hpp>
-#include <glm/matrix.hpp>
-#include <glm/trigonometric.hpp>
-
-#include "starcore/render/camera.hpp"
+import std;
+import glm;
+import starcore.math;
 
 namespace starcore
 {

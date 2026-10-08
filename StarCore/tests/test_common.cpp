@@ -1,15 +1,10 @@
-#include <atomic>
-#include <format>
-#include <stdexcept>
-#include <vector>
-
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 
-#include <starcore/common/image.hpp>
-#include <starcore/common/log.hpp>
-#include <starcore/common/parallel.hpp>
-#include <starcore/common/version.hpp>
+#include "starcore/common/log.hpp"
+
+import std;
+import starcore.common;
 
 TEST_CASE("ParallelExecutor runs every index exactly once", "[common][parallel]")
 {

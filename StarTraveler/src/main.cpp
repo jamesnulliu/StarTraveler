@@ -1,15 +1,11 @@
-#include <cstdlib>
-#include <exception>
-#include <filesystem>
-#include <vector>
-
 #include <CLI/CLI.hpp>
 
-#include <starcore/app/application.hpp>
-#include <starcore/common/log.hpp>
-#include <starcore/common/version.hpp>
+#include "starcore/common/log.hpp"
 
-#include "game_layer.hpp"
+import std;
+import starcore.app;
+import starcore.common;
+import startraveler.game;
 
 namespace
 {

@@ -1,9 +1,11 @@
-#include <format>
+module;
 
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
 
-#include "starcore/common/image.hpp"
+module starcore.common;
+
+import std;
 
 namespace starcore
 {

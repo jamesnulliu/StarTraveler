@@ -1,9 +1,12 @@
-#include <iterator>
+module;
+
+#include <vulkan/vulkan.h>
 
 #include "starcore/common/assert.hpp"
-#include "starcore/vulkan/check.hpp"
-#include "starcore/vulkan/context.hpp"
-#include "starcore/vulkan/pipeline.hpp"
+
+module starcore.vulkan;
+
+import std;
 
 namespace starcore::vulkan
 {

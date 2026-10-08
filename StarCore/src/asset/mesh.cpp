@@ -1,13 +1,12 @@
-#include <algorithm>
-#include <cmath>
-#include <format>
-#include <numeric>
+module;
 
-#include <glm/geometric.hpp>
-#include <glm/matrix.hpp>
-
-#include "starcore/asset/mesh.hpp"
 #include "starcore/common/assert.hpp"
+
+module starcore.asset;
+
+import std;
+import glm;
+import starcore.math;
 
 namespace starcore
 {

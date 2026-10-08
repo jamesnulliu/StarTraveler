@@ -156,7 +156,7 @@ struct ColliderComponent
 
 // 2D overlay shapes --------------------------------------------------------------------------------
 // Points are in local space; shapes are projected with the camera and
-// rasterized in screen space by the algorithms in `starcore/raster`.
+// rasterized in screen space by the algorithms of the module `starcore.raster`.
 
 struct StrokeComponent
 {

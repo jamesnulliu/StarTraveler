@@ -5,7 +5,7 @@ A small render engine with two frontends: C++ (`StarCore::Core`,
 
 - `StarCore::Core` -- headless: math, BVH, mesh/model assets (glTF), ECS scene
   and YAML serialization, CPU path tracer, particle system, 2D raster
-  algorithms, collision detection.
+  algorithms (the C++20 module `starcore.raster`), collision detection.
 - `StarCore::Gpu` -- headless Vulkan (context, buffers, compute and graphics
   pipelines) and `GpuRenderer`: the CPU path tracer ported to compute shaders
   with ray queries (`shaders/`), on BLAS/TLAS acceleration structures; plain

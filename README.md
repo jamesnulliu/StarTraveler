@@ -15,6 +15,7 @@ StarTraveler/                 repository root: a CMake workspace
 ├─ StarCore/                  the engine; also builds on its own
 │  ├─ CMakeLists.txt  vcpkg.json  pyproject.toml  cmake/
 │  ├─ include/starcore/  src/    StarCore::Core (headless), ::Gpu (Vulkan), ::Runtime (window)
+│  ├─ modules/                   C++20 named modules (starcore.raster)
 │  ├─ shaders/                   GLSL shaders, compiled to SPIR-V at build time
 │  ├─ tests/  examples/          Catch2 tests (tests/gpu: GPU vs CPU), starcore-render (CLI)
 │  └─ python/                    the `starcore` package: bindings/, starcore/, tests/
@@ -42,6 +43,16 @@ Other presets: `msvc-vs2022`, `msvc-ninja` (inside a VS developer shell),
 `mingw` (GCC from `scoop install mingw-winlibs`), and `linux-gcc` /
 `linux-clang` (not tested yet). C++23 is the default; `-DSTARCORE_CXX_STANDARD=26`
 opts into C++26.
+
+C++20 modules: the 2D raster algorithms are the named module `starcore.raster`
+(`StarCore/modules/`), imported by the overlay renderer, the editor, the tests
+and the Python bindings (`import starcore.raster;`); the rest of the engine is
+still headers. With `STARCORE_IMPORT_STD` (default ON) the module's units
+`import std;` where the toolchain can: with Visual Studio MSBuild builds the
+standard library module; with Ninja CMake does, behind an experimental gate
+whose key changes with CMake's version (known for CMake 4.2 and 4.4; others
+fall back to including the standard headers). Toggling it needs a fresh
+configure (`cmake --preset mingw --fresh`): the compiler check is cached.
 
 GPU path tracing needs a GPU with `VK_KHR_ray_query` (NVIDIA RTX, AMD RDNA2+,
 Intel Arc); without one path tracing falls back to the CPU, the GPU only

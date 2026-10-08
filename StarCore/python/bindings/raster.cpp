@@ -8,15 +8,13 @@
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
+#include <starcore/common/image.hpp>
 #include <starcore/math/color.hpp>
-#include <starcore/raster/clip.hpp>
-#include <starcore/raster/curve.hpp>
-#include <starcore/raster/ellipse.hpp>
-#include <starcore/raster/fill.hpp>
-#include <starcore/raster/line.hpp>
-#include <starcore/raster/polygon.hpp>
+#include <starcore/raster/types.hpp>
 
 #include "common.hpp"
+
+import starcore.raster;
 
 namespace starcore::python
 {

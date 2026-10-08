@@ -17,11 +17,12 @@
 #include <starcore/math/color.hpp>
 #include <starcore/physics/physics_world.hpp>
 #include <starcore/platform/input.hpp>
-#include <starcore/raster/fill.hpp>
 #include <starcore/render/overlay.hpp>
 #include <starcore/scene/serializer.hpp>
 
 #include "game_layer.hpp"
+
+import starcore.raster;
 
 namespace startraveler
 {

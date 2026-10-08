@@ -6,9 +6,10 @@
 
 #include <starcore/math/color.hpp>
 #include <starcore/platform/input.hpp>
-#include <starcore/raster/stroke.hpp>
 
 #include "editor/selection.hpp"
+
+import starcore.raster;
 
 namespace startraveler
 {

@@ -9,13 +9,11 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <glm/geometric.hpp>
 
-#include <starcore/raster/clip.hpp>
-#include <starcore/raster/curve.hpp>
-#include <starcore/raster/ellipse.hpp>
-#include <starcore/raster/fill.hpp>
-#include <starcore/raster/line.hpp>
-#include <starcore/raster/polygon.hpp>
-#include <starcore/raster/stroke.hpp>
+#include <starcore/common/image.hpp>
+#include <starcore/raster/types.hpp>
+
+// The raster algorithms are a C++20 module.
+import starcore.raster;
 
 using namespace starcore;
 using namespace starcore::raster;

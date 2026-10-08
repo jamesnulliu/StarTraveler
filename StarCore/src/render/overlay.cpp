@@ -6,15 +6,11 @@
 #include <glm/geometric.hpp>
 
 #include "starcore/math/color.hpp"
-#include "starcore/raster/clip.hpp"
-#include "starcore/raster/curve.hpp"
-#include "starcore/raster/ellipse.hpp"
-#include "starcore/raster/line.hpp"
-#include "starcore/raster/polygon.hpp"
-#include "starcore/raster/stroke.hpp"
 #include "starcore/render/overlay.hpp"
 #include "starcore/scene/components.hpp"
 #include "starcore/scene/scene.hpp"
+
+import starcore.raster;
 
 namespace starcore
 {

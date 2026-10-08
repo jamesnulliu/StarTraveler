@@ -20,7 +20,7 @@ class Scene;
  *
  * Shapes live in world space: they are projected with the camera, clipped
  * against the near plane in 3D and against the viewport in 2D, then drawn with
- * the algorithms from starcore/raster. When `ids` is given, every written
+ * the algorithms of the module starcore.raster. When `ids` is given, every written
  * pixel also stores the entity id (for picking).
  *
  * Draw order: polygon fills, then strokes, then points (markers on top).

@@ -38,8 +38,29 @@ endif()
 set(CMAKE_CXX_STANDARD          ${STARCORE_CXX_STANDARD})
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS        OFF)
-# Header units / C++20 modules are not used (yet); skip dependency scanning.
-set(CMAKE_CXX_SCAN_FOR_MODULES  OFF)
+
+# C++ modules ---------------------------------------------------------------------------------------
+# StarCore::Core provides named modules (modules/*.cppm, e.g. `import starcore.raster;`); their
+# importers need dependency scanning too.
+set(CMAKE_CXX_SCAN_FOR_MODULES  ON)
+# `import std;` inside those modules (experimental): MSBuild builds the standard library module
+# itself; with the other generators CMake does, behind a gate whose key changes with CMake's
+# version -- known keys below, other versions fall back to including the standard headers.
+option(STARCORE_IMPORT_STD "StarCore's modules `import std;` where the toolchain can" ON)
+set(_STARCORE_IMPORT_STD_GATES
+    "4.2" "d0edc3af-4c50-42ea-a356-e2862fe7a444"
+    "4.4" "f35a9ac6-8463-4d38-8eec-5d6008153e7d"
+)
+if(STARCORE_IMPORT_STD AND NOT CMAKE_GENERATOR MATCHES "^Visual Studio")
+    set(_version "${CMAKE_MAJOR_VERSION}.${CMAKE_MINOR_VERSION}")
+    list(FIND _STARCORE_IMPORT_STD_GATES "${_version}" _index)
+    if(_index GREATER_EQUAL 0)
+        math(EXPR _index "${_index} + 1")
+        list(GET _STARCORE_IMPORT_STD_GATES ${_index} CMAKE_EXPERIMENTAL_CXX_IMPORT_STD)
+    endif()
+    unset(_index)
+    unset(_version)
+endif()
 
 # vcpkg ---------------------------------------------------------------------------------------------
 # Use $ENV{VCPKG_ROOT} when no toolchain was given (plain `cmake -B build`, scikit-build-core).

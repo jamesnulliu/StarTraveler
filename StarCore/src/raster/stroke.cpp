@@ -1,6 +1,16 @@
-#include <algorithm>
+// The overlay's pixel writer (module starcore.raster).
 
-#include "starcore/raster/stroke.hpp"
+module;
+
+#ifndef STARCORE_IMPORT_STD
+#include <algorithm>
+#include <cstdint>
+#endif
+
+#include "starcore/common/image.hpp"
+#include "starcore/raster/types.hpp"
+
+module starcore.raster;
 
 namespace starcore::raster
 {

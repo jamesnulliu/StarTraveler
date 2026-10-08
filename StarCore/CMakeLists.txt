@@ -89,6 +89,25 @@ target_link_libraries(StarCoreCore
         yaml-cpp::yaml-cpp
         fastgltf::fastgltf
 )
+# C++20 named modules (their implementation units are among the sources above).
+target_sources(StarCoreCore PUBLIC
+    FILE_SET CXX_MODULES BASE_DIRS ${PROJECT_SOURCE_DIR}/modules
+    FILES ${PROJECT_SOURCE_DIR}/modules/starcore.raster.cppm
+)
+# `import std;` in them: built by MSBuild (Visual Studio generators) or by CMake (gate set in
+# starcore-setup.cmake, compiler support in CMAKE_CXX_COMPILER_IMPORT_STD).
+if(STARCORE_IMPORT_STD AND (CMAKE_GENERATOR MATCHES "^Visual Studio" AND MSVC))
+    set(STARCORE_IMPORT_STD_USED ON)
+elseif(STARCORE_IMPORT_STD AND CMAKE_CXX_STANDARD IN_LIST CMAKE_CXX_COMPILER_IMPORT_STD)
+    set(STARCORE_IMPORT_STD_USED ON)
+    set_target_properties(StarCoreCore PROPERTIES CXX_MODULE_STD ON)
+else()
+    set(STARCORE_IMPORT_STD_USED OFF)
+endif()
+if(STARCORE_IMPORT_STD_USED)
+    target_compile_definitions(StarCoreCore PRIVATE STARCORE_IMPORT_STD)
+endif()
+log_info("import std in StarCore's modules: ${STARCORE_IMPORT_STD_USED}")
 
 # StarCore::Gpu ------------------------------------------------------------------------------------
 if(STARCORE_BUILD_GPU)

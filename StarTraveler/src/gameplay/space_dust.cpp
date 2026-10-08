@@ -1,9 +1,9 @@
-module startraveler.gameplay;
+#include <cmath>
 
-import std;
-import glm;
-import starcore.math;
-import starcore.render;
+#include <glm/common.hpp>
+#include <glm/geometric.hpp>
+
+#include "gameplay/space_dust.hpp"
 
 namespace startraveler
 {

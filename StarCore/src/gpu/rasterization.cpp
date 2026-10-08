@@ -1,15 +1,10 @@
-module;
+#include <cmath>
+#include <span>
 
-#include <vulkan/vulkan.h>
+#include <glm/trigonometric.hpp>
 
-module starcore.gpu;
-
-import std;
-import glm;
-import starcore.math;
-import starcore.render;
-import starcore.vulkan;
-import :rasterization;
+#include "rasterization.hpp"
+#include "starcore/vulkan/context.hpp"
 
 namespace starcore::gpu
 {

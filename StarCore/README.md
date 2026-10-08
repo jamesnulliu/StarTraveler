@@ -5,7 +5,7 @@ A small render engine with two frontends: C++ (`StarCore::Core`,
 
 - `StarCore::Core` -- headless: math, BVH, mesh/model assets (glTF), ECS scene
   and YAML serialization, CPU path tracer, particle system, 2D raster
-  algorithms, collision detection.
+  algorithms (the C++20 module `starcore.raster`), collision detection.
 - `StarCore::Gpu` -- headless Vulkan (context, buffers, compute and graphics
   pipelines) and `GpuRenderer`: the CPU path tracer ported to compute shaders
   with ray queries (`shaders/`), on BLAS/TLAS acceleration structures; plain
@@ -17,15 +17,9 @@ A small render engine with two frontends: C++ (`StarCore::Core`,
   layers.
 - `starcore` -- nanobind bindings of `StarCore::Core`; images are numpy arrays.
 
-The C++ API is a set of C++20 modules, one per component (`import
-starcore.scene;`, `starcore.gpu`, ...: `modules/starcore.<component>.cppm`),
-with `import std;` and glm's module; only the logging and assertion macros are
-headers (`include/starcore/common/`).
-
 This directory builds on its own (`cmake -S StarCore -B build`, or
 `pip install StarCore/`); vcpkg is found through `VCPKG_ROOT`. See the
-repository's README for presets, the module layout, the game built on it and
-examples.
+repository's README for presets, the game built on it and examples.
 
 ```python
 import starcore as sc
@@ -40,12 +34,6 @@ hit = world.raycast(sc.Ray((0, 10, 0), (0, -1, 0)))
 ```
 
 ```cpp
-import std;
-import starcore.common;  // writePng
-import starcore.gpu;
-import starcore.render;
-import starcore.vulkan;
-
 auto context = starcore::vulkan::Context::create({});  // Headless.
 auto renderer = starcore::GpuRenderer::create(**context);
 (*renderer)->resize(960, 540);

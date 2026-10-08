@@ -1,12 +1,8 @@
-module;
-
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
 
-module starcore.platform;
-
-import std;
-import starcore.app;
+#include "starcore/app/application.hpp"
+#include "starcore/platform/input.hpp"
 
 namespace starcore::input
 {

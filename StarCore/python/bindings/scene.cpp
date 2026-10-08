@@ -1,26 +1,23 @@
-module;
+#include <filesystem>
+#include <format>
+#include <optional>
+#include <ranges>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
-#include <nanobind/nanobind.h>
-#include <nanobind/ndarray.h>
 #include <nanobind/stl/filesystem.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 #include <nanobind/typing.h>
-#include <entt/entity/registry.hpp>
 
-#include "casters.hpp"
+#include <starcore/asset/model.hpp>
+#include <starcore/scene/entity.hpp>
+#include <starcore/scene/serializer.hpp>
 
-module starcore.python;
-
-import std;
-import starcore.asset;
-import starcore.math;
-import starcore.raster;
-import starcore.scene;
-
-using namespace nb::literals;
+#include "common.hpp"
 
 namespace starcore::python
 {

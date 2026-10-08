@@ -1,10 +1,12 @@
+#include <algorithm>
+
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 
-import std;
-import starcore.math;
-import starcore.render;
-import starcore.scene;
+#include <starcore/render/particles.hpp>
+#include <starcore/scene/entity.hpp>
+#include <starcore/scene/scene.hpp>
+#include <starcore/scene/serializer.hpp>
 
 using namespace starcore;
 using Catch::Matchers::WithinAbs;

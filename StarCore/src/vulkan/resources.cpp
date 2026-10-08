@@ -1,12 +1,13 @@
-module;
+#include <algorithm>
+#include <cstring>
+#include <utility>
 
 #include <vk_mem_alloc.h>
 
 #include "starcore/common/assert.hpp"
-
-module starcore.vulkan;
-
-import std;
+#include "starcore/vulkan/check.hpp"
+#include "starcore/vulkan/context.hpp"
+#include "starcore/vulkan/resources.hpp"
 
 namespace starcore::vulkan
 {

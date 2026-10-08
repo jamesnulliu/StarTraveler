@@ -1,10 +1,16 @@
 // Flood and boundary fill (module starcore.raster).
 
-module starcore.raster;
+module;
 
-import std;
-import starcore.common;
-import starcore.math;
+#ifndef STARCORE_IMPORT_STD
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+#endif
+
+#include "starcore/common/image.hpp"
+
+module starcore.raster;
 
 namespace starcore::raster
 {

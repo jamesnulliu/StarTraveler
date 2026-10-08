@@ -1,13 +1,11 @@
-module;
+#include <algorithm>
+#include <cmath>
 
-#include <entt/entity/registry.hpp>
+#include <glm/common.hpp>
+#include <glm/geometric.hpp>
 
-module starcore.render;
-
-import std;
-import glm;
-import starcore.math;
-import starcore.scene;
+#include "starcore/render/particles.hpp"
+#include "starcore/scene/scene.hpp"
 
 namespace starcore
 {

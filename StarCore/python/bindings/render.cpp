@@ -1,23 +1,18 @@
-module;
+#include <filesystem>
+#include <optional>
+#include <stdexcept>
 
-#include <nanobind/nanobind.h>
-#include <nanobind/ndarray.h>
 #include <nanobind/stl/filesystem.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
-#include <entt/entity/registry.hpp>
 
-#include "casters.hpp"
+#include <starcore/render/camera.hpp>
+#include <starcore/render/overlay.hpp>
+#include <starcore/render/path_tracer.hpp>
+#include <starcore/render/render_scene.hpp>
+#include <starcore/scene/scene.hpp>
 
-module starcore.python;
-
-import std;
-import starcore.common;
-import starcore.math;
-import starcore.render;
-import starcore.scene;
-
-using namespace nb::literals;
+#include "common.hpp"
 
 namespace starcore::python
 {

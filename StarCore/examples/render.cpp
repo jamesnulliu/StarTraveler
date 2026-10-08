@@ -7,18 +7,26 @@
 //       --move 0 0 -0.05   (the hybrid pipeline, the camera moving every frame)
 //   starcore-render assets/scenes/legacy_demo.yaml -o renders/demo.png -f 16 --raster
 
+#include <chrono>
+#include <cstdlib>
+#include <filesystem>
+#include <optional>
+#include <string>
+#include <vector>
+
 #include <CLI/CLI.hpp>
 
-#include "starcore/common/log.hpp"
+#include <starcore/asset/model.hpp>
+#include <starcore/common/log.hpp>
+#include <starcore/render/camera.hpp>
+#include <starcore/render/overlay.hpp>
+#include <starcore/render/path_tracer.hpp>
+#include <starcore/scene/scene.hpp>
+#include <starcore/scene/serializer.hpp>
 
-import std;
-import starcore.common;
-import starcore.math;
-import starcore.render;
-import starcore.scene;
 #ifdef STARCORE_RENDER_GPU
-import starcore.gpu;
-import starcore.vulkan;
+#include <starcore/gpu/gpu_renderer.hpp>
+#include <starcore/vulkan/context.hpp>
 #endif
 
 namespace

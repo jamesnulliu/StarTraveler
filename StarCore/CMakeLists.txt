@@ -27,9 +27,6 @@ project(
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# C++ modules and `import std;` for every target (checked once per build, see the file).
-include(${PROJECT_SOURCE_DIR}/cmake/starcore-modules.cmake)
-
 # All libraries have an alias with this namespace.
 set(PROJECT_NAMESPACE "StarCore::")
 
@@ -48,54 +45,38 @@ if(STARCORE_BUILD_TESTS)
     enable_testing()
 endif()
 
-# Every component is a named module: modules/starcore.<component>.cppm (the primary interface)
-# exports the partitions in modules/<component>/*.cppm; src/<component>/ holds the implementation
-# units (`module starcore.<component>;`) and internal partitions.
-include(${PROJECT_SOURCE_DIR}/cmake/utils/modules.cmake)
-
 configure_file(
-    ${PROJECT_SOURCE_DIR}/modules/common/version.cppm.in
-    ${PROJECT_BINARY_DIR}/modules/common/version.cppm
+    ${PROJECT_SOURCE_DIR}/include/starcore/common/version.hpp.in
+    ${PROJECT_BINARY_DIR}/include/starcore/common/version.hpp
     @ONLY
 )
 
 # StarCore::Core -----------------------------------------------------------------------------------
-set(CORE_COMPONENTS common math raster asset scene render physics)
+set(CORE_MODULES common math asset scene render raster physics)
+set(CORE_SOURCES)
+foreach(MODULE IN LISTS CORE_MODULES)
+    file(GLOB_RECURSE MODULE_SOURCES CONFIGURE_DEPENDS
+        ${PROJECT_SOURCE_DIR}/src/${MODULE}/*.cpp)
+    list(APPEND CORE_SOURCES ${MODULE_SOURCES})
+endforeach()
 
-add_library(StarCoreCore STATIC)
+add_library(StarCoreCore STATIC ${CORE_SOURCES})
 add_library(${PROJECT_NAMESPACE}Core ALIAS StarCoreCore)
-starcore_add_components(StarCoreCore ${CORE_COMPONENTS})
-target_sources(StarCoreCore PUBLIC
-    FILE_SET CXX_MODULES BASE_DIRS ${PROJECT_BINARY_DIR}/modules
-    FILES ${PROJECT_BINARY_DIR}/modules/common/version.cppm
-)
-# glm's own module (`import glm;`), shipped with glm >= 1.0 but compiled by its users.
-target_sources(StarCoreCore PUBLIC
-    FILE_SET glm TYPE CXX_MODULES BASE_DIRS ${STARCORE_GLM_MODULE_DIR}
-    FILES ${STARCORE_GLM_MODULE_DIR}/glm.cppm
-)
 set_target_properties(StarCoreCore PROPERTIES
     OUTPUT_NAME starcore_core
     # Linked into the Python extension module (a shared library).
     POSITION_INDEPENDENT_CODE ON
 )
-# Headers: what modules cannot export, the logging and assertion macros.
 target_include_directories(StarCoreCore PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+    $<BUILD_INTERFACE:${PROJECT_BINARY_DIR}/include>
     $<INSTALL_INTERFACE:include>
 )
 target_compile_features(StarCoreCore PUBLIC cxx_std_${STARCORE_CXX_STANDARD})
-target_compile_definitions(StarCoreCore
-    PUBLIC
-        # Vulkan clip-space depth range [0, 1]; same convention for CPU and GPU renderers.
-        GLM_FORCE_DEPTH_ZERO_TO_ONE
-        GLM_ENABLE_EXPERIMENTAL
-    PRIVATE
-        # glm.cppm exports the stable extensions' functions as glm::f, not glm::gtc::f. The
-        # experimental ones stay in glm::gtx: among them are unconstrained begin()/end() (gtx/range)
-        # that argument-dependent lookup would find for any type with glm template arguments.
-        GLM_GTC_INLINE_NAMESPACE
-        GLM_EXT_INLINE_NAMESPACE
+target_compile_definitions(StarCoreCore PUBLIC
+    # Vulkan clip-space depth range [0, 1]; same convention for CPU and GPU renderers.
+    GLM_FORCE_DEPTH_ZERO_TO_ONE
+    GLM_ENABLE_EXPERIMENTAL
 )
 target_link_libraries(StarCoreCore
     PUBLIC
@@ -108,14 +89,40 @@ target_link_libraries(StarCoreCore
         yaml-cpp::yaml-cpp
         fastgltf::fastgltf
 )
+# C++20 named modules (their implementation units are among the sources above).
+target_sources(StarCoreCore PUBLIC
+    FILE_SET CXX_MODULES BASE_DIRS ${PROJECT_SOURCE_DIR}/modules
+    FILES ${PROJECT_SOURCE_DIR}/modules/starcore.raster.cppm
+)
+# `import std;` in them: built by MSBuild (Visual Studio generators) or by CMake (gate set in
+# starcore-setup.cmake, compiler support in CMAKE_CXX_COMPILER_IMPORT_STD).
+if(STARCORE_IMPORT_STD AND (CMAKE_GENERATOR MATCHES "^Visual Studio" AND MSVC))
+    set(STARCORE_IMPORT_STD_USED ON)
+elseif(STARCORE_IMPORT_STD AND CMAKE_CXX_STANDARD IN_LIST CMAKE_CXX_COMPILER_IMPORT_STD)
+    set(STARCORE_IMPORT_STD_USED ON)
+    set_target_properties(StarCoreCore PROPERTIES CXX_MODULE_STD ON)
+else()
+    set(STARCORE_IMPORT_STD_USED OFF)
+endif()
+if(STARCORE_IMPORT_STD_USED)
+    target_compile_definitions(StarCoreCore PRIVATE STARCORE_IMPORT_STD)
+endif()
+log_info("import std in StarCore's modules: ${STARCORE_IMPORT_STD_USED}")
 
 # StarCore::Gpu ------------------------------------------------------------------------------------
 if(STARCORE_BUILD_GPU)
     include(${PROJECT_SOURCE_DIR}/cmake/utils/shaders.cmake)
 
-    add_library(StarCoreGpu STATIC)
+    set(GPU_MODULES vulkan gpu)
+    set(GPU_SOURCES)
+    foreach(MODULE IN LISTS GPU_MODULES)
+        file(GLOB_RECURSE MODULE_SOURCES CONFIGURE_DEPENDS
+            ${PROJECT_SOURCE_DIR}/src/${MODULE}/*.cpp)
+        list(APPEND GPU_SOURCES ${MODULE_SOURCES})
+    endforeach()
+
+    add_library(StarCoreGpu STATIC ${GPU_SOURCES})
     add_library(${PROJECT_NAMESPACE}Gpu ALIAS StarCoreGpu)
-    starcore_add_components(StarCoreGpu vulkan gpu)
     set_target_properties(StarCoreGpu PROPERTIES OUTPUT_NAME starcore_gpu)
     target_link_libraries(StarCoreGpu
         PUBLIC
@@ -149,9 +156,16 @@ endif()
 
 # StarCore::Runtime --------------------------------------------------------------------------------
 if(STARCORE_BUILD_RUNTIME)
-    add_library(StarCoreRuntime STATIC)
+    set(RUNTIME_MODULES app platform ui)
+    set(RUNTIME_SOURCES)
+    foreach(MODULE IN LISTS RUNTIME_MODULES)
+        file(GLOB_RECURSE MODULE_SOURCES CONFIGURE_DEPENDS
+            ${PROJECT_SOURCE_DIR}/src/${MODULE}/*.cpp)
+        list(APPEND RUNTIME_SOURCES ${MODULE_SOURCES})
+    endforeach()
+
+    add_library(StarCoreRuntime STATIC ${RUNTIME_SOURCES})
     add_library(${PROJECT_NAMESPACE}Runtime ALIAS StarCoreRuntime)
-    starcore_add_components(StarCoreRuntime platform ui app)
     set_target_properties(StarCoreRuntime PROPERTIES OUTPUT_NAME starcore_runtime)
     target_link_libraries(StarCoreRuntime
         PUBLIC

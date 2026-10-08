@@ -8,22 +8,14 @@
 //   - components are plain value types: Entity.get() returns a copy and
 //     Entity.set() writes it back (which also bumps Scene.version).
 
-module;
+#include <string>
 
-#include <nanobind/nanobind.h>
-#include <nanobind/ndarray.h>
 #include <nanobind/stl/string.h>
 
-#include "starcore/common/log.hpp"
+#include <starcore/common/log.hpp>
+#include <starcore/common/version.hpp>
 
-#include "casters.hpp"
-
-module starcore.python;
-
-import std;
-import starcore.common;
-
-using namespace nb::literals;
+#include "common.hpp"
 
 NB_MODULE(_core, m)
 {

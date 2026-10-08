@@ -1,6 +1,6 @@
-module starcore.scene;
+#include <random>
 
-import std;
+#include "starcore/scene/uuid.hpp"
 
 namespace starcore
 {

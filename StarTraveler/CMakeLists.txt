@@ -8,17 +8,12 @@ set(TARGET_NAME "StarTraveler")
 # the vcpkg manifest of StarCore).
 find_package(CLI11 CONFIG REQUIRED)  # CLI11::CLI11
 
-# Game logic as a library, so the executable and the tests share it: the modules
-# startraveler.{editor,gameplay,game} (src/startraveler.*.cppm and their partitions in
-# src/*/, src/game_layer.cppm) and their implementation units.
+# Game logic as a library, so the executable and the tests share it.
 file(GLOB_RECURSE LIB_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cpp)
 list(REMOVE_ITEM LIB_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/main.cpp)
-file(GLOB_RECURSE LIB_MODULES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*.cppm)
 
 add_library(StarTravelerLib STATIC ${LIB_SOURCES})
-target_sources(StarTravelerLib PUBLIC
-    FILE_SET CXX_MODULES BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/src FILES ${LIB_MODULES}
-)
+target_include_directories(StarTravelerLib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(
     StarTravelerLib
     PUBLIC

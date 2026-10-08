@@ -1,14 +1,5 @@
-module;
-
-#include <vulkan/vulkan.h>
-
-module starcore.gpu;
-
-import std;
-import starcore.math;
-import starcore.render;
-import starcore.vulkan;
-import :raster_renderer;
+#include "raster_renderer.hpp"
+#include "starcore/vulkan/context.hpp"
 
 namespace starcore::gpu
 {

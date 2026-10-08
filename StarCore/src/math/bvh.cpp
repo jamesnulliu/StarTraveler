@@ -1,6 +1,8 @@
-module starcore.math;
+#include <algorithm>
+#include <numeric>
+#include <vector>
 
-import std;
+#include "starcore/math/bvh.hpp"
 
 namespace starcore
 {

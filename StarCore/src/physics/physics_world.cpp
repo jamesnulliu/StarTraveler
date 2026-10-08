@@ -1,14 +1,11 @@
-module;
+#include <algorithm>
+#include <cmath>
 
-#include <entt/entity/registry.hpp>
+#include <glm/geometric.hpp>
+#include <glm/matrix.hpp>
 
-module starcore.physics;
-
-import std;
-import glm;
-import starcore.asset;
-import starcore.math;
-import starcore.scene;
+#include "starcore/physics/physics_world.hpp"
+#include "starcore/scene/scene.hpp"
 
 namespace starcore
 {

@@ -25,10 +25,6 @@ project(
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# C++ modules and `import std;` for the engine and the game alike (checked here, before any target
-# exists).
-include(${PROJECT_SOURCE_DIR}/StarCore/cmake/starcore-modules.cmake)
-
 # All executables (game, tests, tools) end up in one directory per configuration.
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${PROJECT_BINARY_DIR}/bin)
 

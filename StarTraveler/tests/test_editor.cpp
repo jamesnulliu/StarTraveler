@@ -1,19 +1,19 @@
 // Drives the real editor tools, selection and portals through a headless
 // Dear ImGui context with synthetic mouse/keyboard events (no window, no GPU).
 
+#include <functional>
+#include <optional>
+
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
+#include <glm/geometric.hpp>
 #include <imgui.h>
-#include <entt/entity/registry.hpp>
 
-import std;
-import glm;
-import starcore.math;
-import starcore.raster;
-import starcore.render;
-import starcore.scene;
-import startraveler.editor;
-import startraveler.gameplay;
+#include <starcore/scene/entity.hpp>
+
+#include "editor/selection.hpp"
+#include "editor/tools.hpp"
+#include "gameplay/portals.hpp"
 
 using namespace starcore;
 using namespace startraveler;

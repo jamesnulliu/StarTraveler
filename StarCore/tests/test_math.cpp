@@ -1,9 +1,15 @@
+#include <cmath>
+#include <set>
+
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
+#include <glm/geometric.hpp>
+#include <glm/gtc/quaternion.hpp>
 
-import std;
-import glm;
-import starcore.math;
+#include <starcore/math/color.hpp>
+#include <starcore/math/geometry.hpp>
+#include <starcore/math/random.hpp>
+#include <starcore/math/transform.hpp>
 
 using namespace starcore;
 using Catch::Matchers::WithinAbs;

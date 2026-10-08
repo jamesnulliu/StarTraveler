@@ -7,19 +7,20 @@
 //
 // STARCORE_VULKAN_DEVICE=Intel (any part of a device name) picks another GPU.
 
-#include <catch2/catch_test_macros.hpp>
-#include <entt/entity/registry.hpp>
+#include <algorithm>
+#include <memory>
+#include <utility>
 
-import std;
-import glm;
-import starcore.asset;
-import starcore.common;
-import starcore.gpu;
-import starcore.math;
-import starcore.raster;
-import starcore.render;
-import starcore.scene;
-import starcore.vulkan;
+#include <catch2/catch_test_macros.hpp>
+#include <glm/common.hpp>
+
+#include <starcore/asset/mesh.hpp>
+#include <starcore/gpu/gpu_renderer.hpp>
+#include <starcore/math/color.hpp>
+#include <starcore/render/path_tracer.hpp>
+#include <starcore/scene/entity.hpp>
+#include <starcore/scene/layers.hpp>
+#include <starcore/vulkan/context.hpp>
 
 using namespace starcore;
 

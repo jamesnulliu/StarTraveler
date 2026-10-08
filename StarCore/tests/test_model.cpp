@@ -1,12 +1,16 @@
+#include <filesystem>
+#include <fstream>
+#include <sstream>
+
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <catch2/matchers/catch_matchers_string.hpp>
+#include <glm/gtc/quaternion.hpp>
 
-import std;
-import glm;
-import starcore.asset;
-import starcore.math;
-import starcore.scene;
+#include <starcore/asset/model.hpp>
+#include <starcore/math/random.hpp>
+#include <starcore/scene/entity.hpp>
+#include <starcore/scene/serializer.hpp>
 
 using namespace starcore;
 using Catch::Matchers::ContainsSubstring;

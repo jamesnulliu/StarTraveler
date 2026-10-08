@@ -1,15 +1,13 @@
-module;
+#include <algorithm>
+#include <cmath>
+#include <format>
 
-#include <entt/entity/registry.hpp>
+#include <glm/geometric.hpp>
+#include <glm/gtc/quaternion.hpp>
+#include <glm/trigonometric.hpp>
 
-module startraveler.gameplay;
-
-import std;
-import glm;
-import starcore.math;
-import starcore.physics;
-import starcore.render;
-import starcore.scene;
+#include "gameplay/portals.hpp"
+#include "gameplay/ship.hpp"
 
 namespace startraveler
 {

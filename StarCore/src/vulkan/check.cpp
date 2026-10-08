@@ -1,12 +1,5 @@
-module;
-
-#include <vulkan/vulkan.h>
-
 #include "starcore/common/assert.hpp"
-
-module starcore.vulkan;
-
-import std;
+#include "starcore/vulkan/check.hpp"
 
 namespace starcore::vulkan
 {

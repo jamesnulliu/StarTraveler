@@ -1,16 +1,15 @@
-module;
+#include <algorithm>
+#include <cmath>
 
-#include <imgui.h>
+#include <glm/geometric.hpp>
+#include <glm/matrix.hpp>
 
-module startraveler.editor;
+#include <starcore/math/color.hpp>
+#include <starcore/platform/input.hpp>
 
-import std;
-import glm;
-import starcore.common;
-import starcore.math;
-import starcore.platform;
+#include "editor/selection.hpp"
+
 import starcore.raster;
-import starcore.scene;
 
 namespace startraveler
 {

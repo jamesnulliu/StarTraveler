@@ -1,7 +1,10 @@
-module;
+#include <filesystem>
+#include <format>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <vector>
 
-#include <nanobind/nanobind.h>
-#include <nanobind/ndarray.h>
 #include <nanobind/stl/filesystem.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
@@ -9,16 +12,10 @@ module;
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 
-#include "casters.hpp"
+#include <starcore/asset/mesh.hpp>
+#include <starcore/asset/model.hpp>
 
-module starcore.python;
-
-import std;
-import starcore.asset;
-import starcore.math;
-import starcore.scene;
-
-using namespace nb::literals;
+#include "common.hpp"
 
 namespace starcore::python
 {

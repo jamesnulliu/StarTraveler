@@ -1,22 +1,20 @@
-module;
+#include <optional>
+#include <tuple>
+#include <utility>
+#include <vector>
 
-#include <nanobind/nanobind.h>
-#include <nanobind/ndarray.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/pair.h>
 #include <nanobind/stl/tuple.h>
 #include <nanobind/stl/vector.h>
 
-#include "casters.hpp"
+#include <starcore/common/image.hpp>
+#include <starcore/math/color.hpp>
+#include <starcore/raster/types.hpp>
 
-module starcore.python;
+#include "common.hpp"
 
-import std;
-import starcore.common;
-import starcore.math;
 import starcore.raster;
-
-using namespace nb::literals;
 
 namespace starcore::python
 {

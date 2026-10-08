@@ -14,11 +14,6 @@ file(GLOB BINDING_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/bindings
 # STABLE_ABI: one abi3 wheel for CPython >= 3.12 (ignored for older interpreters).
 nanobind_add_module(_core NB_STATIC STABLE_ABI ${BINDING_SOURCES})
 target_link_libraries(_core PRIVATE ${PROJECT_NAMESPACE}Core ${PROJECT_NAMESPACE}CompileOptions)
-# The sources are implementation units of the module `starcore.python` (casters, numpy helpers).
-target_sources(_core PRIVATE
-    FILE_SET CXX_MODULES BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/bindings
-    FILES ${CMAKE_CURRENT_SOURCE_DIR}/bindings/starcore.python.cppm
-)
 
 # Type stub for IDEs and type checkers (imports the freshly built module).
 nanobind_add_stub(

@@ -1,16 +1,11 @@
-module;
-
-#include <vulkan/vulkan.h>
+#include <algorithm>
+#include <cstddef>
+#include <span>
 
 #include "starcore/common/assert.hpp"
-
-module starcore.gpu;
-
-import std;
-import starcore.asset;
-import starcore.math;
-import starcore.render;
-import starcore.vulkan;
+#include "starcore/gpu/gpu_scene.hpp"
+#include "starcore/vulkan/check.hpp"
+#include "starcore/vulkan/context.hpp"
 
 namespace starcore::gpu
 {

@@ -1,10 +1,7 @@
-module;
+#include <algorithm>
 
 #include "starcore/common/assert.hpp"
-
-module starcore.common;
-
-import std;
+#include "starcore/common/parallel.hpp"
 
 namespace starcore
 {

@@ -1,21 +1,19 @@
-module;
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <format>
 
-#include <vulkan/vulkan.h>
+#include <glm/trigonometric.hpp>
 
+#include "hybrid_renderer.hpp"
+#include "post_process.hpp"
+#include "raster_renderer.hpp"
+#include "rasterization.hpp"
 #include "starcore/common/assert.hpp"
-
-module starcore.gpu;
-
-import std;
-import glm;
-import starcore.common;
-import starcore.math;
-import starcore.render;
-import starcore.vulkan;
-import :hybrid_renderer;
-import :post_process;
-import :raster_renderer;
-import :rasterization;
+#include "starcore/gpu/gpu_renderer.hpp"
+#include "starcore/vulkan/check.hpp"
+#include "starcore/vulkan/context.hpp"
 
 namespace starcore
 {

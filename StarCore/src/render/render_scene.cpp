@@ -1,14 +1,14 @@
-module;
+#include <algorithm>
+#include <atomic>
+#include <cstddef>
+#include <unordered_map>
 
-#include <entt/entity/registry.hpp>
+#include <glm/geometric.hpp>
+#include <glm/matrix.hpp>
 
-module starcore.render;
-
-import std;
-import glm;
-import starcore.asset;
-import starcore.math;
-import starcore.scene;
+#include "starcore/render/render_scene.hpp"
+#include "starcore/scene/components.hpp"
+#include "starcore/scene/scene.hpp"
 
 namespace starcore
 {

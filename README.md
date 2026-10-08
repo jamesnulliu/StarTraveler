@@ -1,10 +1,11 @@
 # StarTraveler
 
-**StarCore** is a small render engine: an ECS scene, glTF models, a CPU path
-tracer, the classic 2D raster algorithms and collision detection, usable from
-C++ and from Python. **StarTraveler** is a game built on it in C++: fly a ship
-through a path-traced universe from its 3D cockpit, draw shapes in space and
-open portals. It is the modern rewrite of
+**StarCore** is a small render engine: an ECS scene, glTF models, path
+tracers on the CPU and on the GPU (Vulkan ray queries), the classic 2D raster
+algorithms and collision detection, usable from C++ and from Python.
+**StarTraveler** is a game built on it in C++: fly a ship through a
+path-traced universe from its 3D cockpit, draw shapes in space and open
+portals. It is the modern rewrite of
 [XDrawBoard](https://github.com/jamesnulliu/XDrawBoard-Legacy).
 
 ```
@@ -13,8 +14,9 @@ StarTraveler/                 repository root: a CMake workspace
 ├─ CMakePresets.json          msvc, msvc-vs2022, msvc-ninja, mingw, linux-gcc, linux-clang
 ├─ StarCore/                  the engine; also builds on its own
 │  ├─ CMakeLists.txt  vcpkg.json  pyproject.toml  cmake/
-│  ├─ include/starcore/  src/    StarCore::Core (headless) and StarCore::Runtime
-│  ├─ tests/  examples/          Catch2 tests, starcore-render (CLI path tracer)
+│  ├─ include/starcore/  src/    StarCore::Core (headless), ::Gpu (Vulkan), ::Runtime (window)
+│  ├─ shaders/                   GLSL compute shaders, compiled to SPIR-V at build time
+│  ├─ tests/  examples/          Catch2 tests (tests/gpu: GPU vs CPU), starcore-render (CLI)
 │  └─ python/                    the `starcore` package: bindings/, starcore/, tests/
 └─ StarTraveler/              the game (C++ frontend of StarCore)
    ├─ src/  tests/
@@ -40,6 +42,14 @@ Other presets: `msvc-vs2022`, `msvc-ninja` (inside a VS developer shell),
 `mingw` (GCC from `scoop install mingw-winlibs`), and `linux-gcc` /
 `linux-clang` (not tested yet). C++23 is the default; `-DSTARCORE_CXX_STANDARD=26`
 opts into C++26.
+
+The GPU path tracer needs a GPU with `VK_KHR_ray_query` (NVIDIA RTX, AMD RDNA2+,
+Intel Arc); without one everything falls back to the CPU and the GPU tests are
+skipped. No Vulkan SDK is needed: the shader compiler (glslang) comes from vcpkg.
+For development, `-DSTARCORE_VULKAN_VALIDATION=ON` also builds the Vulkan
+validation layers (with synchronization validation); the GPU tests and
+`StarTraveler.exe --validation` then use them. `STARCORE_VULKAN_DEVICE=Intel`
+(any part of a device name) picks a specific GPU.
 
 ### Python
 
@@ -84,12 +94,15 @@ the extension into `StarCore/python/starcore` (`$env:PYTHONPATH = "StarCore/pyth
 | Ctrl+N/O/S, Ctrl+D, Del, Esc | new/open/save scene, duplicate, delete, cancel tool | |
 
 The drawing tools (line, ellipse, arc, polygon, curve, group, seed fill) work
-in both views; shapes are placed `Draw depth` units in front of the camera. The
-viewport shows a noise-free preview while moving and path traces when still.
-Layers (panel "Layers") control visibility, locking and which layers collide;
-the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
+in both views; shapes are placed `Draw depth` units in front of the camera.
+The viewport is path traced on the GPU in real time (samples per frame follow
+a GPU time budget, 8 ms by default); with `--cpu`, or on GPUs without ray
+queries, the CPU path tracer shows a noise-free preview while moving and path
+traces when still. Layers (panel "Layers") control visibility, locking and
+which layers collide; the ship's hull and cockpit live on the locked "Ship" and
+"Cockpit" layers.
 
-`StarTraveler.exe [scene.yaml] [--frames N --screenshot out.png] [--validation]`
+`StarTraveler.exe [scene.yaml] [--cpu] [--frames N --screenshot out.png] [--validation]`
 
 ## Engine overview
 
@@ -103,6 +116,13 @@ the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
   multi-threaded CPU path tracer with a GGX metal/dielectric BSDF, thin and
   refracting glass, next event estimation of sphere lights with MIS, a
   preview mode, coarse-to-fine passes and a per-frame time budget.
+- **GPU rendering** (`StarCore::Gpu`, headless Vulkan): the same path tracer
+  as a compute shader with ray queries. The render scene becomes a BLAS per
+  mesh (cached across frames, spheres as procedural AABBs) and a TLAS rebuilt
+  when instances move. The shader is a line-by-line port with the same random
+  streams, so GPU and CPU images agree almost bit for bit (checked by the
+  tests); in the cockpit it is about 70x faster than the CPU.
+  `starcore-render scene.yaml --gpu` renders offscreen.
 - **2D raster**: Bresenham/midpoint/DDA lines, midpoint ellipses, Bezier and
   B-spline curves, Cohen-Sutherland / midpoint-subdivision / Sutherland-Hodgman
   clipping, scan-line and flood fill -- the algorithms of the original drawing
@@ -112,9 +132,8 @@ the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
 - **Runtime**: GLFW window, Vulkan (vk-bootstrap, VMA), Dear ImGui docking with
   multi-viewports, an application/layer framework.
 
-Planned: a Vulkan compute + ray query renderer building BLAS/TLAS from the
-same render scene, and Python bindings of the runtime for games written in
-Python.
+Planned: Python bindings of the GPU path tracer and the runtime, for games
+written in Python.
 
 ## Regenerating the ship model
 

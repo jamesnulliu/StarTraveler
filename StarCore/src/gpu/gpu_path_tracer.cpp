@@ -6,6 +6,7 @@
 
 #include <glm/trigonometric.hpp>
 
+#include "hybrid_renderer.hpp"
 #include "starcore/common/assert.hpp"
 #include "starcore/gpu/gpu_path_tracer.hpp"
 #include "starcore/vulkan/check.hpp"
@@ -28,6 +29,13 @@ constexpr std::uint32_t kFlagPreview = 1U;
 constexpr std::uint32_t kFlagNextEvent = 2U;
 constexpr std::uint32_t kFlagSrgb = 4U;
 constexpr std::uint32_t kFlagWriteIds = 8U;
+
+// Timestamps per frame slot.
+constexpr std::uint32_t kQueriesPerSlot = 4;
+constexpr std::uint32_t kQueryFrameStart = 0;
+constexpr std::uint32_t kQueryTraceStart = 1;
+constexpr std::uint32_t kQueryTraceEnd = 2;
+constexpr std::uint32_t kQueryFrameEnd = 3;
 
 /** @brief Push constants of path_trace.comp. */
 struct PathTraceParams
@@ -52,6 +60,17 @@ constexpr VkDescriptorType kBindings[] = {
     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,              // 5 materials
     VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,              // 6 lights
 };
+
+/** @brief Settings that only change how the result is displayed, not what is sampled. */
+auto withoutDisplaySettings(PathTracerSettings settings, const PathTracerSettings& reference)
+    -> PathTracerSettings
+{
+    settings.samplesPerPixel = reference.samplesPerPixel;  // Frames are weighted by samples.
+    settings.exposure = reference.exposure;
+    settings.toneMapper = reference.toneMapper;
+    settings.srgbOutput = reference.srgbOutput;
+    return settings;
+}
 
 }  // namespace
 
@@ -92,7 +111,7 @@ GpuPathTracer::GpuPathTracer(vulkan::Context& context)
         VkQueryPoolCreateInfo queryInfo{};
         queryInfo.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
         queryInfo.queryType = VK_QUERY_TYPE_TIMESTAMP;
-        queryInfo.queryCount = 2 * gpu::kFramesInFlight;
+        queryInfo.queryCount = kQueriesPerSlot * gpu::kFramesInFlight;
         check(vkCreateQueryPool(device, &queryInfo, nullptr, &m_queryPool));
     }
 }
@@ -100,6 +119,7 @@ GpuPathTracer::GpuPathTracer(vulkan::Context& context)
 GpuPathTracer::~GpuPathTracer()
 {
     waitIdle();
+    m_hybrid.reset();
     const VkDevice device = m_context->device();
     for (FrameSlot& slot : m_slots) {
         vkDestroyFence(device, slot.fence, nullptr);
@@ -120,14 +140,20 @@ void GpuPathTracer::waitForSlot(std::uint32_t index)
     check(vkResetFences(m_context->device(), 1, &slot.fence));
     slot.submitted = false;
     if (slot.timed) {
-        std::uint64_t timestamps[2] = {};
-        if (vkGetQueryPoolResults(m_context->device(), m_queryPool, 2 * index, 2,
-                                  sizeof(timestamps), timestamps, sizeof(std::uint64_t),
-                                  VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
-            m_gpuTimeMs = static_cast<float>(static_cast<double>(timestamps[1] - timestamps[0]) *
-                                             m_context->deviceInfo().timestampPeriod * 1e-6);
+        std::uint64_t timestamps[kQueriesPerSlot] = {};
+        if (vkGetQueryPoolResults(m_context->device(), m_queryPool, kQueriesPerSlot * index,
+                                  kQueriesPerSlot, sizeof(timestamps), timestamps,
+                                  sizeof(std::uint64_t), VK_QUERY_RESULT_64_BIT) == VK_SUCCESS) {
+            const double period = m_context->deviceInfo().timestampPeriod * 1e-6;
+            auto milliseconds = [&](std::uint32_t from, std::uint32_t to) {
+                return static_cast<float>(static_cast<double>(timestamps[to] - timestamps[from]) *
+                                          period);
+            };
+            m_gpuTimeMs = milliseconds(kQueryFrameStart, kQueryFrameEnd);
+            m_traceTimeMs = milliseconds(kQueryTraceStart, kQueryTraceEnd);
             if (slot.tracedSamples > 0) {
-                m_msPerSample = m_gpuTimeMs / static_cast<float>(slot.tracedSamples);
+                m_msPerSample = m_traceTimeMs / static_cast<float>(slot.tracedSamples);
+                m_overheadMs = std::max(0.0F, m_gpuTimeMs - m_traceTimeMs);
             }
         }
         slot.timed = false;
@@ -140,7 +166,7 @@ auto GpuPathTracer::samplesForBudget(float budgetMs, std::uint32_t maxSamples) c
     if (m_msPerSample <= 0.0F || budgetMs <= 0.0F) {
         return 1;
     }
-    const float fitting = std::floor(budgetMs / m_msPerSample);
+    const float fitting = std::floor((budgetMs - m_overheadMs) / m_msPerSample);
     const float limit = static_cast<float>(std::min(maxSamples, 2 * m_lastSamples));
     return static_cast<std::uint32_t>(std::clamp(fitting, 1.0F, std::max(1.0F, limit)));
 }
@@ -165,6 +191,9 @@ void GpuPathTracer::resize(std::uint32_t width, std::uint32_t height)
     m_accumulation = {};
     m_output = {};
     m_entityIds = {};
+    if (m_hybrid) {
+        m_hybrid->resize(width, height);
+    }
     if (width == 0 || height == 0) {
         return;
     }
@@ -201,63 +230,39 @@ void GpuPathTracer::resize(std::uint32_t width, std::uint32_t height)
     resetAccumulation();
 }
 
-auto GpuPathTracer::needsReset(std::uint64_t sceneHash, const Camera& camera,
-                               const PathTracerSettings& settings) const -> bool
+auto GpuPathTracer::needsReset(const RenderScene& scene, std::uint64_t sceneHash,
+                               std::uint64_t contentHash, const Camera& camera,
+                               const PathTracerSettings& settings,
+                               const GpuRenderOptions& options, bool& still) const -> bool
 {
-    // Frames are weighted by their sample count: changing samplesPerPixel
-    // only changes how fast the image converges.
-    PathTracerSettings comparable = settings;
-    comparable.samplesPerPixel = m_lastSettings.samplesPerPixel;
-    return m_frameIndex == 0 || !settings.accumulate || !m_sceneUploaded ||
-           sceneHash != m_uploadedSceneHash || camera.view() != m_lastView ||
-           camera.projection() != m_lastProjection || comparable != m_lastSettings;
+    const bool cameraMoved =
+        camera.view() != m_lastView || camera.projection() != m_lastProjection;
+    const bool settingsChanged =
+        withoutDisplaySettings(settings, m_lastSettings) != m_lastSettings;
+    still = false;
+    if (m_frameIndex == 0 || !settings.accumulate || options.pipeline != m_lastPipeline) {
+        return true;
+    }
+    if (options.pipeline == GpuPipeline::PathTracing) {
+        return !m_sceneUploaded || sceneHash != m_uploadedSceneHash ||
+               scene.sceneVersion != m_lastSceneVersion || cameraMoved || settingsChanged ||
+               settings.exposure != m_lastSettings.exposure ||
+               settings.toneMapper != m_lastSettings.toneMapper ||
+               settings.srgbOutput != m_lastSettings.srgbOutput;
+    }
+    // Hybrid: only new content discards samples; motion reprojects them.
+    if (settingsChanged || !options.denoiser.temporal || !m_lastTemporal ||
+        contentHash != m_lastContentHash) {
+        return true;
+    }
+    still = !cameraMoved && sceneHash == m_lastSceneHash;
+    return false;
 }
 
-void GpuPathTracer::render(const RenderScene& scene, const Camera& camera,
-                           const PathTracerSettings& settings)
+void GpuPathTracer::recordPathTracing(VkCommandBuffer commandBuffer, std::uint32_t slotIndex,
+                                      const RenderScene& scene, const Camera& camera,
+                                      const PathTracerSettings& settings)
 {
-    if (!m_output.isValid()) {
-        return;
-    }
-    const auto slotIndex = static_cast<std::uint32_t>(m_frameNumber % gpu::kFramesInFlight);
-    waitForSlot(slotIndex);
-    m_scene.collectGarbage(m_frameNumber);
-    FrameSlot& slot = m_slots[slotIndex];
-
-    // The hash, not sceneVersion, decides about uploads: two scenes may share a version.
-    const std::uint64_t sceneHash = hashRenderScene(scene);
-    const bool upload = !m_sceneUploaded || sceneHash != m_uploadedSceneHash;
-    if (needsReset(sceneHash, camera, settings) || scene.sceneVersion != m_lastSceneVersion) {
-        m_frameIndex = 0;
-    }
-    m_lastSceneVersion = scene.sceneVersion;
-    m_lastView = camera.view();
-    m_lastProjection = camera.projection();
-    m_lastSettings = settings;
-
-    const VkCommandBuffer commandBuffer = slot.commandBuffer;
-    check(vkResetCommandBuffer(commandBuffer, 0));
-    VkCommandBufferBeginInfo beginInfo{};
-    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-    check(vkBeginCommandBuffer(commandBuffer, &beginInfo));
-    if (m_queryPool != VK_NULL_HANDLE) {
-        vkCmdResetQueryPool(commandBuffer, m_queryPool, 2 * slotIndex, 2);
-        vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_queryPool,
-                            2 * slotIndex);
-    }
-
-    // Everything earlier on the queue (the previous frame's trace and the UI
-    // sampling its output) before this frame rewrites scene data and images.
-    vulkan::memoryBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                          VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                          VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
-    if (upload) {
-        m_scene.update(scene, commandBuffer, slotIndex, m_frameNumber);
-        m_uploadedSceneHash = sceneHash;
-        m_sceneUploaded = true;
-    }
-
     // Camera rays: forward + right * ndcX + up * ndcY (Camera::generateRay).
     const float tanHalfFov = std::tan(glm::radians(camera.verticalFov()) * 0.5F);
     std::uint32_t flags = 0;
@@ -292,11 +297,99 @@ void GpuPathTracer::render(const RenderScene& scene, const Camera& camera,
         .storageBuffer(4, m_scene.instanceBuffer())
         .storageBuffer(5, m_scene.materialBuffer())
         .storageBuffer(6, m_scene.lightBuffer());
+    if (m_queryPool != VK_NULL_HANDLE) {
+        vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_queryPool,
+                            kQueriesPerSlot * slotIndex + kQueryTraceStart);
+    }
     m_pipeline.bind(commandBuffer);
     m_pipeline.pushDescriptors(commandBuffer, writes.writes());
     m_pipeline.pushConstants(commandBuffer, &params, sizeof(params));
     vkCmdDispatch(commandBuffer, (m_output.width() + kWorkgroupSize - 1) / kWorkgroupSize,
                   (m_output.height() + kWorkgroupSize - 1) / kWorkgroupSize, 1);
+    if (m_queryPool != VK_NULL_HANDLE) {
+        vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_queryPool,
+                            kQueriesPerSlot * slotIndex + kQueryTraceEnd);
+    }
+}
+
+void GpuPathTracer::render(const RenderScene& scene, const Camera& camera,
+                           const PathTracerSettings& settings, const GpuRenderOptions& options)
+{
+    if (!m_output.isValid()) {
+        return;
+    }
+    const auto slotIndex = static_cast<std::uint32_t>(m_frameNumber % gpu::kFramesInFlight);
+    waitForSlot(slotIndex);
+    m_scene.collectGarbage(m_frameNumber);
+    FrameSlot& slot = m_slots[slotIndex];
+    const bool hybrid = options.pipeline == GpuPipeline::Hybrid;
+    if (hybrid && !m_hybrid) {
+        m_hybrid = std::make_unique<gpu::HybridRenderer>(*m_context);
+        m_hybrid->resize(m_output.width(), m_output.height());
+    }
+
+    // The hash, not sceneVersion, decides about uploads: two scenes may share a version.
+    const std::uint64_t sceneHash = hashRenderScene(scene);
+    const std::uint64_t contentHash = hybrid ? hashRenderSceneContent(scene) : 0;
+    const bool upload = !m_sceneUploaded || sceneHash != m_uploadedSceneHash;
+    bool still = false;
+    if (needsReset(scene, sceneHash, contentHash, camera, settings, options, still)) {
+        m_frameIndex = 0;
+    }
+
+    const VkCommandBuffer commandBuffer = slot.commandBuffer;
+    check(vkResetCommandBuffer(commandBuffer, 0));
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    beginInfo.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    check(vkBeginCommandBuffer(commandBuffer, &beginInfo));
+    if (m_queryPool != VK_NULL_HANDLE) {
+        vkCmdResetQueryPool(commandBuffer, m_queryPool, kQueriesPerSlot * slotIndex,
+                            kQueriesPerSlot);
+        vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, m_queryPool,
+                            kQueriesPerSlot * slotIndex + kQueryFrameStart);
+    }
+
+    // Everything earlier on the queue (the previous frame's trace and the UI
+    // sampling its output) before this frame rewrites scene data and images.
+    vulkan::memoryBarrier(commandBuffer, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                          VK_ACCESS_MEMORY_WRITE_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                          VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+    if (upload) {
+        m_scene.update(scene, commandBuffer, slotIndex, m_frameNumber);
+        m_uploadedSceneHash = sceneHash;
+        m_sceneUploaded = true;
+    }
+
+    const std::uint32_t samples =
+        settings.mode == RenderMode::Preview ? 1U : std::max(1U, settings.samplesPerPixel);
+    if (hybrid) {
+        // The rasterizer reads instance data too.
+        vulkan::memoryBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                              VK_ACCESS_TRANSFER_WRITE_BIT,
+                              VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
+                                  VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT,
+                              VK_ACCESS_SHADER_READ_BIT);
+        const gpu::HybridFrame frame{
+            .scene = &scene,
+            .camera = &camera,
+            .previousCamera = m_frameIndex == 0 ? &camera : &m_lastCamera,
+            .settings = settings,
+            .options = options,
+            .frameSlot = slotIndex,
+            // Fresh random numbers and jitter every frame, resets or not.
+            .frameIndex = static_cast<std::uint32_t>(m_frameNumber),
+            .reset = m_frameIndex == 0,
+            .still = still,
+            .writeIds = !still,
+            .transforms = m_scene.writeTransforms(scene, slotIndex),
+            .queryPool = m_queryPool,
+            .traceQuery = kQueriesPerSlot * slotIndex + kQueryTraceStart,
+        };
+        m_hybrid->record(commandBuffer, frame, m_scene, m_output, m_entityIds);
+    } else {
+        recordPathTracing(commandBuffer, slotIndex, scene, camera, settings);
+    }
 
     // The output is sampled by the UI pass or copied by readImage() later on the queue.
     vulkan::memoryBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
@@ -305,11 +398,9 @@ void GpuPathTracer::render(const RenderScene& scene, const Camera& camera,
                           VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_TRANSFER_READ_BIT);
     if (m_queryPool != VK_NULL_HANDLE) {
         vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_queryPool,
-                            2 * slotIndex + 1);
+                            kQueriesPerSlot * slotIndex + kQueryFrameEnd);
         slot.timed = true;
     }
-    const std::uint32_t samples =
-        settings.mode == RenderMode::Preview ? 1U : std::max(1U, settings.samplesPerPixel);
     slot.tracedSamples = settings.mode == RenderMode::Preview ? 0U : samples;
     m_lastSamples = samples;
     check(vkEndCommandBuffer(commandBuffer));
@@ -320,6 +411,16 @@ void GpuPathTracer::render(const RenderScene& scene, const Camera& camera,
     submitInfo.pCommandBuffers = &commandBuffer;
     check(vkQueueSubmit(m_context->queue(), 1, &submitInfo, slot.fence));
     slot.submitted = true;
+
+    m_lastSceneVersion = scene.sceneVersion;
+    m_lastSceneHash = sceneHash;
+    m_lastContentHash = contentHash;
+    m_lastView = camera.view();
+    m_lastProjection = camera.projection();
+    m_lastSettings = settings;
+    m_lastPipeline = options.pipeline;
+    m_lastTemporal = options.denoiser.temporal;
+    m_lastCamera = camera;
     ++m_frameNumber;
     ++m_frameIndex;
 }

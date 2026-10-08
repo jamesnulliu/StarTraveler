@@ -455,7 +455,7 @@ void GameLayer::composeFrame()
             if (m_options.gpuBudgetMs > 0.0F) {
                 settings.samplesPerPixel = m_gpuTracer->samplesForBudget(m_options.gpuBudgetMs);
             }
-            m_gpuTracer->render(m_renderScene, m_camera, settings);
+            m_gpuTracer->render(m_renderScene, m_camera, settings, m_options.gpuRender);
         } else {
             // Coarse first passes and a per-frame time budget keep the UI
             // responsive while the image converges.
@@ -564,9 +564,11 @@ void GameLayer::onUIRender()
             }
         }
         if (usingGpu()) {
-            SC_INFO("Exiting after {} frames ({} accumulated on the GPU, last {:.2f} ms for "
-                    "{} samples per pixel)",
-                    m_frameCount, m_gpuTracer->accumulatedFrames(), m_gpuTracer->gpuTimeMs(),
+            SC_INFO("Exiting after {} frames ({} accumulated on the GPU, {} pipeline, last "
+                    "{:.2f} ms, {:.2f} tracing, for {} samples per pixel)",
+                    m_frameCount, m_gpuTracer->accumulatedFrames(),
+                    enumToString(m_options.gpuRender.pipeline), m_gpuTracer->gpuTimeMs(),
+                    m_gpuTracer->traceTimeMs(),
                     m_options.gpuBudgetMs > 0.0F
                         ? m_gpuTracer->samplesForBudget(m_options.gpuBudgetMs)
                         : m_options.tracer.samplesPerPixel);
@@ -798,12 +800,43 @@ void GameLayer::drawRenderPanel()
         m_scene.markDirty();
     }
 
+    if (usingGpu()) {
+        ImGui::SeparatorText("GPU pipeline");
+        GpuRenderOptions& gpu = m_options.gpuRender;
+        enumCombo("Pipeline", gpu.pipeline);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Hybrid: rasterized first hits, samples reused across frames and "
+                              "denoised.\nPath tracing: camera rays, restarts whenever anything "
+                              "moves (the reference).");
+        }
+        if (gpu.pipeline == GpuPipeline::Hybrid) {
+            DenoiserSettings& denoiser = gpu.denoiser;
+            ImGui::Checkbox("Reuse samples", &denoiser.temporal);
+            ImGui::SameLine();
+            ImGui::Checkbox("Denoise", &denoiser.spatial);
+            int history = static_cast<int>(denoiser.historySamples);
+            if (ImGui::SliderInt("History (samples)", &history, 1, 256)) {
+                denoiser.historySamples = static_cast<std::uint32_t>(history);
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Samples per pixel kept while moving: more is smoother, "
+                                  "fewer follows changing light faster");
+            }
+            int iterations = static_cast<int>(denoiser.iterations);
+            if (ImGui::SliderInt("Filter passes", &iterations, 1, 6)) {
+                denoiser.iterations = static_cast<std::uint32_t>(iterations);
+            }
+            ImGui::SliderFloat("Color tolerance", &denoiser.colorSigma, 0.5F, 16.0F, "%.1f");
+            enumCombo("Show", gpu.view);
+        }
+    }
+
     ImGui::Separator();
     ImGui::Text("Frame: %.2f ms (%.0f FPS)", 1000.0F * Application::get().deltaTime(),
                 ImGui::GetIO().Framerate);
     if (usingGpu()) {
-        ImGui::Text("Trace: %.2f ms on the GPU (%.2f ms to submit)", m_gpuTracer->gpuTimeMs(),
-                    m_traceMs);
+        ImGui::Text("GPU: %.2f ms, %.2f of it tracing (%.2f ms to submit)",
+                    m_gpuTracer->gpuTimeMs(), m_gpuTracer->traceTimeMs(), m_traceMs);
         ImGui::Text("Accumulated frames: %u (%u samples / frame)",
                     m_gpuTracer->accumulatedFrames(),
                     m_options.gpuBudgetMs > 0.0F

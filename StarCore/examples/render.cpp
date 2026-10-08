@@ -3,6 +3,8 @@
 //
 //   starcore-render assets/scenes/legacy_demo.yaml -o renders/demo.png -f 64
 //   starcore-render assets/scenes/legacy_demo.yaml -o renders/demo.png -f 1024 --gpu
+//   starcore-render assets/scenes/legacy_demo.yaml -o renders/demo.png -f 30 --hybrid
+//       --move 0 0 -0.05   (the hybrid pipeline, the camera moving every frame)
 
 #include <chrono>
 #include <cstdlib>
@@ -29,15 +31,37 @@
 namespace
 {
 
+struct GpuOptions
+{
+    bool hybrid = false;
+    std::string view = "Final";
+    bool spatial = true;
+    bool temporal = true;
+    starcore::Vec3 move{0.0F};  // Camera translation per frame.
+    bool validation = false;
+};
+
 /** @brief Path trace `frames` frames on the GPU; nullopt (logged) if it cannot. */
 auto renderOnGpu([[maybe_unused]] const starcore::RenderScene& scene,
-                 [[maybe_unused]] const starcore::Camera& camera,
+                 [[maybe_unused]] starcore::Camera camera,
                  [[maybe_unused]] const starcore::PathTracerSettings& settings,
-                 [[maybe_unused]] std::uint32_t frames)
+                 [[maybe_unused]] std::uint32_t frames,
+                 [[maybe_unused]] const GpuOptions& gpuOptions)
     -> std::optional<starcore::ColorImage>
 {
 #ifdef STARCORE_RENDER_GPU
-    auto context = starcore::vulkan::Context::create({.applicationName = "starcore-render"});
+    starcore::GpuRenderOptions options;
+    if (gpuOptions.hybrid) {
+        options.pipeline = starcore::GpuPipeline::Hybrid;
+        options.denoiser.spatial = gpuOptions.spatial;
+        options.denoiser.temporal = gpuOptions.temporal;
+        if (!starcore::enumFromString(gpuOptions.view, options.view)) {
+            SC_ERROR("Unknown view \"{}\"", gpuOptions.view);
+            return std::nullopt;
+        }
+    }
+    auto context = starcore::vulkan::Context::create(
+        {.applicationName = "starcore-render", .enableValidation = gpuOptions.validation});
     if (!context) {
         SC_ERROR("Vulkan: {}", context.error());
         return std::nullopt;
@@ -49,17 +73,20 @@ auto renderOnGpu([[maybe_unused]] const starcore::RenderScene& scene,
     }
     (*tracer)->resize(camera.viewportSize().x, camera.viewportSize().y);
     // The first frame builds the acceleration structures.
-    (*tracer)->render(scene, camera, settings);
+    (*tracer)->render(scene, camera, settings, options);
     (*tracer)->waitIdle();
     const auto start = std::chrono::steady_clock::now();
     for (std::uint32_t i = 1; i < frames; ++i) {
-        (*tracer)->render(scene, camera, settings);
+        camera.setPosition(camera.position() + gpuOptions.move);
+        (*tracer)->render(scene, camera, settings, options);
     }
     starcore::ColorImage image = (*tracer)->readImage();
     const std::chrono::duration<double, std::milli> elapsed =
         std::chrono::steady_clock::now() - start;
     if (frames > 1) {
-        SC_INFO("GPU: {:.2f} ms/frame after setup", elapsed.count() / (frames - 1));
+        SC_INFO("GPU: {:.2f} ms/frame after setup (last frame: {:.2f} ms, {:.2f} tracing)",
+                elapsed.count() / (frames - 1), (*tracer)->gpuTimeMs(),
+                (*tracer)->traceTimeMs());
     }
     return image;
 #else
@@ -81,6 +108,10 @@ auto main(int argc, char** argv) -> int
     std::uint32_t frames = 32;
     unsigned threads = 0;
     bool gpu = false;
+    GpuOptions gpuOptions;
+    bool noSpatial = false;
+    bool noTemporal = false;
+    std::vector<float> move;
     starcore::PathTracerSettings settings;
     std::vector<float> cameraPosition{0.0F, 0.0F, 10.0F};
     std::vector<float> cameraLookAt;
@@ -95,9 +126,23 @@ auto main(int argc, char** argv) -> int
     app.add_option("--seed", settings.seed, "Random seed");
     app.add_option("-j,--threads", threads, "Worker threads (0 = all)");
     app.add_flag("--gpu", gpu, "Path trace on the GPU (Vulkan ray queries)");
+    app.add_flag("--hybrid", gpuOptions.hybrid,
+                 "GPU, hybrid pipeline: rasterized first hits, reprojection and denoising");
+    app.add_option("--view", gpuOptions.view,
+                   "Hybrid: Final, Noisy, Albedo, Lighting, Glass, Variance, Motion, History");
+    app.add_flag("--no-spatial", noSpatial, "Hybrid: no spatial filter");
+    app.add_flag("--no-temporal", noTemporal, "Hybrid: no reprojection");
+    app.add_option("--move", move, "Hybrid: camera translation per frame x y z")->expected(3);
+    app.add_flag("--validation", gpuOptions.validation, "GPU: Vulkan validation layers");
     app.add_option("--camera", cameraPosition, "Camera position x y z")->expected(3);
     app.add_option("--look-at", cameraLookAt, "Camera target x y z")->expected(3);
     CLI11_PARSE(app, argc, argv);
+    gpuOptions.spatial = !noSpatial;
+    gpuOptions.temporal = !noTemporal;
+    if (move.size() == 3) {
+        gpuOptions.move = {move[0], move[1], move[2]};
+    }
+    gpu = gpu || gpuOptions.hybrid;
 
     starcore::Scene scene;
     starcore::AssetLibrary assets;
@@ -120,7 +165,7 @@ auto main(int argc, char** argv) -> int
     const auto start = std::chrono::steady_clock::now();
     starcore::ColorImage image;
     if (gpu) {
-        auto rendered = renderOnGpu(renderScene, camera, settings, frames);
+        auto rendered = renderOnGpu(renderScene, camera, settings, frames, gpuOptions);
         if (!rendered) {
             return EXIT_FAILURE;
         }

@@ -52,6 +52,9 @@ struct RenderOptions
     // GPU: samples per pixel follow this much GPU time per frame (0: use
     // tracer.samplesPerPixel).
     float gpuBudgetMs = 8.0F;
+    // GPU: the hybrid pipeline (rasterized first hits, reprojection and
+    // denoising) by default; plain path tracing converges to the reference.
+    starcore::GpuRenderOptions gpuRender{.pipeline = starcore::GpuPipeline::Hybrid};
     starcore::PathTracerSettings tracer{.fireflyClamp = 8.0F};
 };
 

@@ -1,10 +1,13 @@
 // Scene data of the GPU renderers (see starcore/gpu/gpu_scene.hpp) and the
 // ray-query version of traceClosestHit (starcore/render/render_scene.cpp).
+// Raster shaders define STARCORE_NO_RAY_QUERY before including it.
 
 #ifndef STARCORE_SCENE_GLSL
 #define STARCORE_SCENE_GLSL
 
+#ifndef STARCORE_NO_RAY_QUERY
 #extension GL_EXT_ray_query : require
+#endif
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_buffer_reference_uvec2 : require
 
@@ -50,7 +53,9 @@ struct Light
     uint instanceIndex;
 };
 
+#ifndef STARCORE_NO_RAY_QUERY
 layout(set = 0, binding = 0) uniform accelerationStructureEXT tlas;
+#endif
 layout(set = 0, binding = 4, std430) readonly buffer Instances
 {
     Instance instances[];
@@ -114,78 +119,53 @@ vec3 loadVec3(uvec2 address, uint index)
                 array.values[3u * index + 2u]);
 }
 
-/**
- * Closest hit among instances whose mask intersects `mask` (8 bits). Spheres
- * are AABB geometry intersected here; triangles are opaque and two-sided.
- */
-bool traceClosestHit(vec3 origin, vec3 direction, uint mask, out SurfaceHit hit)
+/** Vertex indices of a triangle of a mesh instance. */
+uvec3 triangleIndices(Instance instance, uint triangle)
 {
-    hit.t = 0.0;
-    hit.position = vec3(0.0);
-    hit.normal = vec3(0.0, 0.0, 1.0);
-    hit.geometricNormal = vec3(0.0, 0.0, 1.0);
-    hit.frontFace = true;
-    hit.instanceIndex = 0u;
+    UintArray indices = UintArray(instance.indices);
+    return uvec3(indices.values[3u * triangle], indices.values[3u * triangle + 1u],
+                 indices.values[3u * triangle + 2u]);
+}
 
-    rayQueryEXT query;
-    rayQueryInitializeEXT(query, tlas, gl_RayFlagsOpaqueEXT, mask & 0xFFu, origin, 0.0, direction,
-                          kFar);
-    while (rayQueryProceedEXT(query)) {
-        if (rayQueryGetIntersectionTypeEXT(query, false) ==
-            gl_RayQueryCandidateIntersectionAABBEXT) {
-            float tMax = rayQueryGetIntersectionTypeEXT(query, true) ==
-                                 gl_RayQueryCommittedIntersectionNoneEXT
-                             ? kFar
-                             : rayQueryGetIntersectionTEXT(query, true);
-            float t;
-            if (intersectUnitSphere(rayQueryGetIntersectionObjectRayOriginEXT(query, false),
-                                    rayQueryGetIntersectionObjectRayDirectionEXT(query, false),
-                                    0.0, tMax, t)) {
-                rayQueryGenerateIntersectionEXT(query, t);
-            }
-        }
-    }
-    if (rayQueryGetIntersectionTypeEXT(query, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
-        return false;
-    }
-
-    float t = rayQueryGetIntersectionTEXT(query, true);
-    uint instanceIndex = uint(rayQueryGetIntersectionInstanceCustomIndexEXT(query, true));
-    Instance instance = instances[instanceIndex];
-
-    vec3 objectGeometric;
-    vec3 objectShading;
+/**
+ * Object-space normals at a hit: geometric (face, not normalized) and shading
+ * (interpolated vertex normals if the mesh has them). Spheres: `point` is the
+ * object-space hit; triangles: barycentrics weight vertices 1 and 2.
+ */
+void objectNormals(Instance instance, uint triangle, vec2 barycentrics, vec3 point,
+                   out vec3 geometric, out vec3 shading)
+{
     if (instance.kind == kGeometrySphere) {
         // Unit sphere: the normal is the point.
-        objectGeometric = rayQueryGetIntersectionObjectRayOriginEXT(query, true) +
-                          t * rayQueryGetIntersectionObjectRayDirectionEXT(query, true);
-        objectShading = objectGeometric;
-    } else {
-        uint triangle = uint(rayQueryGetIntersectionPrimitiveIndexEXT(query, true));
-        vec2 barycentrics = rayQueryGetIntersectionBarycentricsEXT(query, true);
-        UintArray indices = UintArray(instance.indices);
-        uint i0 = indices.values[3u * triangle];
-        uint i1 = indices.values[3u * triangle + 1u];
-        uint i2 = indices.values[3u * triangle + 2u];
-        vec3 v0 = loadVec3(instance.positions, i0);
-        objectGeometric = cross(loadVec3(instance.positions, i1) - v0,
-                                loadVec3(instance.positions, i2) - v0);
-        objectShading = objectGeometric;
-        if (instance.normals != uvec2(0u)) {
-            objectShading = (1.0 - barycentrics.x - barycentrics.y) *
-                                loadVec3(instance.normals, i0) +
-                            barycentrics.x * loadVec3(instance.normals, i1) +
-                            barycentrics.y * loadVec3(instance.normals, i2);
-        }
+        geometric = point;
+        shading = point;
+        return;
     }
+    uvec3 i = triangleIndices(instance, triangle);
+    vec3 v0 = loadVec3(instance.positions, i.x);
+    geometric = cross(loadVec3(instance.positions, i.y) - v0,
+                      loadVec3(instance.positions, i.z) - v0);
+    shading = geometric;
+    if (instance.normals != uvec2(0u)) {
+        shading = (1.0 - barycentrics.x - barycentrics.y) * loadVec3(instance.normals, i.x) +
+                  barycentrics.x * loadVec3(instance.normals, i.y) +
+                  barycentrics.y * loadVec3(instance.normals, i.z);
+    }
+}
 
-    // Normals transform with the inverse transpose: n * W2O = transpose(W2O) n.
-    mat3 worldToObject = mat3(rayQueryGetIntersectionWorldToObjectEXT(query, true));
+/**
+ * SurfaceHit at distance t along a ray from object-space normals; normals
+ * transform with the inverse transpose: n * W2O = transpose(W2O) n.
+ */
+SurfaceHit makeSurfaceHit(vec3 origin, vec3 direction, float t, uint instanceIndex,
+                          vec3 objectGeometric, vec3 objectShading, mat3 worldToObject)
+{
     vec3 geometric = normalize(objectGeometric * worldToObject);
     vec3 shading = objectShading * worldToObject;
     float shadingLength = length(shading);
     shading = shadingLength > 0.0 ? shading / shadingLength : geometric;
 
+    SurfaceHit hit;
     hit.t = t;
     hit.position = origin + direction * t;
     hit.instanceIndex = instanceIndex;
@@ -200,7 +180,67 @@ bool traceClosestHit(vec3 origin, vec3 direction, uint mask, out SurfaceHit hit)
     }
     hit.geometricNormal = geometric;
     hit.normal = shading;
+    return hit;
+}
+
+#ifndef STARCORE_NO_RAY_QUERY
+
+/**
+ * Closest hit in (0, tMax) among instances whose mask intersects `mask` (8
+ * bits). Spheres are AABB geometry intersected here; triangles are opaque and
+ * two-sided.
+ */
+bool traceClosestHit(vec3 origin, vec3 direction, uint mask, float tMax, out SurfaceHit hit)
+{
+    hit.t = 0.0;
+    hit.position = vec3(0.0);
+    hit.normal = vec3(0.0, 0.0, 1.0);
+    hit.geometricNormal = vec3(0.0, 0.0, 1.0);
+    hit.frontFace = true;
+    hit.instanceIndex = 0u;
+
+    rayQueryEXT query;
+    rayQueryInitializeEXT(query, tlas, gl_RayFlagsOpaqueEXT, mask & 0xFFu, origin, 0.0, direction,
+                          tMax);
+    while (rayQueryProceedEXT(query)) {
+        if (rayQueryGetIntersectionTypeEXT(query, false) ==
+            gl_RayQueryCandidateIntersectionAABBEXT) {
+            float closest = rayQueryGetIntersectionTypeEXT(query, true) ==
+                                    gl_RayQueryCommittedIntersectionNoneEXT
+                                ? tMax
+                                : rayQueryGetIntersectionTEXT(query, true);
+            float t;
+            if (intersectUnitSphere(rayQueryGetIntersectionObjectRayOriginEXT(query, false),
+                                    rayQueryGetIntersectionObjectRayDirectionEXT(query, false),
+                                    0.0, closest, t)) {
+                rayQueryGenerateIntersectionEXT(query, t);
+            }
+        }
+    }
+    if (rayQueryGetIntersectionTypeEXT(query, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
+        return false;
+    }
+
+    float t = rayQueryGetIntersectionTEXT(query, true);
+    uint instanceIndex = uint(rayQueryGetIntersectionInstanceCustomIndexEXT(query, true));
+    vec3 objectGeometric;
+    vec3 objectShading;
+    objectNormals(instances[instanceIndex],
+                  uint(rayQueryGetIntersectionPrimitiveIndexEXT(query, true)),
+                  rayQueryGetIntersectionBarycentricsEXT(query, true),
+                  rayQueryGetIntersectionObjectRayOriginEXT(query, true) +
+                      t * rayQueryGetIntersectionObjectRayDirectionEXT(query, true),
+                  objectGeometric, objectShading);
+    hit = makeSurfaceHit(origin, direction, t, instanceIndex, objectGeometric, objectShading,
+                         mat3(rayQueryGetIntersectionWorldToObjectEXT(query, true)));
     return true;
 }
+
+bool traceClosestHit(vec3 origin, vec3 direction, uint mask, out SurfaceHit hit)
+{
+    return traceClosestHit(origin, direction, mask, kFar, hit);
+}
+
+#endif  // STARCORE_NO_RAY_QUERY
 
 #endif  // STARCORE_SCENE_GLSL

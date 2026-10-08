@@ -125,6 +125,13 @@ auto toVkTransform(const Mat4& m) -> VkTransformMatrixKHR
     return transform;
 }
 
+void toRows(const Mat4& m, Vec4 (&rows)[3])
+{
+    for (int row = 0; row < 3; ++row) {
+        rows[row] = Vec4(m[0][row], m[1][row], m[2][row], m[3][row]);
+    }
+}
+
 }  // namespace
 
 GpuScene::GpuScene(vulkan::Context& context) : m_context(&context)
@@ -424,6 +431,37 @@ void GpuScene::update(const RenderScene& scene, VkCommandBuffer commandBuffer,
     copy(m_tlasInstances, tlasInstanceOffset, tlasInstanceBytes.size());
     inputsToBuildBarrier(commandBuffer);
     recordTlasBuild(commandBuffer, instanceCount);
+}
+
+auto GpuScene::writeTransforms(const RenderScene& scene, std::uint32_t frameSlot) -> VkBuffer
+{
+    std::vector<InstanceTransformRecord> records(scene.instances.size());
+    std::unordered_map<std::uint64_t, Mat4> transforms;
+    transforms.reserve(scene.instances.size());
+    for (std::size_t i = 0; i < scene.instances.size(); ++i) {
+        const RenderInstance& instance = scene.instances[i];
+        // An entity may have a sphere and a mesh (with different transforms).
+        const auto kind = static_cast<std::uint64_t>(scene.geometries[instance.geometryIndex].kind);
+        const std::uint64_t key = (static_cast<std::uint64_t>(instance.entityId) << 1U) | kind;
+        const auto last = m_lastTransforms.find(key);
+        const Mat4& previous = last != m_lastTransforms.end() ? last->second
+                                                               : instance.objectToWorld;
+        toRows(instance.objectToWorld, records[i].objectToWorld);
+        toRows(instance.worldToObject, records[i].worldToObject);
+        toRows(previous, records[i].previousObjectToWorld);
+        transforms.emplace(key, instance.objectToWorld);
+    }
+    m_lastTransforms = std::move(transforms);
+
+    // The slot's previous submission completed: its buffer may be rewritten.
+    const auto bytes = bytesOf(records);
+    vulkan::Buffer& buffer = m_transforms[frameSlot];
+    if (!buffer.isValid() || buffer.size() < bytes.size()) {
+        buffer = Buffer(*m_context, std::max<VkDeviceSize>(bytes.size(), buffer.size() * 2),
+                        VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, MemoryUsage::Upload);
+    }
+    buffer.write(bytes);
+    return buffer.handle();
 }
 
 void GpuScene::recordTlasBuild(VkCommandBuffer commandBuffer, std::uint32_t instanceCount)

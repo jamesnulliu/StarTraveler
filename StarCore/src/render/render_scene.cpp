@@ -193,6 +193,26 @@ auto hashRenderScene(const RenderScene& scene) -> std::uint64_t
     return hash.value();
 }
 
+auto hashRenderSceneContent(const RenderScene& scene) -> std::uint64_t
+{
+    Fnv1a hash;
+    for (const RenderGeometry& geometry : scene.geometries) {
+        hash.add(geometry.kind);
+        hash.add(reinterpret_cast<std::uintptr_t>(geometry.mesh.get()));
+        hash.add(geometry.mesh ? geometry.mesh->triangleCount() : std::size_t{0});
+        hash.add(geometry.localBounds);
+    }
+    for (const RenderInstance& instance : scene.instances) {
+        hash.add(instance.geometryIndex);
+        hash.add(instance.materialIndex);
+        hash.add(instance.entityId);
+        hash.add(instance.mask);
+    }
+    hash.add(std::span<const RenderMaterial>(scene.materials));
+    hash.add(scene.skyColor);
+    return hash.value();
+}
+
 auto traceClosestHit(const RenderScene& scene, const Ray& ray, float tMin, float tMax,
                      std::uint32_t mask) -> std::optional<SurfaceHit>
 {

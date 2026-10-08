@@ -15,7 +15,7 @@ StarTraveler/                 repository root: a CMake workspace
 ├─ StarCore/                  the engine; also builds on its own
 │  ├─ CMakeLists.txt  vcpkg.json  pyproject.toml  cmake/
 │  ├─ include/starcore/  src/    StarCore::Core (headless), ::Gpu (Vulkan), ::Runtime (window)
-│  ├─ shaders/                   GLSL compute shaders, compiled to SPIR-V at build time
+│  ├─ shaders/                   GLSL shaders, compiled to SPIR-V at build time
 │  ├─ tests/  examples/          Catch2 tests (tests/gpu: GPU vs CPU), starcore-render (CLI)
 │  └─ python/                    the `starcore` package: bindings/, starcore/, tests/
 └─ StarTraveler/              the game (C++ frontend of StarCore)
@@ -95,12 +95,15 @@ the extension into `StarCore/python/starcore` (`$env:PYTHONPATH = "StarCore/pyth
 
 The drawing tools (line, ellipse, arc, polygon, curve, group, seed fill) work
 in both views; shapes are placed `Draw depth` units in front of the camera.
-The viewport is path traced on the GPU in real time (samples per frame follow
-a GPU time budget, 8 ms by default); with `--cpu`, or on GPUs without ray
-queries, the CPU path tracer shows a noise-free preview while moving and path
-traces when still. Layers (panel "Layers") control visibility, locking and
-which layers collide; the ship's hull and cockpit live on the locked "Ship" and
-"Cockpit" layers.
+The viewport is rendered on the GPU in real time by the hybrid pipeline
+(rasterized first hits, path tracing, samples reused across frames and
+denoised; see below), with samples per frame following a GPU time budget (8 ms
+by default). The Render panel switches to plain path tracing (the reference,
+which restarts whenever anything moves), tunes the denoiser and shows its
+intermediate images. With `--cpu`, or on GPUs without ray queries, the CPU path
+tracer shows a noise-free preview while moving and path traces when still.
+Layers (panel "Layers") control visibility, locking and which layers collide;
+the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
 
 `StarTraveler.exe [scene.yaml] [--cpu] [--frames N --screenshot out.png] [--validation]`
 
@@ -117,12 +120,26 @@ which layers collide; the ship's hull and cockpit live on the locked "Ship" and
   refracting glass, next event estimation of sphere lights with MIS, a
   preview mode, coarse-to-fine passes and a per-frame time budget.
 - **GPU rendering** (`StarCore::Gpu`, headless Vulkan): the same path tracer
-  as a compute shader with ray queries. The render scene becomes a BLAS per
+  as compute shaders with ray queries. The render scene becomes a BLAS per
   mesh (cached across frames, spheres as procedural AABBs) and a TLAS rebuilt
-  when instances move. The shader is a line-by-line port with the same random
-  streams, so GPU and CPU images agree almost bit for bit (checked by the
-  tests); in the cockpit it is about 70x faster than the CPU.
-  `starcore-render scene.yaml --gpu` renders offscreen.
+  when instances move. Two pipelines:
+  - *Path tracing*: a line-by-line port with the same random streams, so GPU
+    and CPU images agree almost bit for bit (checked by the tests); in the
+    cockpit about 70x faster than the CPU. The reference.
+  - *Hybrid* (the game's default): a visibility buffer is rasterized (triangle
+    ids; spheres as ray-cast impostors) with a jittered projection, and paths
+    start from those hits with the same estimator. Smooth window panes form a
+    layer of their own: paths are split there into what is seen through them
+    and what they reflect, each with its own depth, normals and motion
+    vectors, so a cockpit canopy neither smears the world outside nor its own
+    reflections. Samples are reprojected across frames (motion vectors from
+    each instance's previous transform, checked against the previous frame's
+    surfaces) and the lighting, divided by the albedo, goes through SVGF's
+    edge-avoiding a-trous filter, which fades out as samples accumulate: a
+    still image converges to the path tracer's (also checked by the tests).
+    Rasterized first hits are where textures will be sampled.
+  `starcore-render scene.yaml --gpu` (or `--hybrid`, with `--move`, `--view`)
+  renders offscreen.
 - **2D raster**: Bresenham/midpoint/DDA lines, midpoint ellipses, Bezier and
   B-spline curves, Cohen-Sutherland / midpoint-subdivision / Sutherland-Hodgman
   clipping, scan-line and flood fill -- the algorithms of the original drawing

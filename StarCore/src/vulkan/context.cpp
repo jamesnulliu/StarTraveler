@@ -202,14 +202,20 @@ auto Context::create(const ContextConfig& config)
     }
 
     // Physical device -----------------------------------------------------------------------------
-    // Buffer device addresses are core and mandatory in Vulkan 1.3.
+    // Buffer device addresses, dynamic rendering and demote-to-helper (what
+    // `discard` compiles to for Vulkan 1.3) are core and mandatory in Vulkan 1.3.
     VkPhysicalDeviceVulkan12Features features12{};
     features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
     features12.bufferDeviceAddress = VK_TRUE;
+    VkPhysicalDeviceVulkan13Features features13{};
+    features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+    features13.dynamicRendering = VK_TRUE;
+    features13.shaderDemoteToHelperInvocation = VK_TRUE;
 
     vkb::PhysicalDeviceSelector selector(impl->instance);
     selector.set_minimum_version(1, 3)
         .set_required_features_12(features12)
+        .set_required_features_13(features13)
         .prefer_gpu_device_type(vkb::PreferredDeviceType::discrete);
     if (headless) {
         selector.require_present(false);

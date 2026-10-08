@@ -116,8 +116,13 @@ if(STARCORE_BUILD_GPU)
     )
 
     file(GLOB SHADER_INCLUDES CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/shaders/*.glsl)
+    file(GLOB SHADER_SOURCES CONFIGURE_DEPENDS
+        ${PROJECT_SOURCE_DIR}/shaders/*.comp
+        ${PROJECT_SOURCE_DIR}/shaders/*.vert
+        ${PROJECT_SOURCE_DIR}/shaders/*.frag
+    )
     starcore_add_shaders(StarCoreGpu
-        SOURCES ${PROJECT_SOURCE_DIR}/shaders/path_trace.comp
+        SOURCES ${SHADER_SOURCES}
         INCLUDE_DIRS ${PROJECT_SOURCE_DIR}/shaders
         DEPENDS ${SHADER_INCLUDES}
     )

@@ -1,0 +1,238 @@
+#version 460
+// Hybrid renderer, temporal pass (one layer per dispatch): reproject the
+// layer's history with its motion vectors, keep the taps that saw the same
+// surface (instance, depth, normal), and add this frame's samples.
+//
+// The history holds means weighted by sample count (rgb, a = samples). While
+// nothing moves the count is unbounded: the means converge like the reference
+// accumulation. While things move it is capped (fewer samples for sharp
+// specular surfaces, whose lighting moves differently from them), so stale
+// lighting fades. The primary layer also keeps the means of its albedo and
+// emission: the lighting is divided by the albedo only after accumulating, so
+// edges anti-aliased by the jitter stay exact.
+//
+// Output: the filter input, lighting (rgb) and the variance of its mean (a).
+
+#extension GL_GOOGLE_include_directive : require
+
+#define STARCORE_NO_RAY_QUERY
+#include "hybrid.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(push_constant) uniform Pass
+{
+    uint primaryLayer;  // 1: primary (albedo and emission), 0: glass.
+}
+pass;
+
+// Bindings 0-2 and 4-6 are the scene's (hybrid.glsl, scene.glsl).
+layout(set = 0, binding = 3, rgba32ui) uniform readonly uimage2D guide;
+layout(set = 0, binding = 7, rgba32f) uniform readonly image2D motion;
+layout(set = 0, binding = 8, rgba32ui) uniform readonly uimage2D previousGuide;
+layout(set = 0, binding = 9, rgba32f) uniform readonly image2D noisy;
+layout(set = 0, binding = 10, rgba16f) uniform readonly image2D frameAlbedo;
+layout(set = 0, binding = 11, rgba16f) uniform readonly image2D frameEmission;
+layout(set = 0, binding = 12, rgba32f) uniform readonly image2D previousColor;
+// Full precision: the composite multiplies by exactly what the lighting was divided by.
+layout(set = 0, binding = 13, rgba32f) uniform readonly image2D previousAlbedo;
+layout(set = 0, binding = 14, rgba16f) uniform readonly image2D previousEmission;
+layout(set = 0, binding = 15, rg32f) uniform readonly image2D previousMoments;
+layout(set = 0, binding = 16, rgba32f) uniform writeonly image2D color;
+layout(set = 0, binding = 17, rgba32f) uniform writeonly image2D albedo;
+layout(set = 0, binding = 18, rgba16f) uniform writeonly image2D emission;
+layout(set = 0, binding = 19, rg32f) uniform writeonly image2D moments;
+layout(set = 0, binding = 20, rgba16f) uniform writeonly image2D filterInput;
+
+struct History
+{
+    vec4 color;  // rgb: mean, a: samples
+    vec3 albedo;
+    vec3 emission;
+    vec2 moments;
+};
+
+bool isPrimary()
+{
+    return pass.primaryLayer != 0u;
+}
+
+/** The previous camera's ray through a pixel position, at view depth 1. */
+vec3 previousRay(vec2 position)
+{
+    vec2 size = viewportSize();
+    return frameData.previousForward.xyz +
+           frameData.previousRight.xyz * (2.0 * position.x / size.x - 1.0) +
+           frameData.previousUp.xyz * (1.0 - 2.0 * position.y / size.y);
+}
+
+/**
+ * Whether a previous-frame pixel saw the surface this pixel sees now: the
+ * same instance, a similar normal, and its sample (at last frame's jitter)
+ * on this sample's tangent plane, both where they were last frame. (Depths
+ * alone would differ by the jitter on surfaces seen at grazing angles.)
+ */
+bool sameSurface(uvec4 current, vec3 previousPoint, vec3 normal, ivec2 tap, bool still)
+{
+    if (any(lessThan(tap, ivec2(0))) || any(greaterThanEqual(vec2(tap), viewportSize()))) {
+        return false;
+    }
+    if (still) {
+        // Nothing moved: the pixel's history is its own, edges included (the
+        // jitter makes their surface alternate between frames).
+        return true;
+    }
+    uvec4 previous = imageLoad(previousGuide, tap);
+    if (previous.z != current.z || current.z == 0u) {
+        return false;  // Another surface, or sky (no position to reproject).
+    }
+    vec3 tapPoint = frameData.previousPosition.xyz +
+                    previousRay(vec2(tap) + frameData.previousJitter.xy) * guideDepth(previous);
+    float viewDepth = dot(previousPoint - frameData.previousPosition.xyz,
+                          frameData.previousForward.xyz);
+    return abs(dot(normal, tapPoint - previousPoint)) <= 0.01 * viewDepth &&
+           dot(guideNormal(previous), normal) > 0.9;
+}
+
+History loadHistory(ivec2 tap)
+{
+    History h;
+    h.color = imageLoad(previousColor, tap);
+    h.moments = imageLoad(previousMoments, tap).xy;
+    h.albedo = vec3(0.0);
+    h.emission = vec3(0.0);
+    if (isPrimary()) {
+        h.albedo = imageLoad(previousAlbedo, tap).rgb;
+        h.emission = imageLoad(previousEmission, tap).rgb;
+    }
+    return h;
+}
+
+/** Paths per pixel this frame (hybrid_trace.comp traces one per pane). */
+uint frameSamples()
+{
+    return isPrimary() ? max(1u, frameData.frame.z) : 1u;
+}
+
+/** This frame's lighting divided by the albedo, per channel. */
+vec3 demodulated(vec3 radiance, vec3 surfaceAlbedo)
+{
+    return isPrimary() ? radiance / demodulationAlbedo(surfaceAlbedo) : radiance;
+}
+
+/** Per-sample variance of the luminance, from this frame's neighbors on the same surface. */
+float spatialVariance(ivec2 pixel, uint key)
+{
+    float sum = 0.0;
+    float squares = 0.0;
+    float count = 0.0;
+    for (int dy = -2; dy <= 2; ++dy) {
+        for (int dx = -2; dx <= 2; ++dx) {
+            ivec2 tap = pixel + ivec2(dx, dy);
+            if (any(lessThan(tap, ivec2(0))) ||
+                any(greaterThanEqual(vec2(tap), viewportSize())) ||
+                imageLoad(guide, tap).z != key) {
+                continue;
+            }
+            vec3 frameAlbedoTap = isPrimary() ? imageLoad(frameAlbedo, tap).rgb : vec3(1.0);
+            float l = luminance(demodulated(imageLoad(noisy, tap).rgb, frameAlbedoTap));
+            sum += l;
+            squares += l * l;
+            count += 1.0;
+        }
+    }
+    float mean = sum / count;
+    // Neighbors hold means of frameSamples() samples: scale to one sample's variance.
+    return max(0.0, squares / count - mean * mean) * float(frameSamples());
+}
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(vec2(pixel), viewportSize()))) {
+        return;
+    }
+    uvec4 current = imageLoad(guide, pixel);
+    vec4 currentMotion = imageLoad(motion, pixel);
+    vec4 frameNoisy = imageLoad(noisy, pixel);
+    vec3 currentAlbedo = isPrimary() ? imageLoad(frameAlbedo, pixel).rgb : vec3(0.0);
+    vec3 currentEmission = isPrimary() ? imageLoad(frameEmission, pixel).rgb : vec3(0.0);
+    bool reset = (frameData.history.y & kHistoryReset) != 0u;
+    bool still = (frameData.history.y & kHistoryStatic) != 0u;
+
+    // Bilinear reprojection over the taps that saw the same surface.
+    History history;
+    history.color = vec4(0.0);
+    history.albedo = vec3(0.0);
+    history.emission = vec3(0.0);
+    history.moments = vec2(0.0);
+    if (!reset && (isPrimary() || current.z != 0u)) {
+        // This sample (at pixel + jitter) where it was last frame.
+        vec3 previousPoint =
+            frameData.previousPosition.xyz +
+            previousRay(vec2(pixel) + frameData.viewport.zw + currentMotion.xy) * currentMotion.z;
+        vec3 normal = current.z != 0u ? guideNormal(current) : vec3(0.0);
+        // Bilinear taps around the pixel center, moved.
+        vec2 position = vec2(pixel) + 0.5 + currentMotion.xy - 0.5;
+        ivec2 base = ivec2(floor(position));
+        vec2 f = position - vec2(base);
+        float weights[4] = float[](
+            (1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
+        ivec2 offsets[4] = ivec2[](ivec2(0, 0), ivec2(1, 0), ivec2(0, 1), ivec2(1, 1));
+        float total = 0.0;
+        for (int i = 0; i < 4; ++i) {
+            ivec2 tap = base + offsets[i];
+            if (weights[i] <= 0.0 || !sameSurface(current, previousPoint, normal, tap, still)) {
+                continue;
+            }
+            History h = loadHistory(tap);
+            history.color += weights[i] * h.color;
+            history.albedo += weights[i] * h.albedo;
+            history.emission += weights[i] * h.emission;
+            history.moments += weights[i] * h.moments;
+            total += weights[i];
+        }
+        if (total > 1e-3) {
+            history.color /= total;
+            history.albedo /= total;
+            history.emission /= total;
+            history.moments /= total;
+        } else {
+            history.color = vec4(0.0);
+        }
+    }
+
+    // Accumulate this frame's samples.
+    float previousSamples = history.color.a;
+    uint cap = frameData.history.x;
+    if (cap > 0u) {
+        // Sharp reflections on primary surfaces move differently from them: shorter
+        // history. (Window panes have strength 1: they mostly reflect what moves
+        // with them, like a cockpit.)
+        float strength = current.z != 0u ? guideStrength(current) : 1.0;
+        previousSamples = min(previousSamples, float(cap) * mix(0.25, 1.0, strength));
+    }
+    float samples = previousSamples + float(frameSamples());
+    float weight = float(frameSamples()) / samples;
+    vec3 frameLighting = demodulated(frameNoisy.rgb, currentAlbedo);
+    vec2 frameMoments = vec2(luminance(frameLighting), frameNoisy.a);
+    // mean + (value - mean) * weight, not mix(): exact where the value is the mean.
+    vec3 mean = history.color.rgb + (frameNoisy.rgb - history.color.rgb) * weight;
+    vec3 meanAlbedo = history.albedo + (currentAlbedo - history.albedo) * weight;
+    vec3 meanEmission = history.emission + (currentEmission - history.emission) * weight;
+    vec2 meanMoments = history.moments + (frameMoments - history.moments) * weight;
+    imageStore(color, pixel, vec4(mean, samples));
+    imageStore(moments, pixel, vec4(meanMoments, 0.0, 0.0));
+    if (isPrimary()) {
+        imageStore(albedo, pixel, vec4(meanAlbedo, 0.0));
+        imageStore(emission, pixel, vec4(meanEmission, 0.0));
+    }
+
+    // Filter input: the lighting and the variance of its mean.
+    float variance = max(0.0, meanMoments.y - meanMoments.x * meanMoments.x);
+    if (previousSamples < 1.0 && current.z != 0u) {
+        variance = max(variance, spatialVariance(pixel, current.z));
+    }
+    imageStore(filterInput, pixel,
+               vec4(demodulated(mean, meanAlbedo), variance / samples));
+}

@@ -112,6 +112,13 @@ struct RenderScene
  */
 [[nodiscard]] auto hashRenderScene(const RenderScene& scene) -> std::uint64_t;
 
+/**
+ * @brief Like hashRenderScene, but without where the instances are (their
+ *        transforms): equal content hashes mean the scene only moved, so
+ *        samples of earlier frames may be reprojected rather than discarded.
+ */
+[[nodiscard]] auto hashRenderSceneContent(const RenderScene& scene) -> std::uint64_t;
+
 struct SurfaceHit
 {
     float t = 0.0F;

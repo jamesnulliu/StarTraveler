@@ -37,6 +37,19 @@ struct InstanceRecord
 };
 static_assert(sizeof(InstanceRecord) == 40, "std430 layout of Instance in scene.glsl");
 
+/**
+ * @brief Per-instance transforms for rasterization and motion vectors
+ *        (`InstanceTransform` in hybrid.glsl): rows of 3x4 matrices.
+ */
+struct InstanceTransformRecord
+{
+    Vec4 objectToWorld[3];
+    Vec4 worldToObject[3];
+    Vec4 previousObjectToWorld[3];  // Where the instance was the frame before.
+};
+static_assert(sizeof(InstanceTransformRecord) == 144,
+              "std430 layout of InstanceTransform in hybrid.glsl");
+
 /** @brief An acceleration structure and the buffer holding it. */
 struct AccelerationStructure
 {
@@ -70,6 +83,15 @@ public:
 
     /** @brief Destroy resources replaced at least kFramesInFlight frames ago. */
     void collectGarbage(std::uint64_t completedFrameNumber);
+
+    /**
+     * @brief Write the transforms of `scene`'s instances, with each one's
+     *        transform of the previous call as the previous transform (matched
+     *        by entity and geometry kind; new instances have not moved), into
+     *        the host-visible buffer of `frameSlot`.
+     * @return That buffer (InstanceTransformRecord[], one per instance).
+     */
+    auto writeTransforms(const RenderScene& scene, std::uint32_t frameSlot) -> VkBuffer;
 
     [[nodiscard]] auto tlas() const noexcept -> VkAccelerationStructureKHR
     {
@@ -143,6 +165,10 @@ private:
 
     std::array<vulkan::Buffer, kFramesInFlight> m_staging;
     std::vector<Retired> m_retired;
+
+    // writeTransforms(): per frame slot, and each instance's last transform.
+    std::array<vulkan::Buffer, kFramesInFlight> m_transforms;
+    std::unordered_map<std::uint64_t, Mat4> m_lastTransforms;
 };
 
 }  // namespace starcore::gpu

@@ -1,0 +1,89 @@
+#version 460
+// Hybrid renderer, composite: primary lighting x albedo + emission + glass
+// layer, tone mapped into the RGBA8 output (as path_trace.comp), or a debug
+// view of one of the intermediate images.
+
+#extension GL_GOOGLE_include_directive : require
+
+#define STARCORE_NO_RAY_QUERY
+#include "hybrid.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// Bindings 0-2 and 4-6 are the scene's (hybrid.glsl, scene.glsl).
+layout(set = 0, binding = 3, rgba16f) uniform readonly image2D primaryLighting;
+layout(set = 0, binding = 7, rgba16f) uniform readonly image2D glassLighting;
+layout(set = 0, binding = 8, rgba32f) uniform readonly image2D albedo;
+layout(set = 0, binding = 9, rgba16f) uniform readonly image2D emission;
+layout(set = 0, binding = 10, rgba32f) uniform readonly image2D primaryHistory;
+layout(set = 0, binding = 11, rgba32f) uniform readonly image2D noisyPrimary;
+layout(set = 0, binding = 12, rgba32f) uniform readonly image2D noisyGlass;
+layout(set = 0, binding = 13, rgba16f) uniform readonly image2D frameEmission;
+layout(set = 0, binding = 14, rgba32f) uniform readonly image2D primaryMotion;
+layout(set = 0, binding = 15, rgba8) uniform writeonly image2D outputImage;
+
+// HybridView.
+const uint kViewFinal = 0u;
+const uint kViewNoisy = 1u;
+const uint kViewAlbedo = 2u;
+const uint kViewLighting = 3u;
+const uint kViewGlass = 4u;
+const uint kViewVariance = 5u;
+const uint kViewMotion = 6u;
+const uint kViewHistory = 7u;
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(vec2(pixel), viewportSize()))) {
+        return;
+    }
+    vec4 lighting = imageLoad(primaryLighting, pixel);
+    vec3 surfaceAlbedo = imageLoad(albedo, pixel).rgb;
+    vec3 glass = imageLoad(glassLighting, pixel).rgb;
+    vec3 radiance =
+        demodulationAlbedo(surfaceAlbedo) * lighting.rgb + imageLoad(emission, pixel).rgb + glass;
+
+    bool toneMapped = true;
+    switch (frameData.history.z) {
+    case kViewNoisy:
+        radiance = imageLoad(noisyPrimary, pixel).rgb + imageLoad(frameEmission, pixel).rgb +
+                   imageLoad(noisyGlass, pixel).rgb;
+        break;
+    case kViewAlbedo:
+        radiance = surfaceAlbedo;
+        toneMapped = false;
+        break;
+    case kViewLighting:
+        radiance = lighting.rgb;
+        break;
+    case kViewGlass:
+        radiance = glass;
+        break;
+    case kViewVariance:
+        radiance = vec3(sqrt(lighting.a) / max(1e-4, luminance(lighting.rgb)));
+        toneMapped = false;
+        break;
+    case kViewMotion:
+        radiance = vec3(abs(imageLoad(primaryMotion, pixel).xy) / 8.0, 0.0);
+        toneMapped = false;
+        break;
+    case kViewHistory: {
+        float cap = float(max(frameData.history.x, 64u));
+        radiance = vec3(imageLoad(primaryHistory, pixel).a / cap);
+        toneMapped = false;
+        break;
+    }
+    default:
+        break;
+    }
+
+    vec3 display = toneMapped ? toneMap(radiance * frameData.cameraRight.w, frameData.options.w)
+                              : clamp(radiance, 0.0, 1.0);
+    if ((frameData.options.x & kFlagSrgb) != 0u) {
+        display = linearToSrgb(display);
+    }
+    // Quantize like packRgba8 (round half up) whatever rounding the GPU uses for UNORM stores.
+    vec3 quantized = floor(clamp(display, 0.0, 1.0) * 255.0 + 0.5);
+    imageStore(outputImage, pixel, vec4((quantized + 0.25) / 255.0, 1.0));
+}

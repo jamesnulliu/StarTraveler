@@ -156,7 +156,7 @@ Image::Image(Context& context, std::uint32_t width, std::uint32_t height, VkForm
     viewInfo.image = m_image;
     viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
     viewInfo.format = format;
-    viewInfo.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    viewInfo.subresourceRange = {aspect(), 0, 1, 0, 1};
     check(vkCreateImageView(context.device(), &viewInfo, nullptr, &m_view));
 }
 
@@ -190,6 +190,22 @@ auto Image::operator=(Image&& other) noexcept -> Image&
     return *this;
 }
 
+auto Image::aspect() const noexcept -> VkImageAspectFlags
+{
+    switch (m_format) {
+    case VK_FORMAT_D16_UNORM:
+    case VK_FORMAT_X8_D24_UNORM_PACK32:
+    case VK_FORMAT_D32_SFLOAT:
+        return VK_IMAGE_ASPECT_DEPTH_BIT;
+    case VK_FORMAT_D16_UNORM_S8_UINT:
+    case VK_FORMAT_D24_UNORM_S8_UINT:
+    case VK_FORMAT_D32_SFLOAT_S8_UINT:
+        return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+    default:
+        return VK_IMAGE_ASPECT_COLOR_BIT;
+    }
+}
+
 void Image::destroy() noexcept
 {
     if (m_view != VK_NULL_HANDLE) {
@@ -210,7 +226,7 @@ void Image::destroy() noexcept
 void transitionImage(VkCommandBuffer commandBuffer, VkImage image, VkImageLayout oldLayout,
                      VkImageLayout newLayout, VkPipelineStageFlags srcStage,
                      VkAccessFlags srcAccess, VkPipelineStageFlags dstStage,
-                     VkAccessFlags dstAccess)
+                     VkAccessFlags dstAccess, VkImageAspectFlags aspect)
 {
     VkImageMemoryBarrier barrier{};
     barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -221,7 +237,7 @@ void transitionImage(VkCommandBuffer commandBuffer, VkImage image, VkImageLayout
     barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
     barrier.image = image;
-    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    barrier.subresourceRange = {aspect, 0, 1, 0, 1};
     vkCmdPipelineBarrier(commandBuffer, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1,
                          &barrier);
 }

@@ -101,6 +101,50 @@ auto blockMean(const ColorImage& image, std::uint32_t x0, std::uint32_t y0, std:
     return sum / static_cast<float>(size * size);
 }
 
+/** @brief Mean absolute difference of the RGB channels (in 8-bit units). */
+auto meanDifference(const ColorImage& a, const ColorImage& b) -> float
+{
+    REQUIRE(a.size() == b.size());
+    double sum = 0.0;
+    for (std::size_t i = 0; i < a.pixels().size(); ++i) {
+        for (int c = 0; c < 3; ++c) {
+            sum += std::abs(channel(a.pixels()[i], c) - channel(b.pixels()[i], c));
+        }
+    }
+    return static_cast<float>(sum / (3.0 * static_cast<double>(a.pixels().size())));
+}
+
+/** @brief Worst and mean differences of 8x8 block means (in 8-bit units). */
+struct BlockDifference
+{
+    float worst = 0.0F;
+    float mean = 0.0F;  // Of the image means, per channel, worst channel.
+};
+
+auto blockDifference(const ColorImage& a, const ColorImage& b) -> BlockDifference
+{
+    constexpr std::uint32_t kBlock = 8;
+    REQUIRE(a.size() == b.size());
+    Vec3 totalA{0.0F};
+    Vec3 totalB{0.0F};
+    BlockDifference result;
+    float blocks = 0.0F;
+    for (std::uint32_t y = 0; y + kBlock <= a.height(); y += kBlock) {
+        for (std::uint32_t x = 0; x + kBlock <= a.width(); x += kBlock) {
+            const Vec3 meanA = blockMean(a, x, y, kBlock);
+            const Vec3 meanB = blockMean(b, x, y, kBlock);
+            totalA += meanA;
+            totalB += meanB;
+            const Vec3 difference = glm::abs(meanA - meanB);
+            result.worst = std::max({result.worst, difference.x, difference.y, difference.z});
+            blocks += 1.0F;
+        }
+    }
+    const Vec3 meanDifference = glm::abs(totalA - totalB) / blocks;
+    result.mean = std::max({meanDifference.x, meanDifference.y, meanDifference.z});
+    return result;
+}
+
 /** @brief Fraction of pixels whose ids differ. */
 auto idMismatch(const IdImage& a, const IdImage& b) -> double
 {
@@ -395,4 +439,234 @@ TEST_CASE("GPU: accumulation restarts and scenes update", "[gpu]")
     tracer->resize(20, 10);
     tracer->render(renderScene, makeCamera(20, 10), settings);
     REQUIRE(tracer->readImage().size() == UVec2(20, 10));
+}
+
+// Hybrid pipeline ------------------------------------------------------------------------------------
+
+namespace
+{
+
+auto hybridOptions(bool spatial = true) -> GpuRenderOptions
+{
+    GpuRenderOptions options{.pipeline = GpuPipeline::Hybrid};
+    options.denoiser.spatial = spatial;
+    return options;
+}
+
+}  // namespace
+
+TEST_CASE("GPU hybrid: emissive sphere, sky and white furnace", "[gpu][hybrid]")
+{
+    const GpuTest gpu;
+    for (const Vec3 sky : {Vec3(0.0F), Vec3(0.0F, 0.0F, 1.0F)}) {
+        Scene scene;
+        scene.environment().skyColor = sky;
+        Entity ball = scene.createEntity("Ball");
+        ball.add<SphereComponent>(2.0F);
+        ball.add<MaterialComponent>(MaterialComponent{
+            .albedo = Vec3(0.0F), .emissionColor = {1.0F, 0.0F, 0.0F}, .emissionPower = 1.0F});
+        auto tracer = gpu.makeTracer(64, 48);
+        tracer->render(buildRenderScene(scene), makeCamera(64, 48), {}, hybridOptions());
+        const ColorImage image = tracer->readImage();
+        const IdImage ids = tracer->readEntityIds();
+        REQUIRE(image.at(0, 0) == packRgba8(Vec4(sky, 1.0F)));
+        REQUIRE(ids.at(32, 24) == entt::to_integral(ball.handle()));
+        REQUIRE(ids.at(0, 0) == kNoEntityId);
+        if (sky == Vec3(0.0F)) {
+            // Under a blue sky the ball reflects some of it (Fresnel), filtered over the ball.
+            REQUIRE(image.at(32, 24) == packRgba8({1.0F, 0.0F, 0.0F, 1.0F}));
+        }
+    }
+    {
+        // Every path from the white ball reaches the sky: 0.5 per sample, filtered or
+        // not (up to rounding: the filter works on half floats, GPUs round them
+        // differently).
+        Scene scene;
+        scene.environment().skyColor = Vec3(0.5F);
+        Entity ball = scene.createEntity("Ball");
+        ball.add<SphereComponent>(3.0F);
+        ball.add<MaterialComponent>(MaterialComponent{.albedo = Vec3(1.0F)});
+        auto tracer = gpu.makeTracer(32, 32);
+        const RenderScene renderScene = buildRenderScene(scene);
+        const PathTracerSettings settings{.maxBounces = 16, .srgbOutput = false};
+        for (int i = 0; i < 4; ++i) {
+            tracer->render(renderScene, makeCamera(32, 32), settings, hybridOptions());
+        }
+        const ColorImage image = tracer->readImage();
+        for (const std::uint32_t pixel : image.pixels()) {
+            for (int c = 0; c < 3; ++c) {
+                REQUIRE(std::abs(channel(pixel, c) - 128) <= 1);
+            }
+        }
+    }
+}
+
+TEST_CASE("GPU hybrid: rasterized visibility matches the path tracer", "[gpu][hybrid]")
+{
+    const GpuTest gpu;
+    TestScene test;
+    const RenderScene renderScene = buildRenderScene(test.scene);
+    constexpr std::uint32_t kWidth = 160;
+    constexpr std::uint32_t kHeight = 120;
+    const Camera camera = makeCamera(kWidth, kHeight);
+
+    for (const std::uint32_t mask : {kAllInstances, kAllInstances & ~layerBit(3)}) {
+        const PathTracerSettings settings{.instanceMask = mask};
+        auto reference = gpu.makeTracer(kWidth, kHeight);
+        reference->render(renderScene, camera, settings);
+        auto hybrid = gpu.makeTracer(kWidth, kHeight);
+        hybrid->render(renderScene, camera, settings, hybridOptions());
+        const IdImage ids = hybrid->readEntityIds();
+
+        // The two sample each pixel at a different position: silhouettes may differ.
+        CHECK(idMismatch(ids, reference->readEntityIds()) < 0.03);
+        const bool hiddenVisible = std::ranges::contains(
+            ids.pixels(), static_cast<std::uint32_t>(entt::to_integral(test.hidden.handle())));
+        CHECK(hiddenVisible == (mask == kAllInstances));
+        // The pane is in the glass layer, looked through.
+        CHECK_FALSE(std::ranges::contains(
+            ids.pixels(), static_cast<std::uint32_t>(entt::to_integral(test.pane.handle()))));
+        CHECK(std::ranges::contains(
+            ids.pixels(), static_cast<std::uint32_t>(entt::to_integral(test.cube.handle()))));
+    }
+}
+
+TEST_CASE("GPU hybrid: a still view converges to the path tracer's image", "[gpu][hybrid]")
+{
+    const GpuTest gpu;
+    TestScene test;
+    const RenderScene renderScene = buildRenderScene(test.scene);
+    constexpr std::uint32_t kWidth = 96;
+    constexpr std::uint32_t kHeight = 72;
+    const Camera camera = makeCamera(kWidth, kHeight);
+    const PathTracerSettings settings{.samplesPerPixel = 8, .fireflyClamp = 8.0F};
+
+    auto reference = gpu.makeTracer(kWidth, kHeight);
+    for (int i = 0; i < 128; ++i) {
+        reference->render(renderScene, camera, settings);
+    }
+    const ColorImage expected = reference->readImage();
+
+    for (const bool spatial : {false, true}) {
+        INFO("spatial filter: " << spatial);
+        auto hybrid = gpu.makeTracer(kWidth, kHeight);
+        for (int i = 0; i < 128; ++i) {
+            hybrid->render(renderScene, camera, settings, hybridOptions(spatial));
+        }
+        REQUIRE(hybrid->accumulatedFrames() == 128);
+        const BlockDifference difference = blockDifference(hybrid->readImage(), expected);
+        INFO("worst block " << difference.worst << ", mean " << difference.mean);
+        // Anti-aliasing jitter and the (fading) filter differ a little on edges.
+        CHECK(difference.worst < 10.0F);
+        CHECK(difference.mean < 1.0F);
+    }
+}
+
+TEST_CASE("GPU hybrid: samples are reused while moving and filtered", "[gpu][hybrid]")
+{
+    const GpuTest gpu;
+    TestScene test;
+    RenderScene renderScene = buildRenderScene(test.scene);
+    constexpr std::uint32_t kWidth = 96;
+    constexpr std::uint32_t kHeight = 72;
+    const Camera camera = makeCamera(kWidth, kHeight);
+    const PathTracerSettings settings{.samplesPerPixel = 2, .fireflyClamp = 8.0F};
+    Camera moved = camera;
+    moved.setPosition(camera.position() + Vec3(0.08F, 0.04F, -0.2F));
+
+    auto reference = gpu.makeTracer(kWidth, kHeight);
+    for (int i = 0; i < 128; ++i) {
+        reference->render(renderScene, moved,
+                          PathTracerSettings{.samplesPerPixel = 8, .fireflyClamp = 8.0F});
+    }
+    const ColorImage expected = reference->readImage();
+
+    // 32 still frames, then 4 frames moving to `moved`; or one frame there.
+    auto render = [&](bool spatial, bool temporal) {
+        GpuRenderOptions options = hybridOptions(spatial);
+        options.denoiser.temporal = temporal;
+        auto tracer = gpu.makeTracer(kWidth, kHeight);
+        if (temporal) {
+            for (int i = 0; i < 32; ++i) {
+                tracer->render(renderScene, camera, settings, options);
+            }
+            for (int i = 1; i <= 4; ++i) {
+                Camera step = camera;
+                step.setPosition(camera.position() +
+                                 (moved.position() - camera.position()) * (0.25F * i));
+                tracer->render(renderScene, step, settings, options);
+            }
+            REQUIRE(tracer->accumulatedFrames() == 36);  // Reprojected, not restarted.
+        } else {
+            tracer->render(renderScene, moved, settings, options);
+        }
+        return meanDifference(tracer->readImage(), expected);
+    };
+    const float reused = render(false, true);
+    const float fresh = render(false, false);
+    const float filtered = render(true, false);
+    INFO("mean error: reprojected " << reused << ", one frame " << fresh << ", filtered "
+                                    << filtered);
+    CHECK(reused < 0.5F * fresh);
+    CHECK(filtered < 0.6F * fresh);
+}
+
+TEST_CASE("GPU hybrid: what restarts the accumulation", "[gpu][hybrid]")
+{
+    const GpuTest gpu;
+    TestScene test;
+    RenderScene renderScene = buildRenderScene(test.scene);
+    constexpr std::uint32_t kWidth = 48;
+    constexpr std::uint32_t kHeight = 36;
+    Camera camera = makeCamera(kWidth, kHeight);
+    const PathTracerSettings settings;
+    auto hybrid = gpu.makeTracer(kWidth, kHeight);
+    for (int i = 0; i < 3; ++i) {
+        hybrid->render(renderScene, camera, settings, hybridOptions());
+    }
+    REQUIRE(hybrid->accumulatedFrames() == 3);
+
+    // Moving the camera or an entity reprojects; display settings change nothing.
+    camera.setPosition(camera.position() + Vec3(0.1F, 0.0F, 0.0F));
+    hybrid->render(renderScene, camera, settings, hybridOptions());
+    test.mirror.get<TransformComponent>().translation += Vec3(0.05F, 0.0F, 0.0F);
+    test.scene.markDirty();
+    renderScene = buildRenderScene(test.scene);
+    hybrid->render(renderScene, camera, settings, hybridOptions());
+    PathTracerSettings display = settings;
+    display.exposure = 2.0F;
+    display.toneMapper = ToneMapper::Aces;
+    display.samplesPerPixel = 3;
+    hybrid->render(renderScene, camera, display, hybridOptions());
+    REQUIRE(hybrid->accumulatedFrames() == 6);
+
+    // New content, estimator settings or the other pipeline start over.
+    test.mirror.get<MaterialComponent>().albedo = {0.9F, 0.2F, 0.2F};
+    test.scene.markDirty();
+    renderScene = buildRenderScene(test.scene);
+    hybrid->render(renderScene, camera, settings, hybridOptions());
+    REQUIRE(hybrid->accumulatedFrames() == 1);
+    hybrid->render(renderScene, camera, settings, hybridOptions());
+    PathTracerSettings bounces = settings;
+    bounces.maxBounces = 2;
+    hybrid->render(renderScene, camera, bounces, hybridOptions());
+    REQUIRE(hybrid->accumulatedFrames() == 1);
+    hybrid->render(renderScene, camera, bounces);
+    REQUIRE(hybrid->accumulatedFrames() == 1);
+    hybrid->render(renderScene, camera, bounces, hybridOptions());
+    REQUIRE(hybrid->accumulatedFrames() == 1);
+
+    // Debug views, resizing, an empty scene.
+    for (std::size_t view = 0; view < EnumNames<HybridView>::kNames.size(); ++view) {
+        GpuRenderOptions options = hybridOptions();
+        options.view = static_cast<HybridView>(view);
+        hybrid->render(renderScene, camera, bounces, options);
+    }
+    REQUIRE(hybrid->accumulatedFrames() == 9);
+    hybrid->resize(40, 30);
+    Scene empty;
+    empty.environment().skyColor = {1.0F, 0.0F, 0.0F};
+    hybrid->render(buildRenderScene(empty), makeCamera(40, 30), settings, hybridOptions());
+    const ColorImage sky = hybrid->readImage();
+    REQUIRE(sky.at(10, 10) == packRgba8({1.0F, 0.0F, 0.0F, 1.0F}));
 }

@@ -113,6 +113,8 @@ public:
     {
         return m_image != VK_NULL_HANDLE;
     }
+    /** @brief DEPTH (and STENCIL) for depth formats, else COLOR. */
+    [[nodiscard]] auto aspect() const noexcept -> VkImageAspectFlags;
 
 private:
     void destroy() noexcept;
@@ -126,11 +128,12 @@ private:
     std::uint32_t m_height = 0;
 };
 
-/** @brief Layout transition of a whole color image (old layout UNDEFINED discards it). */
+/** @brief Layout transition of a whole image (old layout UNDEFINED discards it). */
 void transitionImage(VkCommandBuffer commandBuffer, VkImage image, VkImageLayout oldLayout,
                      VkImageLayout newLayout, VkPipelineStageFlags srcStage,
                      VkAccessFlags srcAccess, VkPipelineStageFlags dstStage,
-                     VkAccessFlags dstAccess);
+                     VkAccessFlags dstAccess,
+                     VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT);
 
 /** @brief Global memory barrier. */
 void memoryBarrier(VkCommandBuffer commandBuffer, VkPipelineStageFlags srcStage,

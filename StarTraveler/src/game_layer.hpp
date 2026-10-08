@@ -39,7 +39,7 @@ struct RenderOptions
     // false: draw the 2D overlay over the plain sky color (fast 2D mode).
     bool rayTracing = true;
     bool showHud = true;  // Legacy cockpit dashboard.
-    starcore::PathTracerSettings tracer{};
+    starcore::PathTracerSettings tracer{.fireflyClamp = 8.0F};
 };
 
 /**

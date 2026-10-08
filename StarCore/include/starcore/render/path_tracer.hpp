@@ -1,7 +1,9 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 
+#include "starcore/common/enum_names.hpp"
 #include "starcore/common/image.hpp"
 #include "starcore/common/parallel.hpp"
 #include "starcore/math/color.hpp"
@@ -12,39 +14,70 @@
 namespace starcore
 {
 
+enum class RenderMode : std::uint8_t
+{
+    // Unidirectional path tracing (GGX / Lambert / dielectric BSDF, next event
+    // estimation of sphere lights with multiple importance sampling).
+    PathTraced,
+    // Primary rays with direct light and ambient only: noise-free and fast,
+    // for moving around.
+    Preview,
+};
+
+template <>
+struct EnumNames<RenderMode>
+{
+    static constexpr std::array kNames = {"Path traced", "Preview"};
+};
+
 struct PathTracerSettings
 {
+    RenderMode mode = RenderMode::PathTraced;
     // Path segments traced per sample (the legacy tracer used 3).
     std::uint32_t maxBounces = 5;
     std::uint32_t samplesPerPixel = 1;  // Per frame.
     bool accumulate = true;
+    // Sample sphere lights directly (off: BSDF sampling only, for testing).
+    bool nextEventEstimation = true;
     std::uint32_t seed = 0;
     float exposure = 1.0F;
     ToneMapper toneMapper = ToneMapper::None;
     // Encode the output as sRGB (the legacy tracer wrote linear values).
     bool srgbOutput = true;
+    // Only instances whose mask intersects this are visible (layers).
+    std::uint32_t instanceMask = kAllInstances;
+    // Largest radiance one sample may add after the first bounce (0 = off).
+    // Clamping removes caustic fireflies at the cost of some bias.
+    float fireflyClamp = 0.0F;
 
     auto operator==(const PathTracerSettings&) const -> bool = default;
 };
 
 /**
- * @brief Radiance along one camera path (unidirectional path tracing with
- *        Lambertian / rough-metal scattering and Russian roulette).
+ * @brief Radiance along one camera path.
  *
  * Shader-style free function so it maps directly onto the planned compute
  * shader. Fixes of the legacy PerPixelColor:
- *   - estimator: radiance += throughput * emission; throughput *= albedo
+ *   - estimator: radiance += throughput * emission; throughput *= BSDF weight
  *     (legacy accumulated `light += emission; illum += light * contrib`,
  *     counting emission multiple times with the wrong weight),
- *   - cosine-weighted hemisphere sampling (legacy normalized a random point
- *     in a cube, which is not even uniform).
+ *   - importance sampling (legacy normalized a random point in a cube, which
+ *     is not even uniform), plus direct light sampling.
+ *
+ * Thin-walled transmissive surfaces (window panes) are see-through for the
+ * primary entity id, so looking out of a cockpit picks what is outside.
  *
  * @param primaryEntityId If not null, receives the entity id of the first
- *        hit (kNoEntityId on a miss).
+ *        opaque hit (kNoEntityId on a miss).
  */
 [[nodiscard]] auto tracePath(const RenderScene& scene, Ray ray,
                              const PathTracerSettings& settings, Rng& rng,
                              std::uint32_t* primaryEntityId = nullptr) -> Vec3;
+
+/** @brief RenderMode::Preview shading of one camera ray (deterministic). */
+[[nodiscard]] auto shadePreview(const RenderScene& scene, Ray ray,
+                                const PathTracerSettings& settings,
+                                std::uint32_t* primaryEntityId = nullptr) -> Vec3;
 
 /**
  * @brief Progressive multi-threaded CPU path tracer.

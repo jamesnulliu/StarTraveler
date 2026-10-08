@@ -29,10 +29,12 @@ void renderOverlay(const Scene& scene, const Camera& camera, ColorImage& color,
 
 /**
  * @brief Entity under a pixel: overlay shapes (via `overlayIds`) win over
- *        ray-traced geometry (via an exact ray cast).
+ *        ray-traced geometry (via an exact ray cast among instances whose mask
+ *        intersects `mask`; window panes are looked through).
  */
-[[nodiscard]] auto pickEntity(const RenderScene& renderScene,
-                              const Camera& camera, const IdImage* overlayIds,
-                              Vec2 pixelPosition) -> std::optional<entt::entity>;
+[[nodiscard]] auto pickEntity(const RenderScene& renderScene, const Camera& camera,
+                              const IdImage* overlayIds, Vec2 pixelPosition,
+                              std::uint32_t mask = kAllInstances)
+    -> std::optional<entt::entity>;
 
 }  // namespace starcore

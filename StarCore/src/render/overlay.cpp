@@ -298,7 +298,7 @@ void renderOverlay(const Scene& scene, const Camera& camera, ColorImage& color,
 }
 
 auto pickEntity(const RenderScene& renderScene, const Camera& camera,
-                const IdImage* overlayIds, Vec2 pixelPosition)
+                const IdImage* overlayIds, Vec2 pixelPosition, std::uint32_t mask)
     -> std::optional<entt::entity>
 {
     const IVec2 pixel = raster::toPixel(pixelPosition);
@@ -309,10 +309,22 @@ auto pickEntity(const RenderScene& renderScene, const Camera& camera,
             return static_cast<entt::entity>(id);
         }
     }
-    if (const auto hit = traceClosestHit(
-            renderScene, camera.generateRay(pixelPosition), 0.0F, kInfinity)) {
-        return static_cast<entt::entity>(
-            renderScene.instances[hit->instanceIndex].entityId);
+    // Look through window panes (mostly transmissive thin-walled surfaces), like
+    // the path tracer's primary entity ids.
+    Ray ray = camera.generateRay(pixelPosition);
+    for (int layer = 0; layer < 8; ++layer) {
+        const auto hit = traceClosestHit(renderScene, ray, 0.0F, kInfinity, mask);
+        if (!hit) {
+            return std::nullopt;
+        }
+        const RenderInstance& instance = renderScene.instances[hit->instanceIndex];
+        const RenderMaterial& material = renderScene.materials[instance.materialIndex];
+        const bool seeThrough = (material.flags & kMaterialThinWalled) != 0U &&
+                                material.transmission * (1.0F - material.metallic) >= 0.5F;
+        if (!seeThrough) {
+            return static_cast<entt::entity>(instance.entityId);
+        }
+        ray.origin = hit->position + ray.direction * (1e-4F + 1e-4F * hit->t);
     }
     return std::nullopt;
 }

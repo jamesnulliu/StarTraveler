@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cstddef>
 #include <span>
 #include <type_traits>
@@ -26,6 +27,9 @@ auto toRenderMaterial(const MaterialComponent* material) -> RenderMaterial
         result.emission = Vec4(material->emission(), 0.0F);
         result.roughness = material->roughness;
         result.metallic = material->metallic;
+        result.transmission = material->transmission;
+        result.ior = material->ior;
+        result.flags = material->thinWalled ? kMaterialThinWalled : 0U;
     }
     return result;
 }
@@ -83,8 +87,23 @@ auto buildRenderScene(const Scene& scene) -> RenderScene
         objectToWorld[0] *= sphere.radius;
         objectToWorld[1] *= sphere.radius;
         objectToWorld[2] *= sphere.radius;
-        addInstance(out, sphereGeometry, objectToWorld,
-                    registry.try_get<MaterialComponent>(entity), entity);
+        const auto* material = registry.try_get<MaterialComponent>(entity);
+        addInstance(out, sphereGeometry, objectToWorld, material, entity);
+
+        // Emissive, (nearly) uniformly scaled spheres are sampled as lights.
+        const Vec3 emission = material != nullptr ? material->emission() : Vec3(0.0F);
+        const Vec3 axes{glm::length(Vec3(objectToWorld[0])), glm::length(Vec3(objectToWorld[1])),
+                        glm::length(Vec3(objectToWorld[2]))};
+        const float radius = std::max({axes.x, axes.y, axes.z});
+        const bool uniform = radius > 0.0F && std::min({axes.x, axes.y, axes.z}) > 0.999F * radius;
+        if (uniform && std::max({emission.r, emission.g, emission.b}) > 0.0F) {
+            out.lights.push_back(RenderLight{
+                .center = Vec3(objectToWorld[3]),
+                .radius = radius,
+                .emission = emission,
+                .instanceIndex = static_cast<std::uint32_t>(out.instances.size() - 1),
+            });
+        }
     }
 
     // Each MeshData becomes one geometry (BLAS), shared by all its instances.
@@ -104,6 +123,11 @@ auto buildRenderScene(const Scene& scene) -> RenderScene
         }
         addInstance(out, it->second, scene.worldTransform(entity),
                     registry.try_get<MaterialComponent>(entity), entity);
+    }
+
+    out.lightOfInstance.assign(out.instances.size(), -1);
+    for (std::size_t i = 0; i < out.lights.size(); ++i) {
+        out.lightOfInstance[out.lights[i].instanceIndex] = static_cast<std::int32_t>(i);
     }
 
     std::vector<Aabb> instanceBounds;

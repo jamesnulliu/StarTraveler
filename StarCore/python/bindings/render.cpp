@@ -63,6 +63,8 @@ void bindTracer(nb::module_& m)
                             "geometries, materials).")
         .def_prop_ro("instance_count", [](const RenderScene& s) { return s.instances.size(); })
         .def_prop_ro("geometry_count", [](const RenderScene& s) { return s.geometries.size(); })
+        .def_prop_ro("light_count", [](const RenderScene& s) { return s.lights.size(); },
+                     "Emissive spheres sampled directly by the path tracer.")
         .def_prop_ro("triangle_count", &RenderScene::triangleCount,
                      "Triangles of the distinct meshes (BLAS), not counting instancing.")
         .def_ro("sky_color", &RenderScene::skyColor)
@@ -95,25 +97,56 @@ void bindTracer(nb::module_& m)
     m.def("trace_closest_hit", &traceClosestHit, "render_scene"_a, "ray"_a, "t_min"_a = 0.0F,
           "t_max"_a = kInfinity, "mask"_a = kAllInstances,
           "Closest hit in (t_min, t_max) among instances whose mask intersects `mask`, or None.");
+    m.def(
+        "trace_path",
+        [](const RenderScene& scene, const Ray& ray, const PathTracerSettings& settings,
+           std::uint32_t seed) {
+            Rng rng(seed);
+            return tracePath(scene, ray, settings, rng);
+        },
+        "render_scene"_a, "ray"_a, "settings"_a, "seed"_a = 0U,
+        "Linear radiance of one path sample (for estimator tests).");
+    m.def(
+        "shade_preview",
+        [](const RenderScene& scene, const Ray& ray, const PathTracerSettings& settings) {
+            return shadePreview(scene, ray, settings);
+        },
+        "render_scene"_a, "ray"_a, "settings"_a, "Preview-mode shading of one ray.");
     m.def("trace_any_hit", &traceAnyHit, "render_scene"_a, "ray"_a, "t_min"_a = 0.0F,
           "t_max"_a = kInfinity, "mask"_a = kAllInstances,
           "Whether anything is hit in (t_min, t_max) (shadow rays).");
+
+    nb::enum_<RenderMode>(m, "RenderMode")
+        .value("PATH_TRACED", RenderMode::PathTraced)
+        .value("PREVIEW", RenderMode::Preview);
 
     {
         const PathTracerSettings d{};
         nb::class_<PathTracerSettings>(m, "PathTracerSettings")
             .def(
                 "__init__",
-                [](PathTracerSettings* self, std::uint32_t maxBounces,
-                   std::uint32_t samplesPerPixel, bool accumulate, std::uint32_t seed,
-                   float exposure, ToneMapper toneMapper, bool srgbOutput) {
-                    new (self) PathTracerSettings{maxBounces, samplesPerPixel, accumulate, seed,
-                                                  exposure,   toneMapper,      srgbOutput};
+                [](PathTracerSettings* self, RenderMode mode, std::uint32_t maxBounces,
+                   std::uint32_t samplesPerPixel, bool accumulate, bool nextEventEstimation,
+                   std::uint32_t seed, float exposure, ToneMapper toneMapper, bool srgbOutput,
+                   std::uint32_t instanceMask, float fireflyClamp) {
+                    new (self) PathTracerSettings{mode,       maxBounces,   samplesPerPixel,
+                                                  accumulate, nextEventEstimation,
+                                                  seed,       exposure,     toneMapper,
+                                                  srgbOutput, instanceMask, fireflyClamp};
                 },
-                nb::kw_only(), "max_bounces"_a = d.maxBounces,
+                nb::kw_only(), "mode"_a = d.mode, "max_bounces"_a = d.maxBounces,
                 "samples_per_pixel"_a = d.samplesPerPixel, "accumulate"_a = d.accumulate,
-                "seed"_a = d.seed, "exposure"_a = d.exposure, "tone_mapper"_a = d.toneMapper,
-                "srgb_output"_a = d.srgbOutput)
+                "next_event_estimation"_a = d.nextEventEstimation, "seed"_a = d.seed,
+                "exposure"_a = d.exposure, "tone_mapper"_a = d.toneMapper,
+                "srgb_output"_a = d.srgbOutput, "instance_mask"_a = d.instanceMask,
+                "firefly_clamp"_a = d.fireflyClamp)
+            .def_rw("firefly_clamp", &PathTracerSettings::fireflyClamp,
+                    "Largest indirect radiance per sample (0 = off; biased but no fireflies).")
+            .def_rw("mode", &PathTracerSettings::mode)
+            .def_rw("next_event_estimation", &PathTracerSettings::nextEventEstimation,
+                    "Sample sphere lights directly (off: BSDF sampling only).")
+            .def_rw("instance_mask", &PathTracerSettings::instanceMask,
+                    "Only instances whose mask intersects it are visible (layers).")
             .def_rw("max_bounces", &PathTracerSettings::maxBounces)
             .def_rw("samples_per_pixel", &PathTracerSettings::samplesPerPixel)
             .def_rw("accumulate", &PathTracerSettings::accumulate)
@@ -165,18 +198,21 @@ void bindOverlay(nb::module_& m)
     m.def(
         "pick_entity",
         [](const RenderScene& renderScene, const Camera& camera,
-           std::optional<IdInput> overlayIds, Vec2 pixel) -> std::optional<std::uint32_t> {
+           std::optional<IdInput> overlayIds, Vec2 pixel,
+           std::uint32_t mask) -> std::optional<std::uint32_t> {
             std::optional<IdImage> ids;
             if (overlayIds) {
                 ids = fromArray(*overlayIds);
             }
-            const auto picked = pickEntity(renderScene, camera, ids ? &*ids : nullptr, pixel);
+            const auto picked =
+                pickEntity(renderScene, camera, ids ? &*ids : nullptr, pixel, mask);
             if (!picked) {
                 return std::nullopt;
             }
             return entt::to_integral(*picked);
         },
         "render_scene"_a, "camera"_a, "overlay_ids"_a.none(), "pixel"_a,
+        "mask"_a = kAllInstances,
         "Entity handle under a pixel (overlay shapes first, then ray-traced geometry).");
 
     m.def(

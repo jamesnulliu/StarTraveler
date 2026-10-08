@@ -28,16 +28,34 @@ class Scene;
 /** @brief Ray/instance mask matching every instance (Vulkan cull masks are 8 bits). */
 inline constexpr std::uint32_t kAllInstances = 0xFFU;
 
+/** @brief RenderMaterial::flags bits. */
+inline constexpr std::uint32_t kMaterialThinWalled = 1U << 0U;
+
 struct RenderMaterial
 {
     Vec4 albedo{0.8F, 0.8F, 0.8F, 1.0F};
     Vec4 emission{0.0F};  // rgb = color * power
     float roughness = 1.0F;
     float metallic = 0.0F;
-    float padding0 = 0.0F;
-    float padding1 = 0.0F;
+    float transmission = 0.0F;
+    float ior = 1.5F;
+    std::uint32_t flags = 0;
+    std::uint32_t padding[3] = {};
 };
-static_assert(sizeof(RenderMaterial) == 48, "std430-compatible layout");
+static_assert(sizeof(RenderMaterial) == 64, "std430-compatible layout");
+
+/**
+ * @brief An emissive sphere sampled directly by the path tracer (next event
+ *        estimation). Other emitters (meshes, ellipsoids) are only found by
+ *        BSDF sampling.
+ */
+struct RenderLight
+{
+    Vec3 center{0.0F};
+    float radius = 0.0F;
+    Vec3 emission{0.0F};
+    std::uint32_t instanceIndex = 0;
+};
 
 enum class GeometryKind : std::uint32_t
 {
@@ -68,6 +86,9 @@ struct RenderScene
     std::vector<RenderGeometry> geometries;  // Meshes are deduplicated.
     std::vector<RenderInstance> instances;
     std::vector<RenderMaterial> materials;
+    std::vector<RenderLight> lights;
+    // Per instance: index into `lights`, or -1.
+    std::vector<std::int32_t> lightOfInstance;
     Bvh tlas;  // Over instances[i].worldBounds.
     Vec3 skyColor{0.0F};
     // Scene::version() at build time (to detect stale accumulation).

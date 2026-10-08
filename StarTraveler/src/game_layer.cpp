@@ -508,7 +508,10 @@ void GameLayer::drawRenderPanel()
     ImGui::Checkbox("Cockpit HUD", &m_options.showHud);
 
     auto& settings = m_options.tracer;
+    enumCombo("Mode", settings.mode);
     ImGui::Checkbox("Accumulate", &settings.accumulate);
+    ImGui::SameLine();
+    ImGui::Checkbox("Sample lights", &settings.nextEventEstimation);
     int bounces = static_cast<int>(settings.maxBounces);
     if (ImGui::SliderInt("Bounces", &bounces, 1, 16)) {
         settings.maxBounces = static_cast<std::uint32_t>(bounces);
@@ -518,6 +521,8 @@ void GameLayer::drawRenderPanel()
         settings.samplesPerPixel = static_cast<std::uint32_t>(samples);
     }
     ImGui::DragFloat("Exposure", &settings.exposure, 0.01F, 0.01F, 16.0F);
+    ImGui::DragFloat("Firefly clamp", &settings.fireflyClamp, 0.1F, 0.0F, 100.0F,
+                     settings.fireflyClamp > 0.0F ? "%.1f" : "off");
     enumCombo("Tone mapper", settings.toneMapper);
     ImGui::Checkbox("sRGB output", &settings.srgbOutput);
     if (color3Edit("Sky", m_scene.environment().skyColor)) {
@@ -529,7 +534,8 @@ void GameLayer::drawRenderPanel()
                 ImGui::GetIO().Framerate);
     ImGui::Text("Trace: %.2f ms on %u threads", m_traceMs, m_tracer.threadCount());
     ImGui::Text("Accumulated frames: %u", m_tracer.accumulatedFrames());
-    ImGui::Text("Instances: %zu", m_renderScene.instances.size());
+    ImGui::Text("Instances: %zu, lights: %zu, triangles: %zu", m_renderScene.instances.size(),
+                m_renderScene.lights.size(), m_renderScene.triangleCount());
     ImGui::End();
 }
 
@@ -699,6 +705,11 @@ void GameLayer::drawInspectorPanel()
             changed |= color3Edit("Emission", material->emissionColor);
             changed |= ImGui::DragFloat("Emission power", &material->emissionPower, 0.05F,
                                         0.0F, 1000.0F);
+            changed |= ImGui::SliderFloat("Transmission", &material->transmission, 0.0F, 1.0F);
+            if (material->transmission > 0.0F) {
+                changed |= ImGui::DragFloat("IOR", &material->ior, 0.005F, 1.0F, 3.0F);
+                changed |= ImGui::Checkbox("Thin walled (window pane)", &material->thinWalled);
+            }
         }
         if (remove) {
             entity.remove<MaterialComponent>();

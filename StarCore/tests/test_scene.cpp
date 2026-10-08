@@ -179,6 +179,21 @@ TEST_CASE("Scene YAML round-trip", "[scene][serializer]")
     REQUIRE(serializeScene(loaded) == yaml);
 }
 
+TEST_CASE("Transient entities and their children are not saved", "[scene][serializer]")
+{
+    Scene scene;
+    scene.createEntity("World");
+    Entity ship = scene.createEntity("Ship");
+    ship.add<TransientComponent>();
+    Entity seat = scene.createEntity("Seat");
+    scene.setParent(seat, ship);
+
+    Scene loaded;
+    REQUIRE(deserializeScene(serializeScene(scene), loaded).has_value());
+    REQUIRE(loaded.entityCount() == 1);
+    REQUIRE(loaded.findEntityByName("World"));
+}
+
 TEST_CASE("Invalid scene documents are rejected", "[scene][serializer]")
 {
     Scene scene;

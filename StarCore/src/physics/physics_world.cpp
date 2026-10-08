@@ -201,8 +201,8 @@ auto PhysicsWorld::raycast(const Ray& ray, float maxDistance, const QueryFilter&
             const Vec3 t1 = (h - local.origin) * inverse;
             const Vec3 tNear = glm::min(t0, t1);
             const Vec3 tFar = glm::max(t0, t1);
-            const float entry = std::max({tNear.x, tNear.y, tNear.z});
-            const float exit = std::min({tFar.x, tFar.y, tFar.z});
+            const float entry = std::max(tNear.x, std::max(tNear.y, tNear.z));
+            const float exit = std::min(tFar.x, std::min(tFar.y, tFar.z));
             if (entry <= exit && entry > 0.0F && entry < tMax) {
                 const int axis = entry == tNear.x ? 0 : (entry == tNear.y ? 1 : 2);
                 accept(entry, collider.axes[axis] * -std::copysign(1.0F, local.direction[axis]));

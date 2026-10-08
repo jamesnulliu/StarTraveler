@@ -393,9 +393,16 @@ void bindComponents(nb::module_& m)
             });
     }
 
+    nb::class_<TransientComponent>(m, "Transient",
+                                   "Marks a runtime-only entity: it and its descendants are "
+                                   "not saved.")
+        .def(nb::init<>())
+        .def("__repr__", [](const TransientComponent&) { return std::string("Transient()"); });
+
     registerComponent<TransformComponent>();
     registerComponent<LayerComponent>();
     registerComponent<ColliderComponent>();
+    registerComponent<TransientComponent>();
     registerComponent<MaterialComponent>();
     registerComponent<SphereComponent>();
     registerComponent<MeshComponent>();

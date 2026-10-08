@@ -216,6 +216,51 @@ TEST_CASE("CPU path tracer is deterministic across thread counts",
     }
 }
 
+TEST_CASE("Progressive passes refine from blocks to pixels within a time budget",
+          "[render][trace]")
+{
+    Scene scene;
+    makeSphereScene(scene);
+    const RenderScene renderScene = buildRenderScene(scene);
+    Camera camera;
+    camera.setViewport(64, 48);
+    CpuPathTracer tracer(4);
+    tracer.resize(64, 48);
+    PathTracerSettings settings;
+
+    // First pass after a reset: one sample per 4 x 4 block.
+    tracer.render(renderScene, camera, settings, {.firstPassStride = 4});
+    REQUIRE(tracer.accumulatedFrames() == 1);
+    REQUIRE(tracer.passStride() == 2);
+    for (std::uint32_t y = 0; y < 48; ++y) {
+        for (std::uint32_t x = 0; x < 64; ++x) {
+            REQUIRE(tracer.image().at(x, y) == tracer.image().at(x & ~3U, y & ~3U));
+        }
+    }
+    tracer.render(renderScene, camera, settings, {.firstPassStride = 4});
+    REQUIRE(tracer.passStride() == 1);
+    tracer.render(renderScene, camera, settings, {.firstPassStride = 4});
+    REQUIRE(tracer.accumulatedFrames() == 3);
+    REQUIRE(tracer.passStride() == 1);
+
+    // A tiny budget spreads a pass over several calls...
+    const std::uint32_t before = tracer.accumulatedFrames();
+    int calls = 0;
+    while (tracer.accumulatedFrames() == before && calls < 100) {
+        tracer.render(renderScene, camera, settings, {.timeBudgetMs = 1e-3F});
+        ++calls;
+    }
+    REQUIRE(tracer.accumulatedFrames() == before + 1);
+    REQUIRE(calls > 1);
+    // ... a generous one fits several passes in one call...
+    tracer.render(renderScene, camera, settings, {.timeBudgetMs = 500.0F});
+    REQUIRE(tracer.accumulatedFrames() > before + 2);
+    // ... and the first pass after a reset is always complete.
+    camera.setPosition({0.0F, 0.0F, 9.0F});
+    tracer.render(renderScene, camera, settings, {.timeBudgetMs = 1e-3F, .firstPassStride = 2});
+    REQUIRE(tracer.accumulatedFrames() == 1);
+}
+
 TEST_CASE("Overlay draws shapes and supports picking", "[render][overlay]")
 {
     Scene scene;

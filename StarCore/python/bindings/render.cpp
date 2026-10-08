@@ -161,10 +161,22 @@ void bindTracer(nb::module_& m)
         .def(nb::init<unsigned>(), "threads"_a = 0U, "threads=0 uses all hardware threads.")
         .def("resize", &CpuPathTracer::resize, "width"_a, "height"_a)
         .def("reset_accumulation", &CpuPathTracer::resetAccumulation)
-        .def("render", &CpuPathTracer::render, "render_scene"_a, "camera"_a, "settings"_a,
-             nb::call_guard<nb::gil_scoped_release>(),
-             "Add one frame of samples (restarts automatically when the scene version, "
-             "camera, settings or size change).")
+        .def(
+            "render",
+            [](CpuPathTracer& tracer, const RenderScene& scene, const Camera& camera,
+               const PathTracerSettings& settings, float timeBudgetMs,
+               std::uint32_t firstPassStride) {
+                tracer.render(scene, camera, settings,
+                              {.timeBudgetMs = timeBudgetMs, .firstPassStride = firstPassStride});
+            },
+            "render_scene"_a, "camera"_a, "settings"_a, nb::kw_only(), "time_budget_ms"_a = 0.0F,
+            "first_pass_stride"_a = 1U, nb::call_guard<nb::gil_scoped_release>(),
+            "Add one pass of samples (restarts automatically when the scene version, camera, "
+            "settings or size change). With time_budget_ms, render tiles until the time is up "
+            "(passes continue across calls); first_pass_stride makes passes after a reset "
+            "start coarse (one sample per block) and sharpen.")
+        .def_prop_ro("pass_stride", &CpuPathTracer::passStride,
+                     "Block size of the pass in progress (1 = full resolution).")
         .def(
             "image", [](const CpuPathTracer& t) { return toArray(t.image()); },
             "Tone-mapped result as a uint8 (height, width, 4) array.")

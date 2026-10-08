@@ -43,4 +43,5 @@ def make_mesh(
     )
 
 
-__all__ = [name for name in dir(_core) if not name.startswith("_")] + ["make_mesh"]
+__all__ = [name for name in dir(_core) if not name.startswith("_")]
+__all__ += ["__version__", "make_mesh"]

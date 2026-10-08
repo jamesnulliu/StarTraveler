@@ -79,11 +79,24 @@ struct PathTracerSettings
                                 const PathTracerSettings& settings,
                                 std::uint32_t* primaryEntityId = nullptr) -> Vec3;
 
+/** @brief How much work one CpuPathTracer::render() call does. */
+struct RenderControl
+{
+    // > 0: after the first pass, stop starting new tiles once this many
+    // milliseconds have passed (the next call continues). 0: one full pass.
+    float timeBudgetMs = 0.0F;
+    // After an accumulation reset, the first pass traces one sample per
+    // stride x stride block (filling it), the next ones halve the stride down
+    // to single pixels: an image right away that sharpens progressively.
+    std::uint32_t firstPassStride = 1;
+};
+
 /**
  * @brief Progressive multi-threaded CPU path tracer.
  *
- * Each render() call adds one frame of samples; accumulation restarts
- * automatically when the scene version, camera, settings or size change.
+ * Each render() call adds one pass of samples (or, with a time budget, as
+ * many tiles as fit); accumulation restarts automatically when the scene
+ * version, camera, settings or size change.
  */
 class CpuPathTracer
 {
@@ -95,15 +108,22 @@ public:
     void resetAccumulation() noexcept
     {
         m_frameIndex = 0;
+        m_nextTile = 0;
     }
 
     void render(const RenderScene& scene, const Camera& camera,
-                const PathTracerSettings& settings);
+                const PathTracerSettings& settings, const RenderControl& control = {});
 
     /** @brief Tone-mapped RGBA8 result of all accumulated frames. */
     [[nodiscard]] auto image() const -> const ColorImage&
     {
         return m_image;
+    }
+
+    /** @brief Block size of the pass in progress (1 = full resolution). */
+    [[nodiscard]] auto passStride() const noexcept -> std::uint32_t
+    {
+        return m_passStride;
     }
 
     /** @brief Entity id of the primary hit per pixel (kNoEntityId = sky). */
@@ -127,12 +147,18 @@ private:
                                   const Camera& camera,
                                   const PathTracerSettings& settings) const
         -> bool;
+    void renderTiles(const RenderScene& scene, const Camera& camera,
+                     const PathTracerSettings& settings, std::uint32_t firstTile,
+                     std::uint32_t tileCount);
 
     ParallelExecutor m_executor;
-    Image2D<Vec4> m_accumulation;  // rgb = sum of samples, a = frame count.
+    Image2D<Vec4> m_accumulation;  // rgb = sum of samples, a = sample count.
     ColorImage m_image;
     IdImage m_entityIds;
-    std::uint32_t m_frameIndex = 0;
+    std::uint32_t m_frameIndex = 0;  // Completed passes since the last reset.
+    std::uint32_t m_nextTile = 0;    // Next tile of the pass in progress.
+    std::uint32_t m_passStride = 1;
+    std::uint32_t m_idStride = 0;    // Stride the ids were last written at (0 = never).
 
     // State of the previous frame, for automatic accumulation resets.
     std::uint64_t m_lastSceneVersion = ~0ULL;

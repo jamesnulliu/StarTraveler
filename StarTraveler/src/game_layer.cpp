@@ -14,13 +14,13 @@
 #include <starcore/app/application.hpp>
 #include <starcore/common/log.hpp>
 #include <starcore/math/color.hpp>
+#include <starcore/physics/physics_world.hpp>
 #include <starcore/platform/input.hpp>
 #include <starcore/raster/fill.hpp>
 #include <starcore/render/overlay.hpp>
 #include <starcore/scene/serializer.hpp>
 
 #include "game_layer.hpp"
-#include "gameplay/hud.hpp"
 
 namespace startraveler
 {
@@ -90,8 +90,10 @@ auto planeMesh(float size) -> MeshComponent
 
 }  // namespace
 
-GameLayer::GameLayer(std::filesystem::path scenePath, AutomationOptions automation)
-    : m_scenePath(std::move(scenePath)), m_automation(std::move(automation))
+GameLayer::GameLayer(std::filesystem::path scenePath, std::filesystem::path assetRoot,
+                     AutomationOptions automation)
+    : m_scenePath(std::move(scenePath)), m_assetRoot(std::move(assetRoot)),
+      m_automation(std::move(automation))
 {
 }
 
@@ -100,10 +102,13 @@ GameLayer::~GameLayer() = default;
 void GameLayer::onAttach()
 {
     m_texture = std::make_unique<vulkan::Texture2D>(Application::get().vulkan());
+    resetCamera();
     if (!m_scenePath.empty()) {
         openScene(m_scenePath);
     }
-    resetCamera();
+    if (!m_ship.isValid()) {
+        onSceneReplaced();  // No scene file: an empty scene with the ship.
+    }
 }
 
 // Scene files ---------------------------------------------------------------------------------------
@@ -149,12 +154,60 @@ void GameLayer::onSceneReplaced()
     m_renderSceneSourceVersion = ~0ULL;
     m_eulerEntity = entt::null;
     m_frozen = false;
+    spawnShip();
 }
 
 void GameLayer::resetCamera()
 {
     m_camera.setPosition({0.0F, 0.0F, 10.0F});
     m_camera.setRotation(-90.0F, 0.0F);
+    m_portals.reset();
+}
+
+void GameLayer::spawnShip()
+{
+    if (m_ship.isValid()) {
+        m_scene.destroyEntity(m_ship);
+    }
+    m_ship = {};
+    configureGameLayers(m_scene.layers());
+
+    // At the scene's "PlayerStart" entity (looking down its -Z), or where the
+    // legacy camera started.
+    Vec3 position{0.0F, 0.0F, 13.0F};
+    float yaw = -90.0F;
+    float pitch = 0.0F;
+    if (const Entity start = m_scene.findEntityByName("PlayerStart")) {
+        const Mat4 world = start.worldTransform();
+        position = Vec3(world[3]);
+        const Vec3 forward = glm::normalize(Vec3(world * Vec4(0.0F, 0.0F, -1.0F, 0.0F)));
+        yaw = glm::degrees(std::atan2(forward.z, forward.x));
+        pitch = glm::degrees(std::asin(std::clamp(forward.y, -1.0F, 1.0F)));
+    }
+    auto ship = m_ships.spawn(m_scene, m_assets, m_assetRoot / "models" / "cockpit.glb", position,
+                              yaw, pitch);
+    if (!ship) {
+        m_status = std::format("No ship: {}", ship.error());
+        SC_ERROR("{}", m_status);
+        setViewMode(ViewMode::Free);
+        return;
+    }
+    m_ship = *ship;
+    m_renderSceneSourceVersion = ~0ULL;
+    setViewMode(m_viewMode);
+}
+
+void GameLayer::setViewMode(ViewMode mode)
+{
+    if (mode == ViewMode::Pilot && !m_ship.isValid()) {
+        mode = ViewMode::Free;
+    }
+    m_viewMode = mode;
+    // A wider view from the cockpit.
+    m_camera.setVerticalFov(mode == ViewMode::Pilot ? 70.0F : 45.0F);
+    if (mode == ViewMode::Pilot) {
+        m_ships.attachCamera(m_camera, m_ship);
+    }
     m_portals.reset();
 }
 
@@ -204,8 +257,11 @@ void GameLayer::handleShortcuts()
     }
     // Legacy: T opens a portal in front of the camera.
     if (!io.KeyCtrl && input::isKeyPressed(ImGuiKey_T)) {
-        Entity portal = m_portals.createPortal(m_scene, m_camera);
+        Entity portal = m_portals.createPortal(m_scene, m_camera, kPortalLayer);
         m_status = std::format("Created {}", portal.name());
+    }
+    if (!io.KeyCtrl && input::isKeyPressed(ImGuiKey_C)) {
+        setViewMode(m_viewMode == ViewMode::Pilot ? ViewMode::Free : ViewMode::Pilot);
     }
     if (m_toolKind != ToolKind::None && input::isKeyPressed(ImGuiKey_Escape)) {
         setTool(ToolKind::None);  // Cancel drawing.
@@ -225,6 +281,37 @@ void GameLayer::updateCamera()
     }
     input::setCursorMode(m_cameraActive ? input::CursorMode::Locked
                                         : input::CursorMode::Normal);
+    const float deltaSeconds = Application::get().deltaTime();
+    m_collisionFlash = std::max(0.0F, m_collisionFlash - deltaSeconds);
+
+    if (m_viewMode == ViewMode::Pilot && m_ship.isValid()) {
+        // Thrust with the keyboard over the viewport, steer with RMB held.
+        const ImGuiIO& io = ImGui::GetIO();
+        const bool keys = (m_viewport.hovered || m_cameraActive) && !io.WantTextInput &&
+                          !io.KeyCtrl;
+        auto axis = [&](ImGuiKey positive, ImGuiKey negative) {
+            return keys ? static_cast<float>(input::isKeyDown(positive)) -
+                              static_cast<float>(input::isKeyDown(negative))
+                        : 0.0F;
+        };
+        const ShipInput shipInput{
+            .thrust = {axis(ImGuiKey_D, ImGuiKey_A), axis(ImGuiKey_E, ImGuiKey_Q),
+                       axis(ImGuiKey_W, ImGuiKey_S)},
+            .look = m_cameraActive ? input::mouseDelta() : Vec2(0.0F),
+            .boost = keys && io.KeyShift,
+        };
+        const PhysicsWorld physics = PhysicsWorld::build(m_scene);
+        const ShipEvents events =
+            m_ships.update(m_scene, m_ship, physics, shipInput, deltaSeconds);
+        if (events.collided) {
+            m_collisionFlash = 0.4F;
+        }
+        if (events.teleported) {
+            m_status = "Teleported!";
+        }
+        m_ships.attachCamera(m_camera, m_ship);
+        return;
+    }
 
     const CameraInput cameraInput{
         .forward = input::isKeyDown(ImGuiKey_W),
@@ -236,7 +323,7 @@ void GameLayer::updateCamera()
         .look = m_cameraActive,
         .mouseDelta = m_cameraActive ? input::mouseDelta() : Vec2(0.0F),
     };
-    m_cameraController.update(m_camera, cameraInput, Application::get().deltaTime());
+    m_cameraController.update(m_camera, cameraInput, deltaSeconds);
     if (m_portals.update(m_scene, m_camera)) {
         m_status = "Teleported!";
     }
@@ -300,11 +387,21 @@ void GameLayer::composeFrame()
     }
 
     const SceneLayers& layers = m_scene.layers();
-    m_options.tracer.instanceMask = layers.visibleMask();
+    PathTracerSettings settings = m_options.tracer;
+    settings.instanceMask = layers.visibleMask();
+    // Adaptive: noise-free preview while moving, accumulate once still.
+    m_previewing = m_options.adaptive && m_camera.view() != m_lastView;
+    m_lastView = m_camera.view();
+    if (m_previewing) {
+        settings.mode = RenderMode::Preview;
+    }
     if (m_options.rayTracing) {
         if (m_options.liveRender || m_stepOnce) {
             const auto start = std::chrono::steady_clock::now();
-            m_tracer.render(m_renderScene, m_camera, m_options.tracer);
+            // Coarse first passes and a per-frame time budget keep the UI
+            // responsive while the image converges.
+            m_tracer.render(m_renderScene, m_camera, settings,
+                            {.timeBudgetMs = 30.0F, .firstPassStride = m_previewing ? 3U : 4U});
             m_traceMs = std::chrono::duration<float, std::milli>(
                             std::chrono::steady_clock::now() - start)
                             .count();
@@ -323,9 +420,6 @@ void GameLayer::composeFrame()
         renderOverlay(m_tool->previewScene(), m_camera, m_frame);
     }
     m_selection.drawHandles(makeContext(), m_frame);
-    if (m_options.showHud) {
-        drawCockpitHud(m_frame);
-    }
     m_texture->setPixels(m_frame.pixels(), m_frame.width(), m_frame.height());
 }
 
@@ -397,6 +491,47 @@ void GameLayer::onUIRender()
     }
 }
 
+void GameLayer::drawHud(Vec2 origin)
+{
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    const Vec2 size(m_viewport.size);
+    const ImVec2 center(origin.x + size.x * 0.5F, origin.y + size.y * 0.5F);
+    const ImU32 white = IM_COL32(230, 240, 255, 170);
+
+    std::string text;
+    if (m_viewMode == ViewMode::Pilot && m_ship.isValid()) {
+        // Crosshair: the ship's heading.
+        draw->AddLine({center.x - 12, center.y}, {center.x - 4, center.y}, white, 1.5F);
+        draw->AddLine({center.x + 4, center.y}, {center.x + 12, center.y}, white, 1.5F);
+        draw->AddLine({center.x, center.y - 12}, {center.x, center.y - 4}, white, 1.5F);
+        draw->AddLine({center.x, center.y + 4}, {center.x, center.y + 12}, white, 1.5F);
+        text = std::format("SPEED {:5.1f}   W/S/A/D/Q/E thrust, Shift boost, hold RMB to "
+                           "steer, C free camera, T portal",
+                           glm::length(m_ship.get<ShipComponent>().velocity));
+    } else {
+        text = "FREE CAMERA   hold RMB + W/S/A/D/Q/E to fly, C back to the cockpit";
+    }
+    if (m_previewing) {
+        text += "   [preview while moving]";
+    }
+    const ImVec2 corner(origin.x + 10.0F, origin.y + 10.0F);
+    const ImVec2 textSize = ImGui::CalcTextSize(text.c_str());
+    draw->AddRectFilled({corner.x - 6, corner.y - 4},
+                        {corner.x + textSize.x + 6, corner.y + textSize.y + 4},
+                        IM_COL32(0, 0, 0, 120), 4.0F);
+    draw->AddText(corner, white, text.c_str());
+
+    if (m_collisionFlash > 0.0F) {
+        const auto alpha = static_cast<int>(255.0F * std::min(1.0F, m_collisionFlash / 0.4F));
+        draw->AddRect({origin.x + 2, origin.y + 2}, {origin.x + size.x - 2, origin.y + size.y - 2},
+                      IM_COL32(255, 60, 40, alpha), 0.0F, 0, 4.0F);
+        const char* warning = "COLLISION";
+        const ImVec2 warningSize = ImGui::CalcTextSize(warning);
+        draw->AddText({center.x - warningSize.x * 0.5F, center.y + 30.0F},
+                      IM_COL32(255, 80, 60, alpha), warning);
+    }
+}
+
 // Panels ----------------------------------------------------------------------------------------------
 
 void GameLayer::drawViewport()
@@ -425,13 +560,19 @@ void GameLayer::drawViewport()
                      ImVec2(static_cast<float>(m_viewport.size.x),
                             static_cast<float>(m_viewport.size.y)));
     }
+    drawHud({origin.x, origin.y});
 
     // Entity under the mouse, for the status bar and the next click.
     m_hovered.reset();
     if (m_viewport.hovered) {
+        // The first visible thing under the mouse, unless its layer is locked
+        // (so clicks on the cockpit do not select what is behind it).
         const SceneLayers& layers = m_scene.layers();
         m_hovered = pickEntity(m_renderScene, m_camera, &m_ids, m_viewport.mouse,
-                               layers.visibleMask() & layers.pickableMask());
+                               layers.visibleMask());
+        if (m_hovered && (layers.pickableMask() & layerBit(m_scene.layerOf(*m_hovered))) == 0U) {
+            m_hovered.reset();
+        }
         if (m_hovered && !m_scene.registry().valid(*m_hovered)) {
             m_hovered.reset();
         }
@@ -472,7 +613,7 @@ void GameLayer::drawToolsPanel()
     } else {
         ImGui::TextWrapped("Click to select, drag to move, drag green handles to edit. "
                            "Ctrl+click: add child. Del: delete. Ctrl+D: duplicate. "
-                           "T: portal. Hold RMB + WASD/QE: fly.");
+                           "T: portal. C: cockpit / free camera.");
     }
     ImGui::Separator();
     color4Edit("Color 1", m_stroke.primary);
@@ -513,7 +654,7 @@ void GameLayer::drawRenderPanel()
             m_frozen = false;
         }
     }
-    ImGui::Checkbox("Cockpit HUD", &m_options.showHud);
+    ImGui::Checkbox("Adaptive (preview while moving)", &m_options.adaptive);
 
     auto& settings = m_options.tracer;
     enumCombo("Mode", settings.mode);
@@ -560,7 +701,12 @@ void GameLayer::drawStatusPanel()
     const Vec3 forward = m_camera.forward();
     ImGui::Text("Camera: (%.2f, %.2f, %.2f)", position.x, position.y, position.z);
     ImGui::Text("Forward: (%.2f, %.2f, %.2f)", forward.x, forward.y, forward.z);
-    ImGui::Text("Speed: %.2f", m_cameraController.speed());
+    if (m_viewMode == ViewMode::Pilot && m_ship.isValid()) {
+        const auto& ship = m_ship.get<ShipComponent>();
+        ImGui::Text("Ship speed: %.2f", glm::length(ship.velocity));
+    } else {
+        ImGui::Text("Camera speed: %.2f", m_cameraController.speed());
+    }
     ImGui::Separator();
     const Entity hovered = m_hovered ? m_scene.wrap(*m_hovered) : Entity{};
     ImGui::Text("Under mouse: %s", hovered ? hovered.name().c_str() : "None");
@@ -1084,15 +1230,27 @@ void GameLayer::drawMenuBar()
             e.add<MaterialComponent>();
         }
         if (ImGui::MenuItem("Portal", "T")) {
-            m_portals.createPortal(m_scene, m_camera);
+            m_portals.createPortal(m_scene, m_camera, kPortalLayer);
         }
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("View")) {
-        if (ImGui::MenuItem("Reset camera")) {
+        if (ImGui::MenuItem("Reset free camera")) {
             resetCamera();
+            setViewMode(ViewMode::Free);
         }
-        ImGui::MenuItem("Cockpit HUD", nullptr, &m_options.showHud);
+        ImGui::Separator();
+        if (ImGui::MenuItem("Pilot view", "C", m_viewMode == ViewMode::Pilot,
+                            m_ship.isValid())) {
+            setViewMode(ViewMode::Pilot);
+        }
+        if (ImGui::MenuItem("Free camera", "C", m_viewMode == ViewMode::Free)) {
+            setViewMode(ViewMode::Free);
+        }
+        ImGui::MenuItem("Show cockpit", nullptr, &m_scene.layers().layers[kCockpitLayer].visible);
+        if (ImGui::MenuItem("Respawn ship")) {
+            spawnShip();
+        }
         ImGui::EndMenu();
     }
 }

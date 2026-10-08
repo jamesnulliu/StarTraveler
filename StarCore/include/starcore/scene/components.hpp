@@ -47,6 +47,15 @@ struct TransformComponent
     }
 };
 
+/**
+ * @brief Runtime-only entity (e.g. the player's ship): neither it nor its
+ *        descendants are written to scene files.
+ */
+struct TransientComponent
+{
+    bool unused = false;  // EnTT's emplace returns void for empty types.
+};
+
 /** @brief Layer (0-7, see scene/layers.hpp); entities without one are on layer 0. */
 struct LayerComponent
 {

@@ -104,6 +104,27 @@ def test_tracer_is_deterministic_across_thread_counts():
     np.testing.assert_array_equal(images[0], images[1])
 
 
+def test_progressive_passes():
+    scene = sc.Scene()
+    ball = scene.create_entity("Ball")
+    ball.add(sc.Sphere(radius=2.0))
+    render_scene = sc.build_render_scene(scene)
+    camera = make_camera(64, 48)
+    tracer = sc.CpuPathTracer()
+    tracer.resize(64, 48)
+    settings = sc.PathTracerSettings()
+
+    tracer.render(render_scene, camera, settings, first_pass_stride=4)
+    image = tracer.image()
+    blocks = image.reshape(12, 4, 16, 4, 4)  # (block y, y in block, block x, x in block, rgba)
+    assert (blocks == blocks[:, :1, :, :1]).all()  # Every 4 x 4 block is uniform.
+    assert tracer.pass_stride == 2
+
+    frames = tracer.accumulated_frames
+    tracer.render(render_scene, camera, settings, time_budget_ms=300)
+    assert tracer.accumulated_frames > frames + 1  # Several passes fit the budget.
+
+
 def test_overlay_and_picking():
     scene = sc.Scene()
     line = scene.create_entity("Line")

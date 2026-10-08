@@ -19,6 +19,7 @@
 #include "editor/selection.hpp"
 #include "editor/tools.hpp"
 #include "gameplay/portals.hpp"
+#include "gameplay/ship.hpp"
 
 namespace startraveler
 {
@@ -38,20 +39,29 @@ struct RenderOptions
     bool liveRender = true;
     // false: draw the 2D overlay over the plain sky color (fast 2D mode).
     bool rayTracing = true;
-    bool showHud = true;  // Legacy cockpit dashboard.
+    // Preview shading while the view moves, the chosen mode once it is still.
+    bool adaptive = true;
     starcore::PathTracerSettings tracer{.fireflyClamp = 8.0F};
+};
+
+enum class ViewMode : std::uint8_t
+{
+    Pilot,  // From the ship's cockpit (default).
+    Free,   // Free-flying editor camera; the ship stays where it is.
 };
 
 /**
  * @brief The StarTraveler game/editor (port of the legacy XDrawBoard Layer):
- *        fly through a path-traced scene, draw 2D shapes with the classic
- *        raster algorithms, edit and group them, open portals.
+ *        fly a ship through a path-traced scene from its 3D cockpit, draw 2D
+ *        shapes with the classic raster algorithms, edit and group them, open
+ *        portals.
  */
 class GameLayer final : public starcore::Layer
 {
 public:
-    explicit GameLayer(std::filesystem::path scenePath,
-                       AutomationOptions automation = {});
+    /** @param assetRoot Directory with the game's models/ and scenes/. */
+    GameLayer(std::filesystem::path scenePath, std::filesystem::path assetRoot,
+              AutomationOptions automation = {});
     ~GameLayer() override;
 
     void onAttach() override;
@@ -74,6 +84,8 @@ private:
     void saveScene(const std::filesystem::path& path);
     void resetCamera();
     void onSceneReplaced();
+    void spawnShip();
+    void setViewMode(ViewMode mode);
 
     // Per frame.
     void buildDefaultLayoutIfNeeded();
@@ -82,6 +94,7 @@ private:
     void updateViewportSize(starcore::UVec2 size);
     void handleViewportInput();
     void composeFrame();
+    void drawHud(starcore::Vec2 origin);
     [[nodiscard]] auto makeContext() -> EditorContext;
     void setTool(ToolKind kind);
 
@@ -101,7 +114,13 @@ private:
 
     starcore::Scene m_scene;
     std::filesystem::path m_scenePath;
+    std::filesystem::path m_assetRoot;
     starcore::AssetLibrary m_assets;  // Models referenced by scenes, shared across loads.
+
+    ShipSystem m_ships;
+    starcore::Entity m_ship;
+    ViewMode m_viewMode = ViewMode::Pilot;
+    float m_collisionFlash = 0.0F;  // Seconds left of the collision indicator.
 
     starcore::Camera m_camera{45.0F, 0.1F, 1000.0F};
     starcore::FlyCameraController m_cameraController;
@@ -109,6 +128,8 @@ private:
 
     starcore::CpuPathTracer m_tracer;
     starcore::RenderScene m_renderScene;
+    starcore::Mat4 m_lastView{0.0F};
+    bool m_previewing = false;  // Adaptive rendering is showing the preview.
     std::uint64_t m_renderSceneSourceVersion = ~0ULL;
     RenderOptions m_options;
     bool m_frozen = false;    // Keep the displayed frame (seed fill paints on it).

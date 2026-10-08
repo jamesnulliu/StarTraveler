@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <chrono>
 #include <optional>
 
 #include <glm/geometric.hpp>
@@ -23,7 +24,7 @@ constexpr float kSeeThrough = 0.5F;
 
 auto maxComponent(Vec3 v) -> float
 {
-    return std::max({v.r, v.g, v.b});
+    return std::max(v.r, std::max(v.g, v.b));  // Not std::max({...}): hot path.
 }
 
 /** @brief Ray origin just off the surface, on the side `direction` leaves to. */
@@ -416,7 +417,7 @@ auto CpuPathTracer::needsReset(const RenderScene& scene, const Camera& camera,
 }
 
 void CpuPathTracer::render(const RenderScene& scene, const Camera& camera,
-                           const PathTracerSettings& settings)
+                           const PathTracerSettings& settings, const RenderControl& control)
 {
     const std::uint32_t width = m_image.width();
     const std::uint32_t height = m_image.height();
@@ -425,6 +426,9 @@ void CpuPathTracer::render(const RenderScene& scene, const Camera& camera,
     }
     if (needsReset(scene, camera, settings)) {
         m_frameIndex = 0;
+        m_nextTile = 0;
+        m_passStride = std::clamp(control.firstPassStride, 1U, kTileSize);
+        m_idStride = 0;
         m_accumulation.fill(Vec4(0.0F));
     }
     m_lastSceneVersion = scene.sceneVersion;
@@ -432,28 +436,71 @@ void CpuPathTracer::render(const RenderScene& scene, const Camera& camera,
     m_lastProjection = camera.projection();
     m_lastSettings = settings;
 
-    const std::uint32_t frame = m_frameIndex++;
-    const bool writeIds = frame == 0;
+    const std::uint32_t tileCount = ((width + kTileSize - 1) / kTileSize) *
+                                    ((height + kTileSize - 1) / kTileSize);
+    const std::uint32_t batch = std::max(1U, m_executor.threadCount() * 2U);
+    const float budget = control.timeBudgetMs;
+    const auto start = std::chrono::steady_clock::now();
+    auto timeLeft = [&] {
+        return budget > 0.0F &&
+               std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - start)
+                       .count() < budget;
+    };
+    do {
+        // Without a budget, and for the first pass after a reset (no stale
+        // tiles from an old view), the whole pass is rendered.
+        const std::uint32_t remaining = tileCount - m_nextTile;
+        const std::uint32_t count =
+            budget <= 0.0F || m_frameIndex == 0 ? remaining : std::min(remaining, batch);
+        renderTiles(scene, camera, settings, m_nextTile, count);
+        m_nextTile += count;
+        if (m_nextTile == tileCount) {
+            m_nextTile = 0;
+            ++m_frameIndex;
+            if (m_idStride == 0 || m_passStride < m_idStride) {
+                m_idStride = m_passStride;
+            }
+            m_passStride = std::max(1U, m_passStride / 2U);
+            if (budget <= 0.0F) {
+                return;  // One pass per call.
+            }
+        }
+    } while (timeLeft());
+}
+
+void CpuPathTracer::renderTiles(const RenderScene& scene, const Camera& camera,
+                                const PathTracerSettings& settings, std::uint32_t firstTile,
+                                std::uint32_t tileCount)
+{
+    const std::uint32_t width = m_image.width();
+    const std::uint32_t height = m_image.height();
+    const std::uint32_t tilesX = (width + kTileSize - 1) / kTileSize;
+    const std::uint32_t frame = m_frameIndex;
+    const std::uint32_t stride = m_passStride;
+    // Ids are written by the first pass and again once the resolution is finer.
+    const bool writeIds = m_idStride == 0 || stride < m_idStride;
     const bool preview = settings.mode == RenderMode::Preview;
     const std::uint32_t samples = preview ? 1U : std::max(1U, settings.samplesPerPixel);
-    const std::uint32_t tilesX = (width + kTileSize - 1) / kTileSize;
-    const std::uint32_t tilesY = (height + kTileSize - 1) / kTileSize;
 
-    m_executor.parallelFor(tilesX * tilesY, [&](std::size_t tile) {
-        const std::uint32_t x0 = static_cast<std::uint32_t>(tile % tilesX) * kTileSize;
-        const std::uint32_t y0 = static_cast<std::uint32_t>(tile / tilesX) * kTileSize;
+    m_executor.parallelFor(tileCount, [&](std::size_t index) {
+        const auto tile = static_cast<std::uint32_t>(firstTile + index);
+        const std::uint32_t x0 = (tile % tilesX) * kTileSize;
+        const std::uint32_t y0 = (tile / tilesX) * kTileSize;
         const std::uint32_t x1 = std::min(width, x0 + kTileSize);
         const std::uint32_t y1 = std::min(height, y0 + kTileSize);
 
-        for (std::uint32_t y = y0; y < y1; ++y) {
-            for (std::uint32_t x = x0; x < x1; ++x) {
-                Rng rng = Rng::forPixel(x, y, frame, settings.seed);
+        // One sample per stride x stride block, written to all its pixels.
+        for (std::uint32_t by = y0; by < y1; by += stride) {
+            for (std::uint32_t bx = x0; bx < x1; bx += stride) {
+                const std::uint32_t bw = std::min(stride, x1 - bx);
+                const std::uint32_t bh = std::min(stride, y1 - by);
+                Rng rng = Rng::forPixel(bx, by, frame, settings.seed);
                 Vec3 color{0.0F};
                 std::uint32_t entityId = kNoEntityId;
                 for (std::uint32_t s = 0; s < samples; ++s) {
-                    // Jittered sub-pixel position: anti-aliasing for free.
-                    const Vec2 pixel{static_cast<float>(x) + rng.nextFloat(),
-                                     static_cast<float>(y) + rng.nextFloat()};
+                    // Jittered position in the block: anti-aliasing for free.
+                    const Vec2 pixel{static_cast<float>(bx) + rng.nextFloat() * static_cast<float>(bw),
+                                     static_cast<float>(by) + rng.nextFloat() * static_cast<float>(bh)};
                     std::uint32_t* idOut = s == 0 && writeIds ? &entityId : nullptr;
                     const Ray ray = camera.generateRay(pixel);
                     color += preview ? shadePreview(scene, ray, settings, idOut)
@@ -461,20 +508,23 @@ void CpuPathTracer::render(const RenderScene& scene, const Camera& camera,
                 }
                 color /= static_cast<float>(samples);
 
-                Vec4& accumulated = m_accumulation.at(x, y);
-                accumulated += Vec4(color, 1.0F);
-                Vec3 display = Vec3(accumulated) / accumulated.a;
-                display = toneMap(display * settings.exposure, settings.toneMapper);
-                if (settings.srgbOutput) {
-                    display = linearToSrgb(display);
-                }
-                m_image.at(x, y) = packRgba8(Vec4(display, 1.0F));
-                if (writeIds) {
-                    m_entityIds.at(x, y) = entityId;
+                for (std::uint32_t y = by; y < by + bh; ++y) {
+                    for (std::uint32_t x = bx; x < bx + bw; ++x) {
+                        Vec4& accumulated = m_accumulation.at(x, y);
+                        accumulated += Vec4(color, 1.0F);
+                        Vec3 display = Vec3(accumulated) / accumulated.a;
+                        display = toneMap(display * settings.exposure, settings.toneMapper);
+                        if (settings.srgbOutput) {
+                            display = linearToSrgb(display);
+                        }
+                        m_image.at(x, y) = packRgba8(Vec4(display, 1.0F));
+                        if (writeIds) {
+                            m_entityIds.at(x, y) = entityId;
+                        }
+                    }
                 }
             }
         }
     });
 }
-
 }  // namespace starcore

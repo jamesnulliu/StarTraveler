@@ -21,7 +21,8 @@ def test_make_mesh_accepts_array_likes_and_validates():
 
     grid = np.stack(np.meshgrid(np.arange(3.0), np.arange(3.0), indexing="ij"), -1).reshape(-1, 2)
     positions = np.column_stack([grid, np.zeros(9)])
-    quads = [(i * 3 + j, i * 3 + j + 3, i * 3 + j + 4, i * 3 + j + 1) for i in range(2) for j in range(2)]
+    corners = [i * 3 + j for i in range(2) for j in range(2)]
+    quads = [(k, k + 3, k + 4, k + 1) for k in corners]
     triangles = np.array([(a, b, c) for a, b, c, _ in quads] + [(a, c, d) for a, _, c, d in quads])
     normals = np.tile([0.0, 0.0, 2.0], (9, 1))
     mesh = sc.make_mesh(positions, triangles, normals)
@@ -44,9 +45,7 @@ def test_primitives_and_builders():
 
     builder = sc.MeshBuilder()
     builder.append(primitives.box((0.5, 0.5, 0.5)))
-    builder.append(
-        primitives.cylinder(0.25, 2.0, 16), sc.compose_transform(translation=(3, 0, 0))
-    )
+    builder.append(primitives.cylinder(0.25, 2.0, 16), sc.compose_transform(translation=(3, 0, 0)))
     combined = builder.build()
     assert combined.triangle_count == 12 + primitives.cylinder(0.25, 2.0, 16).triangle_count
     assert combined.bounds[1] == pytest.approx((3.25, 1.0, 0.5))

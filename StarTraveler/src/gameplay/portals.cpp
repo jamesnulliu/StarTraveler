@@ -27,7 +27,8 @@ auto makeQuad(Vec2 size) -> MeshComponent
 
 }  // namespace
 
-auto PortalSystem::createPortal(Scene& scene, const Camera& camera) -> Entity
+auto PortalSystem::createPortal(Scene& scene, const Camera& camera, std::uint32_t layer)
+    -> Entity
 {
     // Newest unlinked portal (EnTT iterates newest first).
     Entity partner;
@@ -52,6 +53,7 @@ auto PortalSystem::createPortal(Scene& scene, const Camera& camera) -> Entity
         .albedo = Vec3(0.0F),
         .emissionColor = partner ? kSecondColor : kFirstColor,
         .emissionPower = 4.0F});
+    scene.setLayer(portal, layer);
 
     if (partner) {
         partner.patch<PortalComponent>(
@@ -63,23 +65,19 @@ auto PortalSystem::createPortal(Scene& scene, const Camera& camera) -> Entity
     return portal;
 }
 
-auto PortalSystem::update(Scene& scene, Camera& camera) -> bool
+auto PortalSystem::findCrossing(Scene& scene, Vec3 from, Vec3 to) -> std::optional<PortalCrossing>
 {
-    const Vec3 current = camera.position();
-    const auto previous = std::exchange(m_lastCameraPosition, current);
-    if (!previous.has_value() || *previous == current) {
-        return false;
+    if (from == to) {
+        return std::nullopt;
     }
-
     for (const auto [handle, portal] : scene.registry().view<PortalComponent>().each()) {
         Entity target = scene.findEntity(portal.linkedPortal);
         if (portal.linkedPortal.value() == 0 || !target) {
             continue;
         }
-        const Mat4 sourceWorld = scene.worldTransform(handle);
-        const Mat4 toLocal = glm::inverse(sourceWorld);
-        const Vec3 a = Vec3(toLocal * Vec4(*previous, 1.0F));
-        const Vec3 b = Vec3(toLocal * Vec4(current, 1.0F));
+        const Mat4 toLocal = glm::inverse(scene.worldTransform(handle));
+        const Vec3 a = Vec3(toLocal * Vec4(from, 1.0F));
+        const Vec3 b = Vec3(toLocal * Vec4(to, 1.0F));
         if ((a.z > 0.0F) == (b.z > 0.0F)) {
             continue;  // Did not cross the portal plane.
         }
@@ -88,20 +86,31 @@ auto PortalSystem::update(Scene& scene, Camera& camera) -> bool
             std::abs(crossing.y) > portal.size.y * 0.5F) {
             continue;  // Crossed the plane outside the rectangle.
         }
-
-        // source local -> (turned around) target local -> world.
+        // Source local -> (turned around) target local -> world.
         const Mat4 turnAround = glm::mat4_cast(glm::angleAxis(kPi, Vec3{0, 1, 0}));
-        const Mat4 teleport = target.worldTransform() * turnAround * toLocal;
-        const Vec3 newPosition = Vec3(teleport * Vec4(current, 1.0F));
-        const Vec3 newForward = glm::normalize(Mat3(teleport) * camera.forward());
-
-        camera.setPosition(newPosition);
-        camera.lookAt(newPosition + newForward);
-        m_lastCameraPosition = newPosition;
-        SC_INFO("Teleported through {}", scene.wrap(handle).name());
-        return true;
+        return PortalCrossing{target.worldTransform() * turnAround * toLocal, handle};
     }
-    return false;
+    return std::nullopt;
+}
+
+auto PortalSystem::update(Scene& scene, Camera& camera) -> bool
+{
+    const Vec3 current = camera.position();
+    const auto previous = std::exchange(m_lastCameraPosition, current);
+    if (!previous.has_value()) {
+        return false;
+    }
+    const auto crossing = findCrossing(scene, *previous, current);
+    if (!crossing) {
+        return false;
+    }
+    const Vec3 newPosition = Vec3(crossing->teleport * Vec4(current, 1.0F));
+    const Vec3 newForward = glm::normalize(Mat3(crossing->teleport) * camera.forward());
+    camera.setPosition(newPosition);
+    camera.lookAt(newPosition + newForward);
+    m_lastCameraPosition = newPosition;
+    SC_INFO("Teleported through {}", scene.wrap(crossing->portal).name());
+    return true;
 }
 
 }  // namespace startraveler

@@ -411,8 +411,20 @@ auto serializeScene(const Scene& scene, const std::filesystem::path& baseDirecto
     // order is only cosmetic).
     std::vector<entt::entity> ordered;
     const auto& registry = scene.registry();
+    auto transient = [&](entt::entity entity) {
+        for (auto current = entity; registry.valid(current);) {
+            if (registry.all_of<TransientComponent>(current)) {
+                return true;
+            }
+            const auto* hierarchy = registry.try_get<HierarchyComponent>(current);
+            current = hierarchy != nullptr ? hierarchy->parent : entt::null;
+        }
+        return false;
+    };
     for (const auto entity : registry.view<const IdComponent>()) {
-        ordered.push_back(entity);
+        if (!transient(entity)) {
+            ordered.push_back(entity);
+        }
     }
     std::ranges::reverse(ordered);  // EnTT iterates newest first.
 

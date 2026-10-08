@@ -15,26 +15,25 @@ namespace
 {
 
 /**
- * @brief Default scene: next to the executable (assets are copied there by
- *        the build), in the working directory, or in the source tree.
+ * @brief The game's asset directory: next to the executable (the build copies
+ *        it there), in the working directory, or in the source tree.
  */
-auto findDefaultScene(const char* argv0) -> std::filesystem::path
+auto findAssetRoot(const char* argv0) -> std::filesystem::path
 {
-    const std::filesystem::path relative = "assets/scenes/legacy_demo.yaml";
     std::vector<std::filesystem::path> candidates{
-        std::filesystem::absolute(argv0).parent_path() / relative,
-        std::filesystem::current_path() / relative,
+        std::filesystem::absolute(argv0).parent_path() / "assets",
+        std::filesystem::current_path() / "assets",
 #ifdef STARTRAVELER_SOURCE_ASSET_DIR
-        std::filesystem::path(STARTRAVELER_SOURCE_ASSET_DIR) / "scenes/legacy_demo.yaml",
+        std::filesystem::path(STARTRAVELER_SOURCE_ASSET_DIR),
 #endif
     };
     for (const auto& candidate : candidates) {
         std::error_code error;
-        if (std::filesystem::exists(candidate, error)) {
+        if (std::filesystem::exists(candidate / "models" / "cockpit.glb", error)) {
             return candidate;
         }
     }
-    return {};
+    return candidates.front();
 }
 
 }  // namespace
@@ -59,8 +58,9 @@ auto main(int argc, char** argv) -> int
 
     starcore::log::init({.level = spdlog::level::debug});
     SC_INFO("StarTraveler (StarCore {})", starcore::kVersionString);
+    const std::filesystem::path assetRoot = findAssetRoot(argv[0]);
     if (scenePath.empty()) {
-        scenePath = findDefaultScene(argv[0]);
+        scenePath = assetRoot / "scenes" / "legacy_demo.yaml";
     }
 
     int exitCode = EXIT_SUCCESS;
@@ -71,7 +71,8 @@ auto main(int argc, char** argv) -> int
             .enableValidation = validation,
             .enableViewports = !noViewports,
         });
-        auto& game = application.pushLayer<startraveler::GameLayer>(scenePath, automation);
+        auto& game =
+            application.pushLayer<startraveler::GameLayer>(scenePath, assetRoot, automation);
         application.setMenubarCallback([&game] { game.drawMenuBar(); });
         application.run();
     } catch (const std::exception& error) {

@@ -41,12 +41,13 @@ static_assert(sizeof(BvhNode) == 32, "GPU-friendly node size");
                                        const Aabb& box, float tMin, float tMax)
     -> float
 {
+    // Hot path: plain comparisons (std::max({...}) is not optimized by every compiler).
     const Vec3 t0 = (box.min - ray.origin) * inverseDirection;
     const Vec3 t1 = (box.max - ray.origin) * inverseDirection;
     const Vec3 tNear = glm::min(t0, t1);
     const Vec3 tFar = glm::max(t0, t1);
-    const float entry = std::max({tMin, tNear.x, tNear.y, tNear.z});
-    const float exit = std::min({tMax, tFar.x, tFar.y, tFar.z});
+    const float entry = std::max(std::max(tMin, tNear.x), std::max(tNear.y, tNear.z));
+    const float exit = std::min(std::min(tMax, tFar.x), std::min(tFar.y, tFar.z));
     return entry <= exit ? entry : kInfinity;
 }
 

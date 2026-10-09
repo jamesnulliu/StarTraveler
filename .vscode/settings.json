@@ -1,8 +1,8 @@
 {
-    // C/C++ language features come from clangd (`scoop install llvm`); the Microsoft C/C++
-    // extension is kept for debugging only.
+    // C/C++ language features come from clangd; the Microsoft C/C++ extension is kept for
+    // debugging only. Which clangd is a per-machine user setting ("clangd.path", default: the
+    // one on PATH), so it is not set here.
     "C_Cpp.intelliSenseEngine": "disabled",
-    "clangd.path": "clangd",
     "clangd.arguments": [
         // The Ninja build writes compile_commands.json (`cmake --preset mingw`, or the task
         // "CMake: configure mingw"); the Visual Studio generator writes none.

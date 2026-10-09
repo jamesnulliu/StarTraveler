@@ -5,6 +5,8 @@
 //   starcore-render assets/scenes/legacy_demo.yaml -o renders/demo.png -f 1024 --gpu
 //   starcore-render assets/scenes/legacy_demo.yaml -o renders/demo.png -f 30 --hybrid
 //       --move 0 0 -0.05   (the hybrid pipeline, the camera moving every frame)
+//   starcore-render assets/scenes/legacy_demo.yaml -o renders/demo.png -f 30 --hybrid
+//       --move-entity "Red Sun" 0.05 0 0   (an entity moving every frame)
 //   starcore-render assets/scenes/legacy_demo.yaml -o renders/demo.png -f 16 --raster
 
 #include <chrono>
@@ -21,6 +23,8 @@
 #include <starcore/render/camera.hpp>
 #include <starcore/render/overlay.hpp>
 #include <starcore/render/path_tracer.hpp>
+#include <starcore/scene/components.hpp>
+#include <starcore/scene/entity.hpp>
 #include <starcore/scene/scene.hpp>
 #include <starcore/scene/serializer.hpp>
 
@@ -40,6 +44,8 @@ struct GpuOptions
     bool spatial = true;
     bool temporal = true;
     starcore::Vec3 move{0.0F};  // Camera translation per frame.
+    starcore::Entity movedEntity;
+    starcore::Vec3 entityMove{0.0F};  // Its translation per frame.
     bool validation = false;
     // Effects (EffectSettings).
     bool bloom = false;
@@ -48,7 +54,7 @@ struct GpuOptions
 };
 
 /** @brief Render `frames` frames on the GPU; nullopt (logged) if it cannot. */
-auto renderOnGpu([[maybe_unused]] const starcore::RenderScene& scene,
+auto renderOnGpu([[maybe_unused]] starcore::Scene& scene,
                  [[maybe_unused]] starcore::Camera camera,
                  [[maybe_unused]] const starcore::PathTracerSettings& settings,
                  [[maybe_unused]] std::uint32_t frames,
@@ -88,13 +94,19 @@ auto renderOnGpu([[maybe_unused]] const starcore::RenderScene& scene,
         return std::nullopt;
     }
     (*tracer)->resize(camera.viewportSize().x, camera.viewportSize().y);
+    // Incremental: moving an entity reprojects, as in a game.
+    starcore::RenderSceneBuilder builder;
     // The first frame builds the acceleration structures.
-    (*tracer)->render(scene, camera, settings, options);
+    (*tracer)->render(builder.update(scene), camera, settings, options);
     (*tracer)->waitIdle();
     const auto start = std::chrono::steady_clock::now();
     for (std::uint32_t i = 1; i < frames; ++i) {
         camera.setPosition(camera.position() + gpuOptions.move);
-        (*tracer)->render(scene, camera, settings, options);
+        if (gpuOptions.movedEntity) {
+            gpuOptions.movedEntity.patch<starcore::TransformComponent>(
+                [&](starcore::TransformComponent& t) { t.translation += gpuOptions.entityMove; });
+        }
+        (*tracer)->render(builder.update(scene), camera, settings, options);
     }
     starcore::ColorImage image = (*tracer)->readImage();
     const std::chrono::duration<double, std::milli> elapsed =
@@ -128,6 +140,7 @@ auto main(int argc, char** argv) -> int
     bool noSpatial = false;
     bool noTemporal = false;
     std::vector<float> move;
+    std::vector<std::string> moveEntity;
     starcore::PathTracerSettings settings;
     std::vector<float> cameraPosition{0.0F, 0.0F, 10.0F};
     std::vector<float> cameraLookAt;
@@ -140,6 +153,8 @@ auto main(int argc, char** argv) -> int
     app.add_option("-s,--spp", settings.samplesPerPixel, "Samples per pixel per frame");
     app.add_option("-b,--bounces", settings.maxBounces, "Max path segments");
     app.add_option("--seed", settings.seed, "Random seed");
+    app.add_option("--firefly-clamp", settings.fireflyClamp,
+                   "Clamp indirect light to this (0 = off; the game uses 8)");
     app.add_option("-j,--threads", threads, "Worker threads (0 = all)");
     app.add_flag("--gpu", gpu, "Path trace on the GPU (Vulkan ray queries)");
     app.add_flag("--hybrid", gpuOptions.hybrid,
@@ -152,6 +167,9 @@ auto main(int argc, char** argv) -> int
     app.add_flag("--no-spatial", noSpatial, "Hybrid: no spatial filter");
     app.add_flag("--no-temporal", noTemporal, "Hybrid: no reprojection");
     app.add_option("--move", move, "GPU: camera translation per frame x y z")->expected(3);
+    app.add_option("--move-entity", moveEntity,
+                   "GPU: translation per frame of an entity (by name): name x y z")
+        ->expected(4);
     app.add_flag("--validation", gpuOptions.validation, "GPU: Vulkan validation layers");
     app.add_flag("--bloom", gpuOptions.bloom, "GPU: glow around bright light");
     app.add_flag("--motion-blur", gpuOptions.motionBlur,
@@ -173,6 +191,15 @@ auto main(int argc, char** argv) -> int
         SC_ERROR("{}", loaded.error());
         return EXIT_FAILURE;
     }
+    if (moveEntity.size() == 4) {
+        gpuOptions.movedEntity = scene.findEntityByName(moveEntity[0]);
+        if (!gpuOptions.movedEntity) {
+            SC_ERROR("No entity named \"{}\"", moveEntity[0]);
+            return EXIT_FAILURE;
+        }
+        gpuOptions.entityMove = {std::stof(moveEntity[1]), std::stof(moveEntity[2]),
+                                 std::stof(moveEntity[3])};
+    }
 
     starcore::Camera camera;
     camera.setViewport(width, height);
@@ -188,7 +215,7 @@ auto main(int argc, char** argv) -> int
     const auto start = std::chrono::steady_clock::now();
     starcore::ColorImage image;
     if (gpu) {
-        auto rendered = renderOnGpu(renderScene, camera, settings, frames, gpuOptions);
+        auto rendered = renderOnGpu(scene, camera, settings, frames, gpuOptions);
         if (!rendered) {
             return EXIT_FAILURE;
         }

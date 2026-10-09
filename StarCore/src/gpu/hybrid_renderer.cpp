@@ -13,6 +13,7 @@ namespace
 
 #include "shaders/atrous.comp.spv.h"
 #include "shaders/composite.comp.spv.h"
+#include "shaders/gradient.comp.spv.h"
 #include "shaders/hybrid_trace.comp.spv.h"
 #include "shaders/temporal.comp.spv.h"
 
@@ -25,13 +26,28 @@ constexpr VkDescriptorType kTlas = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR
 constexpr VkDescriptorType kTraceBindings[] = {
     kTlas,  kUniform, kBuffer, kImage, kBuffer, kBuffer, kBuffer, kImage, kImage, kImage,
     kImage, kImage,   kImage,  kImage, kImage,  kImage,  kImage,  kImage, kImage, kBuffer,
-    kImage, kImage,   kImage};
+    kImage, kImage,   kImage,  kImage, kImage,  kImage,  kImage,  kImage};
 constexpr VkDescriptorType kTemporalBindings[] = {
     kBuffer, kUniform, kBuffer, kImage, kBuffer, kBuffer, kBuffer, kImage, kImage, kImage, kImage,
     kImage,  kImage,   kImage,  kImage, kImage,  kImage,  kImage,  kImage, kImage, kImage, kImage,
-    kImage,  kImage};
+    kImage,  kImage,   kImage};
 constexpr VkDescriptorType kAtrousBindings[] = {kBuffer, kUniform, kBuffer, kImage, kBuffer,
                                                 kBuffer, kBuffer,  kImage,  kImage, kImage};
+constexpr VkDescriptorType kGradientBindings[] = {kBuffer, kUniform, kBuffer, kImage,
+                                                  kBuffer, kBuffer,  kBuffer, kImage};
+
+/** @brief Stages of hybrid_trace.comp (push constant). */
+enum class TraceStage : std::uint32_t
+{
+    Samples = 0,      // Per pixel: the primary layer's paths and guides.
+    Reflections = 1,  // Per pixel: the reflected paths.
+    Gradients = 2,    // Per stratum: the temporal gradients.
+};
+// Pixels per side of a temporal gradient's stratum (kGradientStratum in hybrid.glsl).
+constexpr std::uint32_t kGradientStratum = 3;
+// Filter iterations of the gradients (radius 3 strata): one pixel per stratum
+// and frame has one, of one path.
+constexpr std::uint32_t kGradientIterations = 2;
 
 /** @brief The layers (kLayer* in hybrid.glsl), each reprojected and filtered on its own. */
 enum class Layer : std::uint32_t
@@ -85,6 +101,9 @@ struct HybridRenderer::Images
     std::array<vulkan::Image, 2> primaryAlbedo;
     std::array<vulkan::Image, 2> primaryEmission;
     std::array<vulkan::Image, 2> primaryMoments;
+    // What the primary layer's samples started from (the gradients' previous frame).
+    std::array<vulkan::Image, 2> primaryHits;
+    std::array<vulkan::Image, 2> pathLuminance;
     std::array<vulkan::Image, 2> glassColor;
     std::array<vulkan::Image, 2> glassMoments;
     std::array<vulkan::Image, 2> specularColor;
@@ -94,6 +113,8 @@ struct HybridRenderer::Images
     std::array<vulkan::Image, 2> primaryFilter;
     std::array<vulkan::Image, 2> glassFilter;
     std::array<vulkan::Image, 2> specularFilter;
+    // Temporal gradients, one per stratum: the trace's ([0]) and the filter's ping-pong.
+    std::array<vulkan::Image, 2> gradients;
 
     template <typename F>
     void forEach(F&& function)
@@ -105,8 +126,9 @@ struct HybridRenderer::Images
         }
         for (auto* pair :
              {&primaryGuide, &glassGuide, &primaryColor, &primaryAlbedo, &primaryEmission,
-              &primaryMoments, &glassColor, &glassMoments, &specularColor, &specularMoments,
-              &reflectionGuide, &primaryFilter, &glassFilter, &specularFilter}) {
+              &primaryMoments, &primaryHits, &pathLuminance, &glassColor, &glassMoments,
+              &specularColor, &specularMoments, &reflectionGuide, &primaryFilter, &glassFilter,
+              &specularFilter, &gradients}) {
             function((*pair)[0]);
             function((*pair)[1]);
         }
@@ -145,6 +167,7 @@ HybridRenderer::HybridRenderer(vulkan::Context& context)
       m_trace(context, hybrid_trace_comp_spv, kTraceBindings, sizeof(std::uint32_t)),
       m_temporal(context, temporal_comp_spv, kTemporalBindings, sizeof(std::uint32_t)),
       m_atrous(context, atrous_comp_spv, kAtrousBindings, sizeof(AtrousPass)),
+      m_gradient(context, gradient_comp_spv, kGradientBindings, sizeof(std::int32_t)),
       m_composite(context, composite_comp_spv, kCompositeBindings)
 {
 }
@@ -183,6 +206,8 @@ void HybridRenderer::resize(std::uint32_t width, std::uint32_t height)
         images->primaryAlbedo[i] = storage(VK_FORMAT_R32G32B32A32_SFLOAT);
         images->primaryEmission[i] = storage(VK_FORMAT_R16G16B16A16_SFLOAT);
         images->primaryMoments[i] = storage(VK_FORMAT_R32G32_SFLOAT);
+        images->primaryHits[i] = storage(VK_FORMAT_R32G32_UINT);
+        images->pathLuminance[i] = storage(VK_FORMAT_R32_SFLOAT);
         images->glassColor[i] = storage(VK_FORMAT_R32G32B32A32_SFLOAT);
         images->glassMoments[i] = storage(VK_FORMAT_R32G32_SFLOAT);
         images->specularColor[i] = storage(VK_FORMAT_R32G32B32A32_SFLOAT);
@@ -191,6 +216,10 @@ void HybridRenderer::resize(std::uint32_t width, std::uint32_t height)
         images->primaryFilter[i] = storage(VK_FORMAT_R16G16B16A16_SFLOAT);
         images->glassFilter[i] = storage(VK_FORMAT_R16G16B16A16_SFLOAT);
         images->specularFilter[i] = storage(VK_FORMAT_R16G16B16A16_SFLOAT);
+        images->gradients[i] = vulkan::Image(
+            *m_context, (width + kGradientStratum - 1) / kGradientStratum,
+            (height + kGradientStratum - 1) / kGradientStratum, VK_FORMAT_R32G32B32A32_SFLOAT,
+            VK_IMAGE_USAGE_STORAGE_BIT);
     }
 
     // GENERAL from now on. The contents are undefined until the first frame,
@@ -269,6 +298,8 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
 
     const std::uint32_t groupsX = (width + kWorkgroupSize - 1) / kWorkgroupSize;
     const std::uint32_t groupsY = (height + kWorkgroupSize - 1) / kWorkgroupSize;
+    // The previous frame's samples are reused, and the lighting may have changed.
+    const bool moving = !frame.reset && !frame.still;
 
     // 2. Trace ------------------------------------------------------------------------------------
     if (frame.queryPool != VK_NULL_HANDLE) {
@@ -299,28 +330,63 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
             .storageBuffer(19, scene.previousTransformBuffer())
             .storageImage(20, images.noisySpecular.view())
             .storageImage(21, images.reflectionMotion.view())
-            .storageImage(22, images.reflectionGuide[current].view());
+            .storageImage(22, images.reflectionGuide[current].view())
+            .storageImage(23, images.primaryHits[previous].view())
+            .storageImage(24, images.primaryHits[current].view())
+            .storageImage(25, images.pathLuminance[previous].view())
+            .storageImage(26, images.pathLuminance[current].view())
+            .storageImage(27, images.gradients[0].view());
         m_trace.bind(commandBuffer);
         m_trace.pushDescriptors(commandBuffer, writes.writes());
         // The samples per pixel (timed), then the reflected paths: one per pixel and
         // layer, a fixed cost like the other passes.
-        for (const std::uint32_t reflections : {0U, 1U}) {
-            m_trace.pushConstants(commandBuffer, &reflections, sizeof(reflections));
+        for (const TraceStage stage : {TraceStage::Samples, TraceStage::Reflections}) {
+            m_trace.pushConstants(commandBuffer, &stage, sizeof(stage));
             vkCmdDispatch(commandBuffer, groupsX, groupsY, 1);
-            if (reflections == 0 && frame.queryPool != VK_NULL_HANDLE) {
+            if (stage == TraceStage::Samples && frame.queryPool != VK_NULL_HANDLE) {
                 vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
                                     frame.queryPool, frame.traceQuery + 1);
             }
         }
+        // The temporal gradients, while things move (still, the lighting is what it was).
+        if (moving) {
+            const TraceStage stage = TraceStage::Gradients;
+            m_trace.pushConstants(commandBuffer, &stage, sizeof(stage));
+            vkCmdDispatch(commandBuffer, (images.gradients[0].width() + kWorkgroupSize - 1) /
+                                             kWorkgroupSize,
+                          (images.gradients[0].height() + kWorkgroupSize - 1) / kWorkgroupSize, 1);
+        }
     }
     computeBarrier(commandBuffer);
+
+    // Index of the filtered gradients.
+    std::uint32_t gradients = 0;
+    if (moving) {
+        m_gradient.bind(commandBuffer);
+        for (std::uint32_t i = 0; i < kGradientIterations; ++i) {
+            const auto step = static_cast<std::int32_t>(1U << i);
+            vulkan::DescriptorWrites writes;
+            writes.uniformBuffer(1, uniformBuffer.handle())
+                .storageImage(3, images.gradients[gradients].view())
+                .storageImage(7, images.gradients[1 - gradients].view());
+            m_gradient.pushDescriptors(commandBuffer, writes.writes());
+            m_gradient.pushConstants(commandBuffer, &step, sizeof(step));
+            vkCmdDispatch(commandBuffer,
+                          (images.gradients[0].width() + kWorkgroupSize - 1) / kWorkgroupSize,
+                          (images.gradients[0].height() + kWorkgroupSize - 1) / kWorkgroupSize,
+                          1);
+            computeBarrier(commandBuffer);
+            gradients = 1 - gradients;
+        }
+    }
 
     // 3. Temporal ---------------------------------------------------------------------------------
     m_temporal.bind(commandBuffer);
     for (const Layer layer : kLayers) {
         const Images::LayerImages layerImages = images.layer(layer);
-        // Only the primary layer has albedo and emission: its images are bound, unused, for
-        // the others (a barrier between the layers all the same: they count as used).
+        // Only the primary layer has albedo, emission and gradients: their images are bound,
+        // unused, for the others (a barrier between the layers all the same: they count as
+        // used). The gradients only while moving (unused still).
         vulkan::DescriptorWrites writes;
         writes.uniformBuffer(1, uniformBuffer.handle())
             .storageImage(3, (*layerImages.guide)[current].view())
@@ -340,7 +406,8 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
             .storageImage(20, (*layerImages.filter)[0].view())
             .storageImage(21, images.reflectionMotion.view())
             .storageImage(22, images.reflectionGuide[previous].view())
-            .storageImage(23, images.reflectionGuide[current].view());
+            .storageImage(23, images.reflectionGuide[current].view())
+            .storageImage(24, images.gradients[gradients].view());
         m_temporal.pushDescriptors(commandBuffer, writes.writes());
         m_temporal.pushConstants(commandBuffer, &layer, sizeof(layer));
         vkCmdDispatch(commandBuffer, groupsX, groupsY, 1);

@@ -6,7 +6,8 @@
 //   2. trace (hybrid_trace.comp): rebuild the hits of both from those ids,
 //      write their guides and motion vectors, trace paths from them into
 //      three layers: the primary surfaces' lighting, what they reflect
-//      (specular) and what the panes reflect (glass);
+//      (specular) and what the panes reflect (glass); while things move, the
+//      temporal gradients of the lighting (filtered by gradient.comp);
 //   3. temporal (temporal.comp, per layer): reproject and accumulate;
 //   4. a-trous (atrous.comp): the SVGF spatial filter, a few iterations;
 //   5. composite (composite.comp): lighting x albedo + emission + specular +
@@ -71,6 +72,7 @@ private:
     vulkan::ComputePipeline m_trace;
     vulkan::ComputePipeline m_temporal;
     vulkan::ComputePipeline m_atrous;
+    vulkan::ComputePipeline m_gradient;
     vulkan::ComputePipeline m_composite;
     std::array<vulkan::Buffer, kFramesInFlight> m_uniforms;
     std::unique_ptr<Images> m_images;

@@ -6,17 +6,17 @@
 // The history holds means weighted by sample count (rgb, a = samples). While
 // nothing moves the count is unbounded: the means converge like the reference
 // accumulation. While things move it is capped (fewer samples for what smooth
-// surfaces let through), so stale lighting fades. The primary layer also
-// keeps the means of its albedo and emission: the lighting is divided by the
-// albedo only after accumulating, so edges anti-aliased by the jitter stay
-// exact.
+// surfaces let through), and the lighting's keeps less where the temporal
+// gradients say it changed, like where a shadow moved on (A-SVGF, Schied et
+// al., HPG 2018). The primary layer also keeps the means of its albedo and
+// emission: the lighting is divided by the albedo only after accumulating, so
+// edges anti-aliased by the jitter stay exact.
 //
 // Reflections (the glass and specular layers) are reprojected from where
 // their image was, which moves unlike the surface (hybrid_trace.comp,
 // virtualMotion), if that showed the same reflected (reflection guides). The
-// motion is an estimate, and what a surface reflects may change in ways no
-// guide tells, so while things move the history of sharp reflections is also
-// clamped to this frame's samples around the pixel (reflectionSharpness).
+// motion is an estimate: while things move, the history of sharp reflections
+// is also clamped to this frame's samples around the pixel (clampToFrame).
 //
 // Output: the filter input, lighting (rgb) and the variance of its mean (a).
 
@@ -56,10 +56,16 @@ layout(set = 0, binding = 21, rgba32f) uniform readonly image2D reflectionMotion
 // What was / is reflected (hybrid.glsl, encodeReflection), as reflectionMotion.
 layout(set = 0, binding = 22, rgba32ui) uniform readonly uimage2D previousReflectionGuide;
 layout(set = 0, binding = 23, rgba32ui) uniform readonly uimage2D reflectionGuide;
+// The primary lighting's temporal gradients, filtered (hybrid.glsl, one per
+// stratum): how much of it changed since the previous frame.
+layout(set = 0, binding = 24, rgba32f) uniform readonly image2D gradients;
 
-// Sharp reflections' history is clamped to this many standard deviations around
-// the mean of this frame's samples nearby (more for less sharp ones).
-const float kClampDeviations = 2.0;
+// While moving, the history of sharp reflections is clamped to this many
+// standard deviations around the mean of this frame's samples nearby (more
+// for less sharp ones; clampToFrame). A wide range: rare bright samples of
+// noisy reflected light (caustics) would be cut (darker), while the
+// reflections the guides miss are far outside.
+const float kReflectionDeviations = 6.0;
 
 struct History
 {
@@ -170,12 +176,12 @@ float spatialVariance(ivec2 pixel, uint key)
 }
 
 /**
- * Clamp a reflection's history to this frame's samples on the same surface
- * around the pixel (one each), within `deviations` standard deviations of
- * their mean: stale reflections fade out within a frame where those agree,
- * slowly only where they are noisy.
+ * Clamp a reflection's history to `deviations` standard deviations around the
+ * mean of this frame's samples on the same surface around the pixel (5x5,
+ * one each): reflections the guides missed vanish at once where those agree.
+ * Its moments move with it (the same variance).
  */
-void clampToNeighborhood(ivec2 pixel, uint key, float deviations, inout History history)
+void clampToFrame(ivec2 pixel, uint key, float deviations, inout History history)
 {
     vec3 sum = vec3(0.0);
     vec3 squares = vec3(0.0);
@@ -195,10 +201,8 @@ void clampToNeighborhood(ivec2 pixel, uint key, float deviations, inout History 
         }
     }
     vec3 mean = sum / count;
-    vec3 deviation = sqrt(max(squares / count - mean * mean, vec3(0.0)));
-    vec3 clamped =
-        clamp(history.color.rgb, mean - deviations * deviation, mean + deviations * deviation);
-    // The moments move with the mean (same variance).
+    vec3 range = deviations * sqrt(max(squares / count - mean * mean, vec3(0.0)));
+    vec3 clamped = clamp(history.color.rgb, mean - range, mean + range);
     float clampedLuminance = luminance(clamped);
     history.moments = vec2(clampedLuminance, history.moments.y -
                                                  history.moments.x * history.moments.x +
@@ -275,8 +279,14 @@ void main()
             history.albedo /= total;
             history.emission /= total;
             history.moments /= total;
-            if (!isPrimary() && cap > 0u && sharpness > 0.0) {
-                clampToNeighborhood(pixel, current.z, kClampDeviations / sharpness, history);
+            if (cap > 0u && current.z != 0u && isPrimary()) {
+                // Of the lighting that changed, the history keeps that much less
+                // (A-SVGF): all of it where a shadow moved on.
+                history.color.a *=
+                    1.0 - gradientChange(imageLoad(gradients, pixel / kGradientStratum),
+                                         current.z);
+            } else if (cap > 0u && current.z != 0u && sharpness > 0.0) {
+                clampToFrame(pixel, current.z, kReflectionDeviations / sharpness, history);
             }
         } else {
             history.color = vec4(0.0);
@@ -288,7 +298,7 @@ void main()
     if (cap > 0u) {
         // Shorter history where the filter may not blur the lighting: what smooth
         // surfaces let through is a sharp image moving unlike them. (Reflections keep
-        // all of it: they are reprojected from where their image was, and clamped.)
+        // all of it: they are reprojected from where their image was.)
         float strength = isPrimary() && current.z != 0u ? guideStrength(current, pass.layer) : 1.0;
         previousSamples = min(previousSamples, float(cap) * mix(0.25, 1.0, strength));
     }
@@ -310,7 +320,8 @@ void main()
 
     // Filter input: the lighting and the variance of its mean.
     float variance = max(0.0, meanMoments.y - meanMoments.x * meanMoments.x);
-    if (previousSamples < 1.0 && current.z != 0u) {
+    // A young history (new, or cut short by the gradients): its moments say little.
+    if (previousSamples < 4.0 * float(frameSamples()) && current.z != 0u) {
         variance = max(variance, spatialVariance(pixel, current.z));
     }
     imageStore(filterInput, pixel,

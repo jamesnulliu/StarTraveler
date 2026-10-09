@@ -1,0 +1,62 @@
+#version 460
+// Hybrid renderer: one iteration of the a-trous filter of the temporal
+// gradients (A-SVGF), at their resolution (one per stratum, hybrid.glsl):
+// 3x3 taps `step` strata apart on the same surface, weighted 1-2-1. A single
+// gradient is one path's change (noisy, if not by noise); their mean over a
+// neighborhood says how much of the lighting changed. (They are absolute: a
+// shadow's front darkens and its back brightens, which must not cancel.)
+
+#extension GL_GOOGLE_include_directive : require
+
+#define STARCORE_NO_RAY_QUERY
+#include "hybrid.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(push_constant) uniform Pass
+{
+    int step;
+}
+pass;
+
+// Bindings 0-2 and 4-6 are the scene's (hybrid.glsl, scene.glsl).
+layout(set = 0, binding = 3, rgba32f) uniform readonly image2D inputImage;
+layout(set = 0, binding = 7, rgba32f) uniform writeonly image2D outputImage;
+
+void main()
+{
+    ivec2 stratum = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(inputImage);
+    if (any(greaterThanEqual(stratum, size))) {
+        return;
+    }
+    vec4 center = imageLoad(inputImage, stratum);
+    uint key = floatBitsToUint(center.w);
+    vec3 sum = vec3(0.0);
+    float weights = 0.0;
+    const float kernel[2] = float[](1.0, 0.5);
+    if (key != 0u) {
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                ivec2 tap = stratum + ivec2(dx, dy) * pass.step;
+                if (any(lessThan(tap, ivec2(0))) || any(greaterThanEqual(tap, size))) {
+                    continue;
+                }
+                vec4 gradient = imageLoad(inputImage, tap);
+                if (floatBitsToUint(gradient.w) != key) {
+                    continue;
+                }
+                // Weighted by how much each holds (z), so empty taps count for nothing.
+                float w = kernel[abs(dx)] * kernel[abs(dy)];
+                sum += w * gradient.z * vec3(gradient.xy, 1.0);
+                weights += w;
+            }
+        }
+    }
+    // x, y: means over the taps with a gradient; z: their share of the weight.
+    vec4 result = vec4(0.0, 0.0, 0.0, center.w);
+    if (sum.z > 0.0) {
+        result.xyz = vec3(sum.xy / sum.z, sum.z / weights);
+    }
+    imageStore(outputImage, stratum, result);
+}

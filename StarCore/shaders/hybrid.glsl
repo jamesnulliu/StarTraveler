@@ -79,6 +79,16 @@ vec3 cameraDirection(vec2 position)
                      frameData.cameraUp.xyz * ndcY);
 }
 
+/** cameraDirection of the previous frame's camera (bit for bit what it was then). */
+vec3 previousCameraDirection(vec2 position)
+{
+    vec2 size = viewportSize();
+    float ndcX = 2.0 * position.x / size.x - 1.0;
+    float ndcY = 1.0 - 2.0 * position.y / size.y;
+    return normalize(frameData.previousForward.xyz + frameData.previousRight.xyz * ndcX +
+                     frameData.previousUp.xyz * ndcY);
+}
+
 /** Continuous pixel position (xy) and view depth (z) of a point seen by a camera. */
 vec3 projectToPixel(vec3 point, vec3 position, vec3 forward, vec3 right, vec3 up)
 {
@@ -309,6 +319,26 @@ vec3 filterNormal(uvec2 guide)
     return fromOctahedral(unpackSnorm4x8(guide.y >> 16).xy);
 }
 
+// Temporal gradients (A-SVGF, hybrid_trace.comp gradientAt): one per
+// kGradientStratum^2 pixels, rgba32f: x how much the primary lighting's
+// luminance changed since the previous frame, y the larger of the two
+// luminances (to normalize), z the weight (0: none), w the instance key of the
+// surface (float bits).
+const int kGradientStratum = 3;
+// A change of 1/kGradientGain per frame drops all of the history: it would lag
+// half the change of the frames it keeps (a soft shadow passing changes each
+// point by a little every frame). No change drops nothing, whatever the gain.
+const float kGradientGain = 8.0;
+
+/** How much of the primary lighting changed (0-1) by a (filtered) gradient on surface `key`. */
+float gradientChange(vec4 gradient, uint key)
+{
+    if (gradient.z <= 0.0 || floatBitsToUint(gradient.w) != key) {
+        return 0.0;
+    }
+    return clamp(kGradientGain * gradient.x / max(gradient.y, 1e-6), 0.0, 1.0);
+}
+
 // Reflection guides (two uints per reflecting layer): what the mirror
 // direction of the surface hits, x: its distance (float bits), y: instance + 1
 // (0: the sky).
@@ -318,7 +348,7 @@ uvec2 encodeReflection(float distance, uint key)
     return uvec2(floatBitsToUint(distance), key);
 }
 
-/** Whether two reflection guides saw the same reflected: the same instance, at a similar distance. */
+/** Whether two reflection guides saw the same: the same instance, at a similar distance. */
 bool sameReflection(uvec2 a, uvec2 b)
 {
     float distanceA = uintBitsToFloat(a.x);

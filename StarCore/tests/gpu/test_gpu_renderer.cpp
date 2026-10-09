@@ -763,6 +763,84 @@ TEST_CASE("GPU hybrid: reflections leave no trail while moving", "[gpu][hybrid]"
     CHECK(trail == 0);
 }
 
+TEST_CASE("GPU hybrid: moving shadows leave no trail", "[gpu][hybrid]")
+{
+    // A ball moving under a light, seen from above: its shadow sweeps a floor that
+    // does not move, whose history would keep the shadow where it was.
+    const GpuTest gpu;
+    Scene scene;
+    scene.environment().skyColor = Vec3(0.01F);
+    Entity floor = scene.createEntity("Floor");
+    floor.add<MeshComponent>(MeshComponent{.mesh = primitives::plane(Vec2(20.0F)).build()});
+    floor.add<MaterialComponent>(MaterialComponent{.albedo = Vec3(0.7F)});
+    Entity light = scene.createEntity("Light");
+    light.get<TransformComponent>().translation = {0.0F, 4.0F, 0.0F};
+    light.add<SphereComponent>(0.3F);
+    light.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(1.0F), .emissionColor = Vec3(1.0F), .emissionPower = 100.0F});
+    Entity ball = scene.createEntity("Ball");
+    ball.add<SphereComponent>(0.5F);
+    ball.add<MaterialComponent>(MaterialComponent{.albedo = {0.8F, 0.3F, 0.2F}});
+    RenderSceneBuilder builder;
+    constexpr std::uint32_t kWidth = 96;
+    constexpr std::uint32_t kHeight = 72;
+    constexpr int kFrames = 24;
+    Camera camera = makeCamera(kWidth, kHeight);
+    camera.setPosition({0.0F, 6.0F, 3.0F});
+    camera.lookAt({0.0F, 0.0F, 0.0F});
+    const PathTracerSettings settings{.samplesPerPixel = 2, .fireflyClamp = 8.0F};
+    // The shadow moves by about a tenth of its width per frame.
+    auto ballAt = [&](int frame) {
+        ball.get<TransformComponent>().translation = {
+            -0.75F + 1.5F * static_cast<float>(frame) / (kFrames - 1), 1.5F, 0.0F};
+        scene.markDirty();
+        return &builder.update(scene);
+    };
+
+    auto hybrid = gpu.makeRenderer(kWidth, kHeight);
+    for (int i = 0; i < kFrames; ++i) {
+        hybrid->render(*ballAt(i), camera, settings, hybridOptions());
+    }
+    REQUIRE(hybrid->accumulatedFrames() == kFrames);  // Reprojected, not restarted.
+    auto reference = gpu.makeRenderer(kWidth, kHeight);
+    for (int i = 0; i < 64; ++i) {
+        reference->render(builder.update(scene), camera,
+                          PathTracerSettings{.samplesPerPixel = 8, .fireflyClamp = 8.0F});
+    }
+    const ColorImage image = hybrid->readImage();
+    const ColorImage expected = reference->readImage();
+    const IdImage ids = reference->readEntityIds();
+
+    // On the floor: how dark the shadow is where it is, and how much of it is left
+    // where it was (lit pixels still dark).
+    auto brightness = [](const ColorImage& from, std::size_t i) {
+        const std::uint32_t pixel = from.pixels()[i];
+        return std::max({channel(pixel, 0), channel(pixel, 1), channel(pixel, 2)});
+    };
+    double shadowSum = 0.0;
+    double expectedShadowSum = 0.0;
+    std::size_t trail = 0;
+    for (std::size_t i = 0; i < ids.pixels().size(); ++i) {
+        if (ids.pixels()[i] != static_cast<std::uint32_t>(entt::to_integral(floor.handle()))) {
+            continue;
+        }
+        const int value = brightness(image, i);
+        const int truth = brightness(expected, i);
+        if (truth < 64) {
+            shadowSum += value;
+            expectedShadowSum += truth;
+        } else if (value < truth / 2) {
+            ++trail;
+        }
+    }
+    REQUIRE(expectedShadowSum > 0.0);
+    const double shadow = shadowSum / expectedShadowSum;
+    INFO("shadow " << shadow << " times as bright as it should be, " << trail
+                   << " pixels of trails");
+    CHECK(shadow < 1.5);
+    CHECK(trail < 20);
+}
+
 TEST_CASE("GPU hybrid: what restarts the accumulation", "[gpu][hybrid]")
 {
     const GpuTest gpu;

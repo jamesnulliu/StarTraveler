@@ -7,7 +7,7 @@
 //      write their guides and motion vectors, trace paths from them into
 //      three layers: the primary surfaces' lighting, what they reflect
 //      (specular) and what the panes reflect (glass); while things move, the
-//      temporal gradients of the lighting (filtered by gradient.comp);
+//      temporal gradients of their direct light (filtered by gradient.comp);
 //   3. temporal (temporal.comp, per layer): reproject and accumulate;
 //   4. a-trous (atrous.comp): the SVGF spatial filter, a few iterations;
 //   5. composite (composite.comp): lighting x albedo + emission + specular +

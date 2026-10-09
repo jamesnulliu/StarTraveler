@@ -320,23 +320,29 @@ vec3 filterNormal(uvec2 guide)
 }
 
 // Temporal gradients (A-SVGF, hybrid_trace.comp gradientAt): one per
-// kGradientStratum^2 pixels, rgba32f: x how much the primary lighting's
-// luminance changed since the previous frame, y the larger of the two
-// luminances (to normalize), z the weight (0: none), w the instance key of the
-// surface (float bits).
+// kGradientStratum^2 pixels, rgba32f: x how much the luminance of the primary
+// surface's direct light changed since the previous frame, y the larger of the
+// two luminances, z the weight (0: none), w the instance key of the surface
+// (float bits).
 const int kGradientStratum = 3;
-// A change of 1/kGradientGain per frame drops all of the history: it would lag
-// half the change of the frames it keeps (a soft shadow passing changes each
-// point by a little every frame). No change drops nothing, whatever the gain.
-const float kGradientGain = 8.0;
+// A change of 1/kGradientGain of the lighting per frame drops all of the
+// history: it would lag half the change of the frames it keeps (a soft shadow
+// passing changes each point by a little every frame). No change drops
+// nothing, whatever the gain.
+const float kGradientGain = 16.0;
 
-/** How much of the primary lighting changed (0-1) by a (filtered) gradient on surface `key`. */
-float gradientChange(vec4 gradient, uint key)
+/**
+ * How much of the primary lighting changed (0-1) by a (filtered) gradient on
+ * surface `key`, relative to the lighting there (`lighting`, its history's
+ * luminance; or the direct light, if more): a change of a dim light is a
+ * little of a well lit surface's lighting.
+ */
+float gradientChange(vec4 gradient, uint key, float lighting)
 {
     if (gradient.z <= 0.0 || floatBitsToUint(gradient.w) != key) {
         return 0.0;
     }
-    return clamp(kGradientGain * gradient.x / max(gradient.y, 1e-6), 0.0, 1.0);
+    return clamp(kGradientGain * gradient.x / max(max(gradient.y, lighting), 1e-6), 0.0, 1.0);
 }
 
 // Reflection guides (two uints per reflecting layer): what the mirror

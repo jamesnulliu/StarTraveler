@@ -136,6 +136,18 @@ auto meanDifference(const ColorImage& a, const ColorImage& b) -> float
     return static_cast<float>(sum / (3.0 * static_cast<double>(a.pixels().size())));
 }
 
+/** @brief Mean linear value of all channels (how much light an image shows). */
+auto meanLinear(const ColorImage& image) -> double
+{
+    double sum = 0.0;
+    for (const std::uint32_t pixel : image.pixels()) {
+        for (int c = 0; c < 3; ++c) {
+            sum += srgbToLinear(static_cast<float>(channel(pixel, c)) / 255.0F);
+        }
+    }
+    return sum / (3.0 * static_cast<double>(image.pixels().size()));
+}
+
 /** @brief Worst and mean differences of 8x8 block means (in 8-bit units). */
 struct BlockDifference
 {
@@ -839,6 +851,133 @@ TEST_CASE("GPU hybrid: moving shadows leave no trail", "[gpu][hybrid]")
                    << " pixels of trails");
     CHECK(shadow < 1.5);
     CHECK(trail < 20);
+}
+
+TEST_CASE("GPU hybrid: what moves with the camera keeps its history", "[gpu][hybrid]")
+{
+    // A deck under a lamp, both moving with the camera (like a cockpit), past still
+    // pillars that light it a little by reflection. Its lighting hardly changes, but
+    // every path of it that bounces off the pillars comes out different: the temporal
+    // gradients must not take that for a change of its lighting.
+    const GpuTest gpu;
+    Scene scene;
+    scene.environment().skyColor = Vec3(0.05F);
+    Entity deck = scene.createEntity("Deck");
+    deck.add<MeshComponent>(MeshComponent{.mesh = primitives::plane(Vec2(6.0F, 5.0F)).build()});
+    deck.add<MaterialComponent>(MaterialComponent{.albedo = Vec3(0.7F)});
+    Entity lamp = scene.createEntity("Lamp");
+    lamp.add<SphereComponent>(0.2F);
+    lamp.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(1.0F), .emissionColor = Vec3(1.0F), .emissionPower = 40.0F});
+    for (int i = 0; i < 7; ++i) {
+        Entity pillar = scene.createEntity("Pillar");
+        pillar.get<TransformComponent>().translation = {-4.5F + 1.5F * static_cast<float>(i),
+                                                        0.5F, 2.6F};
+        pillar.add<MeshComponent>(
+            MeshComponent{.mesh = primitives::box(Vec3(0.25F, 1.5F, 0.25F)).build()});
+        pillar.add<MaterialComponent>(MaterialComponent{
+            .albedo = i % 2 == 0 ? Vec3(0.9F, 0.2F, 0.1F) : Vec3(0.1F, 0.8F, 0.3F)});
+    }
+    RenderSceneBuilder builder;
+    constexpr std::uint32_t kWidth = 96;
+    constexpr std::uint32_t kHeight = 72;
+    constexpr int kFrames = 40;  // 2 samples each: past the history cap of 64.
+    auto at = [&](float x) {
+        deck.get<TransformComponent>().translation = {x, -1.0F, 5.5F};
+        lamp.get<TransformComponent>().translation = {x, 1.5F, 5.5F};
+        scene.markDirty();
+        Camera camera = makeCamera(kWidth, kHeight);
+        camera.setPosition({x, 1.0F, 10.0F});
+        camera.setRotation(-90.0F, -25.0F);
+        return camera;
+    };
+    const PathTracerSettings settings{.samplesPerPixel = 2, .fireflyClamp = 8.0F};
+    GpuRenderOptions options = hybridOptions();
+    options.view = HybridView::History;
+
+    auto hybrid = gpu.makeRenderer(kWidth, kHeight);
+    Camera camera;
+    for (int i = 0; i < kFrames; ++i) {
+        camera = at(-1.0F + 2.0F * static_cast<float>(i) / (kFrames - 1));
+        hybrid->render(builder.update(scene), camera, settings, options);
+    }
+    REQUIRE(hybrid->accumulatedFrames() == kFrames);  // Reprojected, not restarted.
+    auto reference = gpu.makeRenderer(kWidth, kHeight);
+    reference->render(builder.update(scene), camera, settings);
+    const IdImage ids = reference->readEntityIds();
+    const ColorImage history = hybrid->readImage();
+
+    // White: the history cap (edge pixels keep less: in some frames their jittered
+    // samples miss the deck).
+    std::size_t deckPixels = 0;
+    double kept = 0.0;
+    for (std::size_t i = 0; i < ids.pixels().size(); ++i) {
+        if (ids.pixels()[i] == static_cast<std::uint32_t>(entt::to_integral(deck.handle()))) {
+            kept += channel(history.pixels()[i], 0) / 255.0;
+            ++deckPixels;
+        }
+    }
+    REQUIRE(deckPixels > 1000);
+    kept /= static_cast<double>(deckPixels);
+    INFO("history kept: " << kept << " of the cap on average");
+    CHECK(kept > 0.95);
+}
+
+TEST_CASE("GPU hybrid: reflections that are rarely bright keep their light while moving",
+          "[gpu][hybrid]")
+{
+    // A pane reflecting another one behind the camera, turned by 45 degrees: that one
+    // lets most of the reflected rays through to a black sky, and reflects a few onto a
+    // bright panel. So the first pane's reflection is a few bright samples among dark
+    // ones (like a cockpit canopy's). This frame's samples around a pixel mostly miss
+    // the bright ones: clamped to them, its history would lose most of its light.
+    const GpuTest gpu;
+    Scene scene;
+    scene.environment().skyColor = Vec3(0.0F);
+    const MaterialComponent glass{
+        .albedo = Vec3(1.0F), .roughness = 0.0F, .transmission = 1.0F, .thinWalled = true};
+    auto quad = [&](const char* name, Vec3 position, float yaw, Vec2 size,
+                    const MaterialComponent& material) {
+        Entity entity = scene.createEntity(name);
+        entity.get<TransformComponent>().translation = position;
+        entity.get<TransformComponent>().rotation = Quat(Vec3(0.0F, yaw, 0.0F));
+        entity.add<MeshComponent>(MeshComponent{.mesh = primitives::quad(size).build()});
+        entity.add<MaterialComponent>(material);
+    };
+    quad("Pane", {0.0F, 1.0F, 5.0F}, 0.0F, {3.2F, 2.0F}, glass);
+    quad("Back pane", {0.0F, 1.0F, 13.0F}, -0.75F * kPi, {10.0F, 8.0F}, glass);
+    // Far to the side: the first pane does not reflect it directly.
+    quad("Panel", {-10.0F, 1.0F, 13.0F}, 0.5F * kPi, {4.0F, 4.0F},
+         MaterialComponent{
+             .albedo = Vec3(0.0F), .emissionColor = Vec3(1.0F), .emissionPower = 20.0F});
+    const RenderScene renderScene = buildRenderScene(scene);
+    constexpr std::uint32_t kWidth = 96;
+    constexpr std::uint32_t kHeight = 72;
+    constexpr int kFrames = 24;
+    auto cameraAt = [&](float x) {
+        Camera camera = makeCamera(kWidth, kHeight);
+        camera.setPosition({x, 1.0F, 9.0F});
+        return camera;
+    };
+    const PathTracerSettings settings{.samplesPerPixel = 2, .fireflyClamp = 8.0F};
+
+    auto hybrid = gpu.makeRenderer(kWidth, kHeight);
+    for (int i = 0; i < kFrames; ++i) {
+        hybrid->render(renderScene,
+                       cameraAt(-0.8F + 1.6F * static_cast<float>(i) / (kFrames - 1)), settings,
+                       hybridOptions());
+    }
+    REQUIRE(hybrid->accumulatedFrames() == kFrames);  // Reprojected, not restarted.
+    auto reference = gpu.makeRenderer(kWidth, kHeight);
+    for (int i = 0; i < 64; ++i) {
+        reference->render(renderScene, cameraAt(0.8F),
+                          PathTracerSettings{.samplesPerPixel = 8, .fireflyClamp = 8.0F});
+    }
+    const double light = meanLinear(hybrid->readImage());
+    const double expected = meanLinear(reference->readImage());
+    REQUIRE(expected > 1e-4);  // The reflection is there.
+    INFO("the reflection has " << light / expected << " of its light");
+    CHECK(light > 0.6 * expected);
 }
 
 TEST_CASE("GPU hybrid: what restarts the accumulation", "[gpu][hybrid]")

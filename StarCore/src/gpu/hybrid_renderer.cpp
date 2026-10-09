@@ -46,7 +46,7 @@ enum class TraceStage : std::uint32_t
 // Pixels per side of a temporal gradient's stratum (kGradientStratum in hybrid.glsl).
 constexpr std::uint32_t kGradientStratum = 3;
 // Filter iterations of the gradients (radius 3 strata): one pixel per stratum
-// and frame has one, of one path.
+// and frame has one, of one light sample.
 constexpr std::uint32_t kGradientIterations = 2;
 
 /** @brief The layers (kLayer* in hybrid.glsl), each reprojected and filtered on its own. */
@@ -101,9 +101,10 @@ struct HybridRenderer::Images
     std::array<vulkan::Image, 2> primaryAlbedo;
     std::array<vulkan::Image, 2> primaryEmission;
     std::array<vulkan::Image, 2> primaryMoments;
-    // What the primary layer's samples started from (the gradients' previous frame).
+    // What the primary layer's samples started from and the direct light their first path
+    // found there (the gradients' previous frame).
     std::array<vulkan::Image, 2> primaryHits;
-    std::array<vulkan::Image, 2> pathLuminance;
+    std::array<vulkan::Image, 2> directLight;
     std::array<vulkan::Image, 2> glassColor;
     std::array<vulkan::Image, 2> glassMoments;
     std::array<vulkan::Image, 2> specularColor;
@@ -126,7 +127,7 @@ struct HybridRenderer::Images
         }
         for (auto* pair :
              {&primaryGuide, &glassGuide, &primaryColor, &primaryAlbedo, &primaryEmission,
-              &primaryMoments, &primaryHits, &pathLuminance, &glassColor, &glassMoments,
+              &primaryMoments, &primaryHits, &directLight, &glassColor, &glassMoments,
               &specularColor, &specularMoments, &reflectionGuide, &primaryFilter, &glassFilter,
               &specularFilter, &gradients}) {
             function((*pair)[0]);
@@ -207,7 +208,7 @@ void HybridRenderer::resize(std::uint32_t width, std::uint32_t height)
         images->primaryEmission[i] = storage(VK_FORMAT_R16G16B16A16_SFLOAT);
         images->primaryMoments[i] = storage(VK_FORMAT_R32G32_SFLOAT);
         images->primaryHits[i] = storage(VK_FORMAT_R32G32_UINT);
-        images->pathLuminance[i] = storage(VK_FORMAT_R32_SFLOAT);
+        images->directLight[i] = storage(VK_FORMAT_R32_SFLOAT);
         images->glassColor[i] = storage(VK_FORMAT_R32G32B32A32_SFLOAT);
         images->glassMoments[i] = storage(VK_FORMAT_R32G32_SFLOAT);
         images->specularColor[i] = storage(VK_FORMAT_R32G32B32A32_SFLOAT);
@@ -333,8 +334,8 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
             .storageImage(22, images.reflectionGuide[current].view())
             .storageImage(23, images.primaryHits[previous].view())
             .storageImage(24, images.primaryHits[current].view())
-            .storageImage(25, images.pathLuminance[previous].view())
-            .storageImage(26, images.pathLuminance[current].view())
+            .storageImage(25, images.directLight[previous].view())
+            .storageImage(26, images.directLight[current].view())
             .storageImage(27, images.gradients[0].view());
         m_trace.bind(commandBuffer);
         m_trace.pushDescriptors(commandBuffer, writes.writes());

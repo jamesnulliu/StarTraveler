@@ -21,7 +21,8 @@
 // ones (from a cockpit's canopy back into the cockpit); and, while things
 // move, for the temporal gradients of the primary lighting (traceGradient).
 // Reflections do not move with the surfaces reflecting them: their motion
-// vectors follow the reflected image (virtualMotion).
+// vectors follow the reflected image (virtualMotion) of what their sample
+// reflected.
 
 #extension GL_GOOGLE_include_directive : require
 
@@ -69,11 +70,12 @@ layout(set = 0, binding = 21, rgba32f) uniform writeonly image2D reflectionMotio
 layout(set = 0, binding = 22, rgba32ui) uniform writeonly uimage2D reflectionGuide;
 // What the samples of the primary layer started from, for the next frame's
 // gradients: the visibility (instance + 1, primitive; the path vertices before
-// it in the top 8 bits of x), and the luminance of the first path (-1: none).
+// it in the top 8 bits of x), and the luminance of the direct light the first
+// path found there (-1: none).
 layout(set = 0, binding = 23, rg32ui) uniform readonly uimage2D previousHits;
 layout(set = 0, binding = 24, rg32ui) uniform writeonly uimage2D hits;
-layout(set = 0, binding = 25, r32f) uniform readonly image2D previousPathLuminance;
-layout(set = 0, binding = 26, r32f) uniform writeonly image2D pathLuminance;
+layout(set = 0, binding = 25, r32f) uniform readonly image2D previousDirectLight;
+layout(set = 0, binding = 26, r32f) uniform writeonly image2D directLight;
 // One per stratum (hybrid.glsl, kGradientStratum).
 layout(set = 0, binding = 27, rgba32f) uniform writeonly image2D gradients;
 
@@ -220,24 +222,31 @@ float curvatureAt(SurfaceHit hit, uint primitive)
 /**
  * Screen motion (xy, pixels) of what a surface reflects along a camera ray:
  * of the reflection's virtual image, on the ray behind the surface at the
- * mirror direction's hit distance as the curvature focuses it (the mirror
+ * reflected ray's hit distance as the curvature focuses it (the mirror
  * equation). The image moves with the surface and mirrors how the reflected
- * point moves relative to it. `reflection`: what the mirror direction hits
- * (encodeReflection).
+ * point moves relative to it. The reflected ray is the sample's (`sampled`; the
+ * mirror direction if it has none): a sample of a sharp reflection that strays
+ * onto something else (a bright ball beside the mirror direction's sky) is that
+ * reflection's, moves with it and is told apart by it. `reflection`: what the
+ * ray hits (encodeReflection).
  */
-vec2 virtualMotion(SurfaceHit surface, uint primitive, vec3 direction, out uvec2 reflection)
+vec2 virtualMotion(SurfaceHit surface, uint primitive, vec3 direction, vec3 sampled,
+                   out uvec2 reflection)
 {
-    vec3 mirrored = reflect(direction, surface.normal);
-    if (dot(mirrored, surface.geometricNormal) <= 0.0) {
-        mirrored = reflect(direction, surface.geometricNormal);
+    vec3 ray = sampled;
+    if (ray == vec3(0.0)) {
+        ray = reflect(direction, surface.normal);
+        if (dot(ray, surface.geometricNormal) <= 0.0) {
+            ray = reflect(direction, surface.geometricNormal);
+        }
     }
     float reach = kReflectedSky;
-    vec3 reflected = surface.position + mirrored * reach;
+    vec3 reflected = surface.position + ray * reach;
     vec3 previous = reflected;
     SurfaceHit hit;
     reflection = encodeReflection(reach, 0u);
-    if (traceClosestHit(offsetOrigin(surface.position, surface.geometricNormal, mirrored),
-                        mirrored, instanceMask(), hit)) {
+    if (traceClosestHit(offsetOrigin(surface.position, surface.geometricNormal, ray), ray,
+                        instanceMask(), hit)) {
         reach = hit.t;
         reflected = hit.position;
         previous = previousPosition(hit.instanceIndex, reflected);
@@ -293,12 +302,13 @@ void traceReflections(ivec2 pixel, vec3 origin, vec3 direction)
         float l = luminance(path.radiance);
         glass = vec4(path.radiance, l * l);
         uvec2 reflection;
-        motion.zw =
-            virtualMotion(pane, imageLoad(glassVisibility, pixel).y, direction, reflection);
+        motion.zw = virtualMotion(pane, imageLoad(glassVisibility, pixel).y, direction,
+                                  nextDirection, reflection);
         reflected.zw = reflection;
     }
 
     vec4 specular = vec4(0.0);
+    vec3 specularRay = vec3(0.0);  // The sample's reflected ray (none: it ended there).
     Material surface;
     if (hasPrimary) {
         surface = materialOf(primary.instanceIndex);
@@ -319,12 +329,14 @@ void traceReflections(ivec2 pixel, vec3 origin, vec3 direction)
                            nextOrigin, nextDirection)) {
                 continuePath(nextOrigin, nextDirection, bounce + 1u, maxBounces(), path, rng);
             }
+            specularRay = nextDirection;
             vec3 radiance = transmittance * path.radiance;
             float l = luminance(radiance);
             specular = vec4(radiance, l * l);
         }
         uvec2 reflection;
-        motion.xy = virtualMotion(primary, imageLoad(visibility, pixel).y, direction, reflection);
+        motion.xy = virtualMotion(primary, imageLoad(visibility, pixel).y, direction,
+                                  specularRay, reflection);
         reflected.xy = reflection;
     }
     imageStore(noisyGlass, pixel, glass);
@@ -346,12 +358,16 @@ bool movedSince(uint instanceIndex)
 
 /**
  * The temporal gradient at a pixel (A-SVGF, Schied et al., HPG 2018): the
- * first path of the previous frame's sample on this pixel's surface traced
- * again, from the same surface point (moved with its instance) and with the
- * same random numbers, through the scene as it is now. Where nothing changed
- * it comes out the same, so the (absolute) difference is what changed (a
- * shadow that moved on), none of the noise. (The primary layer's paths do not
- * depend on where the camera is: their reflections are the specular layer's.)
+ * direct light the first path of the previous frame's sample on this pixel's
+ * surface found, found again from the same surface point (moved with its
+ * instance) with the same random numbers (the same point on the same light),
+ * in the scene as it is now. Where nothing changed it comes out the same, so
+ * the (absolute) difference is what changed (a shadow that moved on), none of
+ * the noise. Only the direct light: the rest of a path bounces off into the
+ * scene, and of a surface moving through it (a cockpit) every one comes out
+ * different although its lighting hardly changes; the history would be cut
+ * short for nothing. (The primary layer's paths do not depend on where the
+ * camera is: their reflections are the specular layer's.)
  */
 vec4 gradientAt(ivec2 pixel)
 {
@@ -374,7 +390,7 @@ vec4 gradientAt(ivec2 pixel)
         any(greaterThanEqual(vec2(previous), viewportSize()))) {
         return none;
     }
-    float before = imageLoad(previousPathLuminance, previous).x;
+    float before = imageLoad(previousDirectLight, previous).x;
     uvec2 previousHit = imageLoad(previousHits, previous).xy;
     if (before < 0.0 || (previousHit.x & 0xFFFFFFu) != opaque.x) {
         return none;  // No path then, or another surface.
@@ -402,10 +418,8 @@ vec4 gradientAt(ivec2 pixel)
     PathState path = newPath();
     vec3 nextOrigin;
     vec3 nextDirection;
-    if (pathVertex(hit, surface, instances[instanceIndex].lightIndex, direction, bounce,
-                   kVertexSkipEmission | lobes, path, rng, nextOrigin, nextDirection)) {
-        continuePath(nextOrigin, nextDirection, bounce + 1u, maxBounces(), path, rng);
-    }
+    pathVertex(hit, surface, instances[instanceIndex].lightIndex, direction, bounce,
+               kVertexSkipEmission | lobes, path, rng, nextOrigin, nextDirection);
     float now = luminance(path.radiance);
     return vec4(abs(now - before), max(now, before), 1.0, none.w);
 }
@@ -512,7 +526,7 @@ void main()
         imageStore(frameAlbedo, pixel, vec4(0.0));
         imageStore(frameEmission, pixel, vec4(shadePreview(origin, direction), 0.0));
         imageStore(hits, pixel, uvec4(0u));
-        imageStore(pathLuminance, pixel, vec4(-1.0));
+        imageStore(directLight, pixel, vec4(-1.0));
         return;
     }
 
@@ -534,7 +548,8 @@ void main()
     // Paths ---------------------------------------------------------------------------------------
     vec3 sum = vec3(0.0);
     float squares = 0.0;
-    float firstPath = -1.0;  // Its luminance, for the next frame's gradients (gradientAt).
+    // The first path's direct light, for the next frame's gradients (gradientAt).
+    float firstLight = -1.0;
     if (hasPrimary && primaryBounce < maxBounces() && maxComponent(transmittance) > 0.0) {
         // The reflection is the specular layer's (second dispatch).
         uint lobes = hasSpecularLayer(surface) ? kLobesDiffuse | kLobesTransmission : 0u;
@@ -542,14 +557,15 @@ void main()
             PathState path = newPath();
             vec3 nextOrigin;
             vec3 nextDirection;
-            if (pathVertex(primary, surface, instances[primary.instanceIndex].lightIndex,
-                           direction, primaryBounce, kVertexSkipEmission | lobes, path, rng,
-                           nextOrigin, nextDirection)) {
+            bool more = pathVertex(primary, surface, instances[primary.instanceIndex].lightIndex,
+                                   direction, primaryBounce, kVertexSkipEmission | lobes, path,
+                                   rng, nextOrigin, nextDirection);
+            if (s == 0u) {
+                firstLight = luminance(path.radiance);
+            }
+            if (more) {
                 continuePath(nextOrigin, nextDirection, primaryBounce + 1u, maxBounces(), path,
                              rng);
-            }
-            if (s == 0u) {
-                firstPath = luminance(path.radiance);
             }
             vec3 radiance = transmittance * path.radiance;
             sum += radiance;
@@ -562,5 +578,5 @@ void main()
     imageStore(frameEmission, pixel, vec4(emission, 0.0));
     uvec2 opaque = imageLoad(visibility, pixel).xy;
     imageStore(hits, pixel, uvec4(opaque.x | (min(primaryBounce, 255u) << 24), opaque.y, 0u, 0u));
-    imageStore(pathLuminance, pixel, vec4(firstPath));
+    imageStore(directLight, pixel, vec4(firstLight));
 }

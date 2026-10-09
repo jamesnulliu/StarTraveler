@@ -2,9 +2,10 @@
 // Hybrid renderer: one iteration of the a-trous filter of the temporal
 // gradients (A-SVGF), at their resolution (one per stratum, hybrid.glsl):
 // 3x3 taps `step` strata apart on the same surface, weighted 1-2-1. A single
-// gradient is one path's change (noisy, if not by noise); their mean over a
-// neighborhood says how much of the lighting changed. (They are absolute: a
-// shadow's front darkens and its back brightens, which must not cancel.)
+// gradient is how one sample's direct light changed (one point of one light:
+// all or nothing at a shadow's edge); their mean over a neighborhood says how
+// much of the light changed. (They are absolute: a shadow's front darkens and
+// its back brightens, which must not cancel.)
 
 #extension GL_GOOGLE_include_directive : require
 

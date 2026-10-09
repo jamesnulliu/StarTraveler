@@ -135,6 +135,7 @@ void GameLayer::onAttach()
     m_options.gpu =
         m_gpuRenderer != nullptr && m_gpuRenderer->rayTracing() && !m_gameOptions.cpuRenderer;
     m_options.rayTracing = !m_gameOptions.raster;
+    m_options.gpuRender.view = m_gameOptions.view;
     resetCamera();
     if (!m_scenePath.empty()) {
         openScene(m_scenePath);

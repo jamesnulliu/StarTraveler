@@ -15,8 +15,12 @@
 // Reflections (the glass and specular layers) are reprojected from where
 // their image was, which moves unlike the surface (hybrid_trace.comp,
 // virtualMotion), if that showed the same reflected (reflection guides). The
-// motion is an estimate: while things move, the history of sharp reflections
-// is also clamped to this frame's samples around the pixel (clampToFrame).
+// motion is an estimate: while things move, the history of the primary
+// surfaces' sharp reflections is also clamped to this frame's samples around
+// the pixel (clampToFrame). Not the panes': what they reflect is often a few
+// bright samples among dark ones (a canopy reflecting the cockpit, which
+// reflects the light), which the samples around a pixel mostly miss; clamped,
+// it lost half its light. Their guides are enough to keep them from trailing.
 //
 // Output: the filter input, lighting (rgb) and the variance of its mean (a).
 
@@ -60,9 +64,9 @@ layout(set = 0, binding = 23, rgba32ui) uniform readonly uimage2D reflectionGuid
 // stratum): how much of it changed since the previous frame.
 layout(set = 0, binding = 24, rgba32f) uniform readonly image2D gradients;
 
-// While moving, the history of sharp reflections is clamped to this many
-// standard deviations around the mean of this frame's samples nearby (more
-// for less sharp ones; clampToFrame). A wide range: rare bright samples of
+// While moving, the history of the primary surfaces' sharp reflections is
+// clamped to this many standard deviations around the mean of this frame's
+// samples nearby (more for less sharp ones; clampToFrame). A wide range: rare bright samples of
 // noisy reflected light (caustics) would be cut (darker), while the
 // reflections the guides miss are far outside.
 const float kReflectionDeviations = 6.0;
@@ -284,8 +288,9 @@ void main()
                 // (A-SVGF): all of it where a shadow moved on.
                 history.color.a *=
                     1.0 - gradientChange(imageLoad(gradients, pixel / kGradientStratum),
-                                         current.z);
-            } else if (cap > 0u && current.z != 0u && sharpness > 0.0) {
+                                         current.z, luminance(history.color.rgb));
+            } else if (cap > 0u && current.z != 0u && sharpness > 0.0 &&
+                       pass.layer == kLayerSpecular) {
                 clampToFrame(pixel, current.z, kReflectionDeviations / sharpness, history);
             }
         } else {

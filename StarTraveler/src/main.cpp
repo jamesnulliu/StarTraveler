@@ -1,6 +1,7 @@
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <string>
 #include <vector>
 
 #include <CLI/CLI.hpp>
@@ -61,10 +62,19 @@ auto main(int argc, char** argv) -> int
                    "Exit after this many frames (smoke tests)");
     cli.add_option("--screenshot", options.screenshotPath,
                    "With --frames: save the viewport image as PNG before exiting");
+    std::string view = "Final";
+    cli.add_option("--view", view,
+                   "Hybrid pipeline: Final, Noisy, Albedo, Lighting, Specular, Glass, Variance, "
+                   "Motion, History");
     CLI11_PARSE(cli, argc, argv);
 
     starcore::log::init({.level = spdlog::level::debug});
     SC_INFO("StarTraveler (StarCore {})", starcore::kVersionString);
+    if (!starcore::enumFromString(view, options.view)) {
+        SC_CRITICAL("Unknown view \"{}\"", view);
+        starcore::log::shutdown();
+        return EXIT_FAILURE;
+    }
     const std::filesystem::path assetRoot = findAssetRoot(argv[0]);
     if (scenePath.empty()) {
         scenePath = assetRoot / "scenes" / "legacy_demo.yaml";

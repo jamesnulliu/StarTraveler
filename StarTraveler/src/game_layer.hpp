@@ -41,6 +41,8 @@ struct GameOptions
     bool raster = false;
     // Fly the ship forward at full thrust (smoke tests, screenshots of the effects).
     bool cruise = false;
+    // What the hybrid pipeline shows (its debug views; also in the Render panel).
+    starcore::HybridView view = starcore::HybridView::Final;
 };
 
 struct RenderOptions

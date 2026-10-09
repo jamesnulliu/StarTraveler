@@ -147,7 +147,8 @@ auto main(int argc, char** argv) -> int
     app.add_flag("--raster", gpuOptions.raster,
                  "GPU, raster pipeline: direct light without shadows, no rays");
     app.add_option("--view", gpuOptions.view,
-                   "Hybrid: Final, Noisy, Albedo, Lighting, Glass, Variance, Motion, History");
+                   "Hybrid: Final, Noisy, Albedo, Lighting, Specular, Glass, Variance, Motion, "
+                   "History");
     app.add_flag("--no-spatial", noSpatial, "Hybrid: no spatial filter");
     app.add_flag("--no-temporal", noTemporal, "Hybrid: no reprojection");
     app.add_option("--move", move, "GPU: camera translation per frame x y z")->expected(3);

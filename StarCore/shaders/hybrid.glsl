@@ -167,6 +167,12 @@ bool reconstructHit(uint instanceIndex, uint primitive, vec3 origin, vec3 direct
     return true;
 }
 
+// Layers of the Hybrid pipeline, each reprojected and filtered on its own
+// (temporal.comp, atrous.comp).
+const uint kLayerPrimary = 0u;   // Lighting of the primary surfaces (divided by their albedo).
+const uint kLayerGlass = 1u;     // What the smooth window panes in front reflect.
+const uint kLayerSpecular = 2u;  // What the primary surfaces reflect (kLobesReflection).
+
 // Surfaces in the glass layer: smooth window panes, looked through.
 const float kGlassMaxRoughness = 0.1;
 
@@ -176,20 +182,52 @@ bool isGlassLayer(Material m)
            m.roughness <= kGlassMaxRoughness;
 }
 
-/**
- * How much the spatial filter may blur a surface's lighting: 1 for diffuse
- * and rough surfaces, towards 0 for mirrors and clear glass, whose lighting
- * is a sharp image of something else.
- */
-float filterStrength(Material m)
+// Primary surfaces at most this rough reflect into the specular layer: their
+// reflections move unlike them (rougher ones blur them into their lighting).
+const float kSpecularMaxRoughness = 0.5;
+
+bool hasSpecularLayer(Material m)
 {
-    float specular = clamp(m.metallic + (1.0 - m.metallic) * m.transmission, 0.0, 1.0);
-    return mix(1.0, smoothstep(0.05, 0.4, m.roughness), specular);
+    return m.roughness < kSpecularMaxRoughness;
+}
+
+/**
+ * How much the spatial filter may blur what a surface of this roughness
+ * reflects: none for mirrors (nor where the specular layer is empty).
+ */
+float reflectionStrength(float roughness)
+{
+    return roughness < kSpecularMaxRoughness ? smoothstep(0.05, 0.4, roughness) : 0.0;
+}
+
+/**
+ * How sharp the reflections of a surface of this roughness are, so how
+ * strictly their history is checked (temporal.comp): glossy ones are blurred
+ * images, which the checks (of what the mirror direction sees, of this
+ * frame's noisy samples) would mistake for changes.
+ */
+float reflectionSharpness(float roughness)
+{
+    return 1.0 - smoothstep(0.1, 0.3, roughness);
+}
+
+/**
+ * How much the spatial filter may blur a primary surface's lighting: 1 for
+ * diffuse light, towards 0 for what smooth surfaces reflect or let through,
+ * which is a sharp image of something else (reflections leave the lighting
+ * for the specular layer, see hasSpecularLayer).
+ */
+float lightingStrength(Material m)
+{
+    float transmission = (1.0 - m.metallic) * m.transmission;
+    float specular = hasSpecularLayer(m) ? transmission : m.metallic + transmission;
+    return mix(1.0, smoothstep(0.05, 0.4, m.roughness), clamp(specular, 0.0, 1.0));
 }
 
 // Guides (rgba32ui) --------------------------------------------------------------------------------
 // x: view depth (float bits), y: octahedral shading normal (snorm16 x 2),
-// z: instance index + 1 (0: no surface), w: filter strength (float bits).
+// z: instance index + 1 (0: no surface), w: half floats, the filter strength
+// of the surface's lighting (or of what a pane reflects) and its roughness.
 
 vec2 octWrap(vec2 v)
 {
@@ -221,10 +259,11 @@ vec3 decodeNormal(uint packed)
     return fromOctahedral(unpackSnorm2x16(packed));
 }
 
-uvec4 encodeGuide(float viewDepth, vec3 normal, uint instanceIndex, float strength)
+uvec4 encodeGuide(float viewDepth, vec3 normal, uint instanceIndex, float strength,
+                  float roughness)
 {
     return uvec4(floatBitsToUint(viewDepth), encodeNormal(normal), instanceIndex + 1u,
-                 floatBitsToUint(strength));
+                 packHalf2x16(vec2(strength, roughness)));
 }
 
 float guideDepth(uvec4 guide)
@@ -237,9 +276,16 @@ vec3 guideNormal(uvec4 guide)
     return decodeNormal(guide.y);
 }
 
-float guideStrength(uvec4 guide)
+float guideRoughness(uvec4 guide)
 {
-    return uintBitsToFloat(guide.w);
+    return unpackHalf2x16(guide.w).y;
+}
+
+/** Filter strength of a layer on a guide's surface (the primary guide's for kLayerSpecular). */
+float guideStrength(uvec4 guide, uint layer)
+{
+    return layer == kLayerSpecular ? reflectionStrength(guideRoughness(guide))
+                                   : unpackHalf2x16(guide.w).x;
 }
 
 // Filter guides (rg32ui), compact for the many taps of the spatial filter:
@@ -261,6 +307,23 @@ uint filterKey(uvec2 guide)
 vec3 filterNormal(uvec2 guide)
 {
     return fromOctahedral(unpackSnorm4x8(guide.y >> 16).xy);
+}
+
+// Reflection guides (two uints per reflecting layer): what the mirror
+// direction of the surface hits, x: its distance (float bits), y: instance + 1
+// (0: the sky).
+
+uvec2 encodeReflection(float distance, uint key)
+{
+    return uvec2(floatBitsToUint(distance), key);
+}
+
+/** Whether two reflection guides saw the same reflected: the same instance, at a similar distance. */
+bool sameReflection(uvec2 a, uvec2 b)
+{
+    float distanceA = uintBitsToFloat(a.x);
+    float distanceB = uintBitsToFloat(b.x);
+    return a.y == b.y && abs(distanceA - distanceB) <= 0.2 * max(distanceA, distanceB);
 }
 
 float luminance(vec3 color)

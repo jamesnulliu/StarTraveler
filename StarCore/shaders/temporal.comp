@@ -5,11 +5,18 @@
 //
 // The history holds means weighted by sample count (rgb, a = samples). While
 // nothing moves the count is unbounded: the means converge like the reference
-// accumulation. While things move it is capped (fewer samples for sharp
-// specular surfaces, whose lighting moves differently from them), so stale
-// lighting fades. The primary layer also keeps the means of its albedo and
-// emission: the lighting is divided by the albedo only after accumulating, so
-// edges anti-aliased by the jitter stay exact.
+// accumulation. While things move it is capped (fewer samples for what smooth
+// surfaces let through), so stale lighting fades. The primary layer also
+// keeps the means of its albedo and emission: the lighting is divided by the
+// albedo only after accumulating, so edges anti-aliased by the jitter stay
+// exact.
+//
+// Reflections (the glass and specular layers) are reprojected from where
+// their image was, which moves unlike the surface (hybrid_trace.comp,
+// virtualMotion), if that showed the same reflected (reflection guides). The
+// motion is an estimate, and what a surface reflects may change in ways no
+// guide tells, so while things move the history of sharp reflections is also
+// clamped to this frame's samples around the pixel (reflectionSharpness).
 //
 // Output: the filter input, lighting (rgb) and the variance of its mean (a).
 
@@ -22,12 +29,13 @@ layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(push_constant) uniform Pass
 {
-    uint primaryLayer;  // 1: primary (albedo and emission), 0: glass.
+    uint layer;  // kLayer*: the primary one has albedo and emission.
 }
 pass;
 
 // Bindings 0-2 and 4-6 are the scene's (hybrid.glsl, scene.glsl).
 layout(set = 0, binding = 3, rgba32ui) uniform readonly uimage2D guide;
+// Of the layer's surface (the primary one for the specular layer).
 layout(set = 0, binding = 7, rgba32f) uniform readonly image2D motion;
 layout(set = 0, binding = 8, rgba32ui) uniform readonly uimage2D previousGuide;
 layout(set = 0, binding = 9, rgba32f) uniform readonly image2D noisy;
@@ -43,6 +51,15 @@ layout(set = 0, binding = 17, rgba32f) uniform writeonly image2D albedo;
 layout(set = 0, binding = 18, rgba16f) uniform writeonly image2D emission;
 layout(set = 0, binding = 19, rg32f) uniform writeonly image2D moments;
 layout(set = 0, binding = 20, rgba16f) uniform writeonly image2D filterInput;
+// Of the reflected images: xy of the specular layer, zw of the glass layer.
+layout(set = 0, binding = 21, rgba32f) uniform readonly image2D reflectionMotion;
+// What was / is reflected (hybrid.glsl, encodeReflection), as reflectionMotion.
+layout(set = 0, binding = 22, rgba32ui) uniform readonly uimage2D previousReflectionGuide;
+layout(set = 0, binding = 23, rgba32ui) uniform readonly uimage2D reflectionGuide;
+
+// Sharp reflections' history is clamped to this many standard deviations around
+// the mean of this frame's samples nearby (more for less sharp ones).
+const float kClampDeviations = 2.0;
 
 struct History
 {
@@ -54,7 +71,7 @@ struct History
 
 bool isPrimary()
 {
-    return pass.primaryLayer != 0u;
+    return pass.layer == kLayerPrimary;
 }
 
 /** The previous camera's ray through a pixel position, at view depth 1. */
@@ -92,6 +109,12 @@ bool sameSurface(uvec4 current, vec3 previousPoint, vec3 normal, ivec2 tap, bool
                           frameData.previousForward.xyz);
     return abs(dot(normal, tapPoint - previousPoint)) <= 0.01 * viewDepth &&
            dot(guideNormal(previous), normal) > 0.9;
+}
+
+/** This layer's part of a reflection guide. */
+uvec2 reflectionOf(uvec4 guide)
+{
+    return pass.layer == kLayerSpecular ? guide.xy : guide.zw;
 }
 
 History loadHistory(ivec2 tap)
@@ -146,6 +169,43 @@ float spatialVariance(ivec2 pixel, uint key)
     return max(0.0, squares / count - mean * mean) * float(frameSamples());
 }
 
+/**
+ * Clamp a reflection's history to this frame's samples on the same surface
+ * around the pixel (one each), within `deviations` standard deviations of
+ * their mean: stale reflections fade out within a frame where those agree,
+ * slowly only where they are noisy.
+ */
+void clampToNeighborhood(ivec2 pixel, uint key, float deviations, inout History history)
+{
+    vec3 sum = vec3(0.0);
+    vec3 squares = vec3(0.0);
+    float count = 0.0;
+    for (int dy = -2; dy <= 2; ++dy) {
+        for (int dx = -2; dx <= 2; ++dx) {
+            ivec2 tap = pixel + ivec2(dx, dy);
+            if (any(lessThan(tap, ivec2(0))) ||
+                any(greaterThanEqual(vec2(tap), viewportSize())) ||
+                imageLoad(guide, tap).z != key) {
+                continue;
+            }
+            vec3 value = imageLoad(noisy, tap).rgb;
+            sum += value;
+            squares += value * value;
+            count += 1.0;
+        }
+    }
+    vec3 mean = sum / count;
+    vec3 deviation = sqrt(max(squares / count - mean * mean, vec3(0.0)));
+    vec3 clamped =
+        clamp(history.color.rgb, mean - deviations * deviation, mean + deviations * deviation);
+    // The moments move with the mean (same variance).
+    float clampedLuminance = luminance(clamped);
+    history.moments = vec2(clampedLuminance, history.moments.y -
+                                                 history.moments.x * history.moments.x +
+                                                 clampedLuminance * clampedLuminance);
+    history.color.rgb = clamped;
+}
+
 void main()
 {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
@@ -159,6 +219,9 @@ void main()
     vec3 currentEmission = isPrimary() ? imageLoad(frameEmission, pixel).rgb : vec3(0.0);
     bool reset = (frameData.history.y & kHistoryReset) != 0u;
     bool still = (frameData.history.y & kHistoryStatic) != 0u;
+    uint cap = frameData.history.x;  // 0: still.
+    float sharpness = !isPrimary() && current.z != 0u ? reflectionSharpness(guideRoughness(current))
+                                                      : 0.0;
 
     // Bilinear reprojection over the taps that saw the same surface.
     History history;
@@ -172,8 +235,20 @@ void main()
             frameData.previousPosition.xyz +
             previousRay(vec2(pixel) + frameData.viewport.zw + currentMotion.xy) * currentMotion.z;
         vec3 normal = current.z != 0u ? guideNormal(current) : vec3(0.0);
+        // The history of a reflection is where its image was (on the same surface), if
+        // that showed the same reflected (sharp reflections only: the mirror direction
+        // says little about glossy ones).
+        vec2 moved = currentMotion.xy;
+        uvec2 reflection = uvec2(0u);
+        bool checkReflection = false;
+        if (!isPrimary()) {
+            vec4 reflected = imageLoad(reflectionMotion, pixel);
+            moved = pass.layer == kLayerSpecular ? reflected.xy : reflected.zw;
+            reflection = reflectionOf(imageLoad(reflectionGuide, pixel));
+            checkReflection = !still && sharpness > 0.5;
+        }
         // Bilinear taps around the pixel center, moved.
-        vec2 position = vec2(pixel) + 0.5 + currentMotion.xy - 0.5;
+        vec2 position = vec2(pixel) + 0.5 + moved - 0.5;
         ivec2 base = ivec2(floor(position));
         vec2 f = position - vec2(base);
         float weights[4] = float[](
@@ -182,7 +257,10 @@ void main()
         float total = 0.0;
         for (int i = 0; i < 4; ++i) {
             ivec2 tap = base + offsets[i];
-            if (weights[i] <= 0.0 || !sameSurface(current, previousPoint, normal, tap, still)) {
+            if (weights[i] <= 0.0 || !sameSurface(current, previousPoint, normal, tap, still) ||
+                (checkReflection &&
+                 !sameReflection(reflection,
+                                 reflectionOf(imageLoad(previousReflectionGuide, tap))))) {
                 continue;
             }
             History h = loadHistory(tap);
@@ -197,6 +275,9 @@ void main()
             history.albedo /= total;
             history.emission /= total;
             history.moments /= total;
+            if (!isPrimary() && cap > 0u && sharpness > 0.0) {
+                clampToNeighborhood(pixel, current.z, kClampDeviations / sharpness, history);
+            }
         } else {
             history.color = vec4(0.0);
         }
@@ -204,12 +285,11 @@ void main()
 
     // Accumulate this frame's samples.
     float previousSamples = history.color.a;
-    uint cap = frameData.history.x;
     if (cap > 0u) {
-        // Sharp reflections on primary surfaces move differently from them: shorter
-        // history. (Window panes have strength 1: they mostly reflect what moves
-        // with them, like a cockpit.)
-        float strength = current.z != 0u ? guideStrength(current) : 1.0;
+        // Shorter history where the filter may not blur the lighting: what smooth
+        // surfaces let through is a sharp image moving unlike them. (Reflections keep
+        // all of it: they are reprojected from where their image was, and clamped.)
+        float strength = isPrimary() && current.z != 0u ? guideStrength(current, pass.layer) : 1.0;
         previousSamples = min(previousSamples, float(cap) * mix(0.25, 1.0, strength));
     }
     float samples = previousSamples + float(frameSamples());

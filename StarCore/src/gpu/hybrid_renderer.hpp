@@ -3,12 +3,14 @@
 //   1. visibility (VisibilityPass): rasterize instance and triangle ids with a
 //      jittered projection, the primary surfaces and then, over a copy of
 //      their depth, the nearest smooth window panes (the glass layer);
-//   2. trace (hybrid_trace.comp): rebuild the hits of both layers from those
-//      ids, write their guides and motion vectors, trace paths from them;
+//   2. trace (hybrid_trace.comp): rebuild the hits of both from those ids,
+//      write their guides and motion vectors, trace paths from them into
+//      three layers: the primary surfaces' lighting, what they reflect
+//      (specular) and what the panes reflect (glass);
 //   3. temporal (temporal.comp, per layer): reproject and accumulate;
 //   4. a-trous (atrous.comp): the SVGF spatial filter, a few iterations;
-//   5. composite (composite.comp): lighting x albedo + emission + glass into
-//      GpuRenderer's radiance image.
+//   5. composite (composite.comp): lighting x albedo + emission + specular +
+//      glass into GpuRenderer's radiance image.
 
 #include <array>
 #include <cstdint>

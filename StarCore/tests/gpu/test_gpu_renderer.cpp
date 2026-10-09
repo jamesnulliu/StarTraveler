@@ -684,6 +684,85 @@ TEST_CASE("GPU hybrid: samples are reused while moving and filtered", "[gpu][hyb
     CHECK(filtered < 0.6F * fresh);
 }
 
+TEST_CASE("GPU hybrid: reflections leave no trail while moving", "[gpu][hybrid]")
+{
+    // A mirror floor and a window pane reflecting bright balls, the camera
+    // sliding sideways: the reflections move unlike the surfaces reflecting
+    // them. Reprojected with the surfaces' motion, their history would trail
+    // behind them.
+    const GpuTest gpu;
+    Scene scene;
+    scene.environment().skyColor = Vec3(0.0F);
+    Entity floor = scene.createEntity("Floor");
+    floor.get<TransformComponent>().translation = {0.0F, -1.0F, 0.0F};
+    floor.add<MeshComponent>(MeshComponent{.mesh = primitives::plane(Vec2(40.0F)).build()});
+    floor.add<MaterialComponent>(
+        MaterialComponent{.albedo = Vec3(0.9F), .roughness = 0.0F, .metallic = 1.0F});
+    Entity pane = scene.createEntity("Pane");
+    pane.get<TransformComponent>().translation = {0.6F, 0.8F, 5.0F};
+    pane.add<MeshComponent>(MeshComponent{.mesh = primitives::quad(Vec2(2.4F, 1.4F)).build()});
+    pane.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(1.0F), .roughness = 0.0F, .transmission = 1.0F, .thinWalled = true});
+    // One in front, reflected by the floor; one behind the camera, by the pane (which
+    // reflects a few percent).
+    for (const auto& [position, power] :
+         {std::pair{Vec3(0.0F, 0.3F, 0.0F), 4.0F}, std::pair{Vec3(0.6F, 0.8F, 13.0F), 40.0F}}) {
+        Entity light = scene.createEntity("Light");
+        light.get<TransformComponent>().translation = position;
+        light.add<SphereComponent>(0.6F);
+        light.add<MaterialComponent>(MaterialComponent{
+            .albedo = Vec3(1.0F), .emissionColor = Vec3(1.0F), .emissionPower = power});
+    }
+    const RenderScene renderScene = buildRenderScene(scene);
+    constexpr std::uint32_t kWidth = 128;
+    constexpr std::uint32_t kHeight = 96;
+    constexpr int kFrames = 24;
+    auto cameraAt = [&](float x) {
+        Camera camera = makeCamera(kWidth, kHeight);
+        camera.setPosition({x, 1.2F, 9.0F});
+        camera.setRotation(-90.0F, -10.0F);
+        return camera;
+    };
+    const PathTracerSettings settings{.samplesPerPixel = 2};
+
+    auto hybrid = gpu.makeRenderer(kWidth, kHeight);
+    for (int i = 0; i < kFrames; ++i) {
+        hybrid->render(renderScene, cameraAt(-0.8F + 1.6F * static_cast<float>(i) / (kFrames - 1)),
+                       settings, hybridOptions());
+    }
+    REQUIRE(hybrid->accumulatedFrames() == kFrames);  // Reprojected, not restarted.
+    auto reference = gpu.makeRenderer(kWidth, kHeight);
+    for (int i = 0; i < 64; ++i) {
+        reference->render(renderScene, cameraAt(0.8F), settings);
+    }
+    const ColorImage image = hybrid->readImage();
+    const ColorImage expected = reference->readImage();
+
+    // A trail: bright pixels with nothing bright near them in the reference (edges
+    // may differ, anti-aliased by fewer samples).
+    auto brightness = [](const ColorImage& from, std::uint32_t x, std::uint32_t y) {
+        const std::uint32_t pixel = from.at(x, y);
+        return std::max({channel(pixel, 0), channel(pixel, 1), channel(pixel, 2)});
+    };
+    std::uint32_t trail = 0;
+    std::uint32_t lit = 0;
+    for (std::uint32_t y = 2; y + 2 < kHeight; ++y) {
+        for (std::uint32_t x = 2; x + 2 < kWidth; ++x) {
+            int nearby = 0;
+            for (std::uint32_t v = y - 2; v <= y + 2; ++v) {
+                for (std::uint32_t u = x - 2; u <= x + 2; ++u) {
+                    nearby = std::max(nearby, brightness(expected, u, v));
+                }
+            }
+            lit += brightness(expected, x, y) > 96 ? 1 : 0;
+            trail += brightness(image, x, y) > 96 && nearby < 48 ? 1 : 0;
+        }
+    }
+    INFO(trail << " pixels of trails, " << lit << " lit");
+    REQUIRE(lit > 200);  // Both balls and their reflections.
+    CHECK(trail == 0);
+}
+
 TEST_CASE("GPU hybrid: what restarts the accumulation", "[gpu][hybrid]")
 {
     const GpuTest gpu;
@@ -731,12 +810,13 @@ TEST_CASE("GPU hybrid: what restarts the accumulation", "[gpu][hybrid]")
     REQUIRE(hybrid->accumulatedFrames() == 1);
 
     // Debug views, resizing, an empty scene.
-    for (std::size_t view = 0; view < EnumNames<HybridView>::kNames.size(); ++view) {
+    constexpr std::size_t kViews = EnumNames<HybridView>::kNames.size();
+    for (std::size_t view = 0; view < kViews; ++view) {
         GpuRenderOptions options = hybridOptions();
         options.view = static_cast<HybridView>(view);
         hybrid->render(renderScene, camera, bounces, options);
     }
-    REQUIRE(hybrid->accumulatedFrames() == 9);
+    REQUIRE(hybrid->accumulatedFrames() == 1 + kViews);
     // The same content rebuilt is new content (another render scene).
     hybrid->render(buildRenderScene(test.scene), camera, bounces, hybridOptions());
     REQUIRE(hybrid->accumulatedFrames() == 1);

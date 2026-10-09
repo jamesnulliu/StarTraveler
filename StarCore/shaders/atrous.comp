@@ -1,6 +1,6 @@
 #version 460
 // Hybrid renderer, spatial filter: one iteration of the edge-avoiding a-trous
-// wavelet filter of SVGF (Schied et al., HPG 2017) on the primary lighting.
+// wavelet filter of SVGF (Schied et al., HPG 2017) on one layer's lighting.
 //
 // 5x5 taps `step` pixels apart, weighted by the B3 spline kernel and stopped
 // at edges: other instances, normals that differ, depths off the center's
@@ -19,6 +19,7 @@ layout(push_constant) uniform Pass
 {
     int step;
     uint firstIteration;  // Blur the variance (later iterations get it filtered).
+    uint layer;           // kLayer*: which filter strength of the guide.
 }
 pass;
 
@@ -62,7 +63,7 @@ void main()
     vec4 center = imageLoad(inputImage, pixel);
     uvec2 centerGuide = imageLoad(filterGuide, pixel).xy;
     uint key = filterKey(centerGuide);
-    float strength = key != 0u ? guideStrength(imageLoad(guide, pixel)) : 0.0;
+    float strength = key != 0u ? guideStrength(imageLoad(guide, pixel), pass.layer) : 0.0;
     if (strength <= 0.0) {
         imageStore(outputImage, pixel, center);
         return;

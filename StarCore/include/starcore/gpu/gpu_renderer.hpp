@@ -64,6 +64,7 @@ enum class HybridView : std::uint8_t
     Noisy,     // This frame's samples, before any reuse.
     Albedo,    // Of the primary surfaces (lighting is filtered divided by it).
     Lighting,  // Filtered lighting of the primary surfaces.
+    Specular,  // What smooth primary surfaces reflect (a layer of its own).
     Glass,     // What window panes reflect (a layer of its own).
     Variance,  // Relative standard deviation of the lighting's mean.
     Motion,    // Screen motion of the primary surfaces (|x|, |y| / 8 px).
@@ -73,8 +74,8 @@ enum class HybridView : std::uint8_t
 template <>
 struct EnumNames<HybridView>
 {
-    static constexpr std::array kNames = {"Final",    "Noisy",    "Albedo", "Lighting",
-                                          "Glass",    "Variance", "Motion", "History"};
+    static constexpr std::array kNames = {"Final", "Noisy",    "Albedo", "Lighting", "Specular",
+                                          "Glass", "Variance", "Motion", "History"};
 };
 
 /** @brief Sample reuse of the hybrid pipeline (SVGF-style). */

@@ -24,24 +24,36 @@ constexpr VkDescriptorType kImage = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
 constexpr VkDescriptorType kTlas = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
 constexpr VkDescriptorType kTraceBindings[] = {
     kTlas,  kUniform, kBuffer, kImage, kBuffer, kBuffer, kBuffer, kImage, kImage, kImage,
-    kImage, kImage,   kImage,  kImage, kImage,  kImage,  kImage,  kImage, kImage, kBuffer};
-// Spatial filter iterations of the glass layer at most (radius 8 pixels).
-constexpr std::uint32_t kGlassIterations = 3;
+    kImage, kImage,   kImage,  kImage, kImage,  kImage,  kImage,  kImage, kImage, kBuffer,
+    kImage, kImage,   kImage};
 constexpr VkDescriptorType kTemporalBindings[] = {
     kBuffer, kUniform, kBuffer, kImage, kBuffer, kBuffer, kBuffer, kImage, kImage, kImage, kImage,
-    kImage,  kImage,   kImage,  kImage, kImage,  kImage,  kImage,  kImage, kImage, kImage};
+    kImage,  kImage,   kImage,  kImage, kImage,  kImage,  kImage,  kImage, kImage, kImage, kImage,
+    kImage,  kImage};
 constexpr VkDescriptorType kAtrousBindings[] = {kBuffer, kUniform, kBuffer, kImage, kBuffer,
                                                 kBuffer, kBuffer,  kImage,  kImage, kImage};
+
+/** @brief The layers (kLayer* in hybrid.glsl), each reprojected and filtered on its own. */
+enum class Layer : std::uint32_t
+{
+    Primary = 0,   // Lighting of the primary surfaces.
+    Glass = 1,     // What the window panes in front reflect.
+    Specular = 2,  // What the primary surfaces reflect.
+};
+constexpr Layer kLayers[] = {Layer::Primary, Layer::Glass, Layer::Specular};
+// Spatial filter iterations of the reflections at most (radius 8 pixels).
+constexpr std::uint32_t kReflectionIterations = 3;
 
 /** @brief Push constants of atrous.comp. */
 struct AtrousPass
 {
     std::int32_t step = 1;
     std::uint32_t firstIteration = 0;
+    Layer layer = Layer::Primary;
 };
 constexpr VkDescriptorType kCompositeBindings[] = {
-    kBuffer, kUniform, kBuffer, kImage, kBuffer, kBuffer, kBuffer, kImage,
-    kImage,  kImage,   kImage,  kImage, kImage,  kImage,  kImage,  kImage};
+    kBuffer, kUniform, kBuffer, kImage, kBuffer, kBuffer, kBuffer, kImage, kImage,
+    kImage,  kImage,   kImage,  kImage, kImage,  kImage,  kImage,  kImage, kImage};
 
 void computeBarrier(VkCommandBuffer commandBuffer)
 {
@@ -57,10 +69,12 @@ struct HybridRenderer::Images
     // This frame (hybrid_trace.comp).
     vulkan::Image noisyPrimary;
     vulkan::Image noisyGlass;
+    vulkan::Image noisySpecular;
     vulkan::Image frameAlbedo;
     vulkan::Image frameEmission;
     vulkan::Image primaryMotion;
     vulkan::Image glassMotion;
+    vulkan::Image reflectionMotion;  // Of the reflected images: xy specular, zw glass.
     // RG32UI: compact guides for the a-trous taps.
     vulkan::Image primaryFilterGuide;
     vulkan::Image glassFilterGuide;
@@ -73,24 +87,56 @@ struct HybridRenderer::Images
     std::array<vulkan::Image, 2> primaryMoments;
     std::array<vulkan::Image, 2> glassColor;
     std::array<vulkan::Image, 2> glassMoments;
+    std::array<vulkan::Image, 2> specularColor;
+    std::array<vulkan::Image, 2> specularMoments;
+    std::array<vulkan::Image, 2> reflectionGuide;  // What is reflected: xy specular, zw glass.
     // Filter input ([0], from the temporal pass) and a-trous ping-pong.
     std::array<vulkan::Image, 2> primaryFilter;
     std::array<vulkan::Image, 2> glassFilter;
+    std::array<vulkan::Image, 2> specularFilter;
 
     template <typename F>
     void forEach(F&& function)
     {
-        for (vulkan::Image* image :
-             {&noisyPrimary, &noisyGlass, &frameAlbedo, &frameEmission, &primaryMotion,
-              &glassMotion, &primaryFilterGuide, &glassFilterGuide}) {
+        for (vulkan::Image* image : {&noisyPrimary, &noisyGlass, &noisySpecular, &frameAlbedo,
+                                     &frameEmission, &primaryMotion, &glassMotion,
+                                     &reflectionMotion, &primaryFilterGuide, &glassFilterGuide}) {
             function(*image);
         }
-        for (auto* pair : {&primaryGuide, &glassGuide, &primaryColor, &primaryAlbedo,
-                           &primaryEmission, &primaryMoments, &glassColor, &glassMoments,
-                           &primaryFilter, &glassFilter}) {
+        for (auto* pair :
+             {&primaryGuide, &glassGuide, &primaryColor, &primaryAlbedo, &primaryEmission,
+              &primaryMoments, &glassColor, &glassMoments, &specularColor, &specularMoments,
+              &reflectionGuide, &primaryFilter, &glassFilter, &specularFilter}) {
             function((*pair)[0]);
             function((*pair)[1]);
         }
+    }
+
+    /** @brief The images a layer is reprojected and filtered with. */
+    struct LayerImages
+    {
+        std::array<vulkan::Image, 2>* guide;  // The surface's.
+        vulkan::Image* filterGuide;
+        vulkan::Image* motion;  // The surface's.
+        vulkan::Image* noisy;
+        std::array<vulkan::Image, 2>* color;
+        std::array<vulkan::Image, 2>* moments;
+        std::array<vulkan::Image, 2>* filter;
+    };
+    auto layer(Layer layer) -> LayerImages
+    {
+        switch (layer) {
+        case Layer::Glass:
+            return {&glassGuide, &glassFilterGuide, &glassMotion, &noisyGlass,
+                    &glassColor, &glassMoments,     &glassFilter};
+        case Layer::Specular:
+            return {&primaryGuide,  &primaryFilterGuide, &primaryMotion, &noisySpecular,
+                    &specularColor, &specularMoments,    &specularFilter};
+        case Layer::Primary:
+            break;
+        }
+        return {&primaryGuide, &primaryFilterGuide, &primaryMotion, &noisyPrimary,
+                &primaryColor, &primaryMoments,     &primaryFilter};
     }
 };
 
@@ -122,10 +168,12 @@ void HybridRenderer::resize(std::uint32_t width, std::uint32_t height)
     };
     images->noisyPrimary = storage(VK_FORMAT_R32G32B32A32_SFLOAT);
     images->noisyGlass = storage(VK_FORMAT_R32G32B32A32_SFLOAT);
+    images->noisySpecular = storage(VK_FORMAT_R32G32B32A32_SFLOAT);
     images->frameAlbedo = storage(VK_FORMAT_R16G16B16A16_SFLOAT);
     images->frameEmission = storage(VK_FORMAT_R16G16B16A16_SFLOAT);
     images->primaryMotion = storage(VK_FORMAT_R32G32B32A32_SFLOAT);
     images->glassMotion = storage(VK_FORMAT_R32G32B32A32_SFLOAT);
+    images->reflectionMotion = storage(VK_FORMAT_R32G32B32A32_SFLOAT);
     images->primaryFilterGuide = storage(VK_FORMAT_R32G32_UINT);
     images->glassFilterGuide = storage(VK_FORMAT_R32G32_UINT);
     for (std::size_t i = 0; i < 2; ++i) {
@@ -137,8 +185,12 @@ void HybridRenderer::resize(std::uint32_t width, std::uint32_t height)
         images->primaryMoments[i] = storage(VK_FORMAT_R32G32_SFLOAT);
         images->glassColor[i] = storage(VK_FORMAT_R32G32B32A32_SFLOAT);
         images->glassMoments[i] = storage(VK_FORMAT_R32G32_SFLOAT);
+        images->specularColor[i] = storage(VK_FORMAT_R32G32B32A32_SFLOAT);
+        images->specularMoments[i] = storage(VK_FORMAT_R32G32_SFLOAT);
+        images->reflectionGuide[i] = storage(VK_FORMAT_R32G32B32A32_UINT);
         images->primaryFilter[i] = storage(VK_FORMAT_R16G16B16A16_SFLOAT);
         images->glassFilter[i] = storage(VK_FORMAT_R16G16B16A16_SFLOAT);
+        images->specularFilter[i] = storage(VK_FORMAT_R16G16B16A16_SFLOAT);
     }
 
     // GENERAL from now on. The contents are undefined until the first frame,
@@ -244,11 +296,14 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
             .storageImage(16, entityIds.view())
             .storageImage(17, images.primaryFilterGuide.view())
             .storageImage(18, images.glassFilterGuide.view())
-            .storageBuffer(19, scene.previousTransformBuffer());
+            .storageBuffer(19, scene.previousTransformBuffer())
+            .storageImage(20, images.noisySpecular.view())
+            .storageImage(21, images.reflectionMotion.view())
+            .storageImage(22, images.reflectionGuide[current].view());
         m_trace.bind(commandBuffer);
         m_trace.pushDescriptors(commandBuffer, writes.writes());
-        // The samples per pixel (timed), then the paths reflected by panes: one per
-        // pixel, a fixed cost like the other passes.
+        // The samples per pixel (timed), then the reflected paths: one per pixel and
+        // layer, a fixed cost like the other passes.
         for (const std::uint32_t reflections : {0U, 1U}) {
             m_trace.pushConstants(commandBuffer, &reflections, sizeof(reflections));
             vkCmdDispatch(commandBuffer, groupsX, groupsY, 1);
@@ -262,73 +317,76 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
 
     // 3. Temporal ---------------------------------------------------------------------------------
     m_temporal.bind(commandBuffer);
-    for (const std::uint32_t primary : {1U, 0U}) {
-        auto& guide = primary != 0 ? images.primaryGuide : images.glassGuide;
-        auto& color = primary != 0 ? images.primaryColor : images.glassColor;
-        auto& moments = primary != 0 ? images.primaryMoments : images.glassMoments;
-        // The glass layer has no albedo or emission: the primary's are bound, unused.
+    for (const Layer layer : kLayers) {
+        const Images::LayerImages layerImages = images.layer(layer);
+        // Only the primary layer has albedo and emission: its images are bound, unused, for
+        // the others (a barrier between the layers all the same: they count as used).
         vulkan::DescriptorWrites writes;
         writes.uniformBuffer(1, uniformBuffer.handle())
-            .storageImage(3, guide[current].view())
-            .storageImage(7, (primary != 0 ? images.primaryMotion : images.glassMotion).view())
-            .storageImage(8, guide[previous].view())
-            .storageImage(9, (primary != 0 ? images.noisyPrimary : images.noisyGlass).view())
+            .storageImage(3, (*layerImages.guide)[current].view())
+            .storageImage(7, layerImages.motion->view())
+            .storageImage(8, (*layerImages.guide)[previous].view())
+            .storageImage(9, layerImages.noisy->view())
             .storageImage(10, images.frameAlbedo.view())
             .storageImage(11, images.frameEmission.view())
-            .storageImage(12, color[previous].view())
+            .storageImage(12, (*layerImages.color)[previous].view())
             .storageImage(13, images.primaryAlbedo[previous].view())
             .storageImage(14, images.primaryEmission[previous].view())
-            .storageImage(15, moments[previous].view())
-            .storageImage(16, color[current].view())
+            .storageImage(15, (*layerImages.moments)[previous].view())
+            .storageImage(16, (*layerImages.color)[current].view())
             .storageImage(17, images.primaryAlbedo[current].view())
             .storageImage(18, images.primaryEmission[current].view())
-            .storageImage(19, moments[current].view())
-            .storageImage(20,
-                          (primary != 0 ? images.primaryFilter : images.glassFilter)[0].view());
+            .storageImage(19, (*layerImages.moments)[current].view())
+            .storageImage(20, (*layerImages.filter)[0].view())
+            .storageImage(21, images.reflectionMotion.view())
+            .storageImage(22, images.reflectionGuide[previous].view())
+            .storageImage(23, images.reflectionGuide[current].view());
         m_temporal.pushDescriptors(commandBuffer, writes.writes());
-        m_temporal.pushConstants(commandBuffer, &primary, sizeof(primary));
+        m_temporal.pushConstants(commandBuffer, &layer, sizeof(layer));
         vkCmdDispatch(commandBuffer, groupsX, groupsY, 1);
         computeBarrier(commandBuffer);
     }
 
     // 4. A-trous ----------------------------------------------------------------------------------
     // Index of each layer's latest filter image.
-    std::uint32_t primaryFiltered = 0;
-    std::uint32_t glassFiltered = 0;
+    std::array<std::uint32_t, std::size(kLayers)> filtered{};
     const std::uint32_t iterations = denoiser.spatial ? denoiser.iterations : 0;
     if (iterations > 0) {
         m_atrous.bind(commandBuffer);
     }
     for (std::uint32_t i = 0; i < iterations; ++i) {
-        const AtrousPass pass{.step = static_cast<std::int32_t>(1U << i),
-                              .firstIteration = i == 0 ? 1U : 0U};
-        for (const bool primary : {true, false}) {
-            if (!primary && i >= kGlassIterations) {
+        for (const Layer layer : kLayers) {
+            if (layer != Layer::Primary && i >= kReflectionIterations) {
                 continue;
             }
-            auto& filter = primary ? images.primaryFilter : images.glassFilter;
-            std::uint32_t& filtered = primary ? primaryFiltered : glassFiltered;
+            const AtrousPass pass{.step = static_cast<std::int32_t>(1U << i),
+                                  .firstIteration = i == 0 ? 1U : 0U,
+                                  .layer = layer};
+            const Images::LayerImages layerImages = images.layer(layer);
+            std::uint32_t& latest = filtered[static_cast<std::size_t>(layer)];
             vulkan::DescriptorWrites writes;
             writes.uniformBuffer(1, uniformBuffer.handle())
-                .storageImage(3, (primary ? images.primaryGuide : images.glassGuide)[current].view())
-                .storageImage(7, filter[filtered].view())
-                .storageImage(8, filter[1 - filtered].view())
-                .storageImage(9, (primary ? images.primaryFilterGuide : images.glassFilterGuide)
-                                     .view());
+                .storageImage(3, (*layerImages.guide)[current].view())
+                .storageImage(7, (*layerImages.filter)[latest].view())
+                .storageImage(8, (*layerImages.filter)[1 - latest].view())
+                .storageImage(9, layerImages.filterGuide->view());
             m_atrous.pushDescriptors(commandBuffer, writes.writes());
             m_atrous.pushConstants(commandBuffer, &pass, sizeof(pass));
             vkCmdDispatch(commandBuffer, groupsX, groupsY, 1);
-            filtered = 1 - filtered;
+            latest = 1 - latest;
         }
         computeBarrier(commandBuffer);
     }
 
     // 5. Composite --------------------------------------------------------------------------------
     {
+        auto latest = [&](Layer layer) -> const vulkan::Image& {
+            return (*images.layer(layer).filter)[filtered[static_cast<std::size_t>(layer)]];
+        };
         vulkan::DescriptorWrites writes;
         writes.uniformBuffer(1, uniformBuffer.handle())
-            .storageImage(3, images.primaryFilter[primaryFiltered].view())
-            .storageImage(7, images.glassFilter[glassFiltered].view())
+            .storageImage(3, latest(Layer::Primary).view())
+            .storageImage(7, latest(Layer::Glass).view())
             .storageImage(8, images.primaryAlbedo[current].view())
             .storageImage(9, images.primaryEmission[current].view())
             .storageImage(10, images.primaryColor[current].view())
@@ -336,7 +394,9 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
             .storageImage(12, images.noisyGlass.view())
             .storageImage(13, images.frameEmission.view())
             .storageImage(14, images.primaryMotion.view())
-            .storageImage(15, radiance.view());
+            .storageImage(15, radiance.view())
+            .storageImage(16, latest(Layer::Specular).view())
+            .storageImage(17, images.noisySpecular.view());
         m_composite.bind(commandBuffer);
         m_composite.pushDescriptors(commandBuffer, writes.writes());
         vkCmdDispatch(commandBuffer, groupsX, groupsY, 1);

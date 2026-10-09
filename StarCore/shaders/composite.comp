@@ -1,7 +1,8 @@
 #version 460
-// Hybrid renderer, composite: primary lighting x albedo + emission + glass
-// layer into the radiance image (tone mapped by post.comp), or a debug view
-// of one of the intermediate images (raw ones: post.comp only clamps them).
+// Hybrid renderer, composite: primary lighting x albedo + emission + what the
+// primary surfaces and the panes reflect (specular and glass layers) into the
+// radiance image (tone mapped by post.comp), or a debug view of one of the
+// intermediate images (raw ones: post.comp only clamps them).
 
 #extension GL_GOOGLE_include_directive : require
 
@@ -21,16 +22,19 @@ layout(set = 0, binding = 12, rgba32f) uniform readonly image2D noisyGlass;
 layout(set = 0, binding = 13, rgba16f) uniform readonly image2D frameEmission;
 layout(set = 0, binding = 14, rgba32f) uniform readonly image2D primaryMotion;
 layout(set = 0, binding = 15, rgba32f) uniform writeonly image2D radianceImage;
+layout(set = 0, binding = 16, rgba16f) uniform readonly image2D specularLighting;
+layout(set = 0, binding = 17, rgba32f) uniform readonly image2D noisySpecular;
 
 // HybridView.
 const uint kViewFinal = 0u;
 const uint kViewNoisy = 1u;
 const uint kViewAlbedo = 2u;
 const uint kViewLighting = 3u;
-const uint kViewGlass = 4u;
-const uint kViewVariance = 5u;
-const uint kViewMotion = 6u;
-const uint kViewHistory = 7u;
+const uint kViewSpecular = 4u;
+const uint kViewGlass = 5u;
+const uint kViewVariance = 6u;
+const uint kViewMotion = 7u;
+const uint kViewHistory = 8u;
 
 void main()
 {
@@ -40,20 +44,24 @@ void main()
     }
     vec4 lighting = imageLoad(primaryLighting, pixel);
     vec3 surfaceAlbedo = imageLoad(albedo, pixel).rgb;
+    vec3 specular = imageLoad(specularLighting, pixel).rgb;
     vec3 glass = imageLoad(glassLighting, pixel).rgb;
-    vec3 radiance =
-        demodulationAlbedo(surfaceAlbedo) * lighting.rgb + imageLoad(emission, pixel).rgb + glass;
+    vec3 radiance = demodulationAlbedo(surfaceAlbedo) * lighting.rgb +
+                    imageLoad(emission, pixel).rgb + specular + glass;
 
     switch (frameData.history.z) {
     case kViewNoisy:
         radiance = imageLoad(noisyPrimary, pixel).rgb + imageLoad(frameEmission, pixel).rgb +
-                   imageLoad(noisyGlass, pixel).rgb;
+                   imageLoad(noisySpecular, pixel).rgb + imageLoad(noisyGlass, pixel).rgb;
         break;
     case kViewAlbedo:  // Raw.
         radiance = surfaceAlbedo;
         break;
     case kViewLighting:
         radiance = lighting.rgb;
+        break;
+    case kViewSpecular:
+        radiance = specular;
         break;
     case kViewGlass:
         radiance = glass;

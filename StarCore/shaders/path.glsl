@@ -131,7 +131,7 @@ struct Scatter
     uint lobe;
     // Straight through a thin sheet: the path keeps its MIS state.
     bool passThrough;
-    // Probability of the sampled set of lobes (sampleReflection), else 1.
+    // Probability of the sampled set of lobes (sampleLobes), else 1.
     float scale;
 };
 
@@ -218,13 +218,21 @@ bool sampleBsdf(Material material, vec3 wo, SurfaceHit hit, inout uint rng, out 
     return true;
 }
 
+// Sets of lobes for sampleLobes (bits).
+const uint kLobesReflection = 2u;  // Off the surface: metal and dielectric reflection.
+const uint kLobesDiffuse = 4u;
+const uint kLobesTransmission = 8u;
+const uint kLobesAll = kLobesReflection | kLobesDiffuse | kLobesTransmission;
+
 /**
- * sampleBsdf of a thin sheet without the straight pass through it (which the
- * hybrid renderer follows separately): one of the other lobes, chosen by
- * their probabilities relative to each other and weighted by their sum.
+ * sampleBsdf restricted to a set of lobes, the others followed separately by
+ * the hybrid renderer: one of them, chosen by their probabilities relative to
+ * each other and weighted by their sum (`scale`). Metal and dielectric
+ * reflection are one lobe here: both mirror about the sampled microfacet
+ * normal, so their weights add up.
  */
-bool sampleReflection(Material material, vec3 wo, SurfaceHit hit, inout uint rng,
-                      out Scatter scatter)
+bool sampleLobes(Material material, vec3 wo, SurfaceHit hit, uint lobes, inout uint rng,
+                 out Scatter scatter)
 {
     scatter.direction = vec3(0.0);
     scatter.weight = vec3(0.0);
@@ -242,26 +250,50 @@ bool sampleReflection(Material material, vec3 wo, SurfaceHit hit, inout uint rng
     float u1 = nextFloat(rng);
     float u2 = nextFloat(rng);
     vec3 h = sampleGgxVisibleNormal(woLocal, alpha, u1, u2);
-    float reflectance = fresnelDielectric(dot(woLocal, h), 1.0 / material.ior);
+    bool thin = (material.flags & kMaterialThinWalled) != 0u;
+    float eta = thin || hit.frontFace ? 1.0 / material.ior : material.ior;
+    float reflectance = fresnelDielectric(dot(woLocal, h), eta);
     float metal = material.metallic;
-    float dielectric = (1.0 - metal) * reflectance;
-    float diffuse = (1.0 - metal) * (1.0 - reflectance) * (1.0 - material.transmission);
-    float total = metal + dielectric + diffuse;
+    // The probabilities of sampleBsdf's lobes.
+    float rest = (1.0 - metal) * (1.0 - reflectance);
+    float reflection = (lobes & kLobesReflection) != 0u ? metal + (1.0 - metal) * reflectance : 0.0;
+    float transmission = (lobes & kLobesTransmission) != 0u ? rest * material.transmission : 0.0;
+    float diffuse = (lobes & kLobesDiffuse) != 0u ? rest * (1.0 - material.transmission) : 0.0;
+    float total = reflection + transmission + diffuse;
     if (total <= 0.0) {
         return false;
     }
     scatter.scale = total;
 
     float choice = nextFloat(rng) * total;
-    if (choice < metal + dielectric) {
+    if (choice < reflection) {
         vec3 world = toWorld(frame, reflectLocal(woLocal, h));
         if (dot(world, hit.geometricNormal) <= 0.0) {
             return false;
         }
         scatter.direction = world;
-        scatter.weight = choice < metal ? fresnelSchlick(baseColor, dot(woLocal, h)) * total
-                                        : vec3(total);
+        scatter.weight = (metal * fresnelSchlick(baseColor, dot(woLocal, h)) +
+                          vec3((1.0 - metal) * reflectance)) *
+                         (total / reflection);
         scatter.lobe = kLobeSpecular;
+        return true;
+    }
+    if (choice < reflection + transmission) {
+        vec3 transmitted;
+        if (thin) {
+            transmitted = reflectLocal(woLocal, h);
+        } else if (!refractDirection(-woLocal, h, eta, transmitted)) {
+            return false;  // Unreachable: the Fresnel term was 1.
+        }
+        transmitted.z = -abs(transmitted.z);
+        vec3 world = normalize(toWorld(frame, transmitted));
+        if (dot(world, hit.geometricNormal) > 0.0) {
+            return false;
+        }
+        scatter.direction = world;
+        scatter.weight = baseColor * total;
+        scatter.lobe = kLobeTransmission;
+        scatter.passThrough = thin;
         return true;
     }
     vec3 direction = cosineHemisphere(hit.normal, rng);
@@ -318,9 +350,8 @@ vec3 clampContribution(vec3 contribution, uint scatteringEvents, float scale)
     return contribution;
 }
 
-// pathVertex flags.
+// pathVertex flags, and kLobes* bits: only those lobes (sampleLobes; none: sampleBsdf).
 const uint kVertexSkipEmission = 1u;  // The caller accounts for the vertex's emission.
-const uint kVertexReflectOnly = 2u;   // sampleReflection instead of sampleBsdf.
 
 /**
  * One vertex of a path reached along `direction`: emission (MIS-weighted),
@@ -348,9 +379,9 @@ bool pathVertex(SurfaceHit hit, Material material, int lightIndex, vec3 directio
 
     vec3 wo = -normalize(direction);
     Scatter scatter;
-    bool scattered = (flags & kVertexReflectOnly) != 0u
-                         ? sampleReflection(material, wo, hit, rng, scatter)
-                         : sampleBsdf(material, wo, hit, rng, scatter);
+    uint lobes = flags & kLobesAll;
+    bool scattered = lobes != 0u ? sampleLobes(material, wo, hit, lobes, rng, scatter)
+                                 : sampleBsdf(material, wo, hit, rng, scatter);
     if (!scattered) {
         return false;  // Absorbed.
     }

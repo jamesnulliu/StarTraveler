@@ -1,13 +1,14 @@
+# Compile commands: build/mingw/compile_commands.json (`cmake --preset mingw`), which already has
+# the project's warnings (adding -Wall/-Wextra after them would turn its -Wno-... back on).
 CompileFlags:
-  Add:
-    - -Wall
-    - -Wextra
   Remove:
     - -fconcepts-diagnostics-depth=*
     - -fmodules*
     - -fmodule-mapper*
     - -fdeps-format*
     - /MP
+    # clangd cannot build the std module: StarCore's module units use #include instead
+    - -DSTARCORE_IMPORT_STD
 
 Index:
   Background: Build
@@ -33,6 +34,11 @@ Diagnostics:
       modernize-avoid-c-arrays,
       readability-math-missing-parentheses,
       readability-uppercase-literal-suffix,
+      # Not this code's style: leading return types, positional aggregate initialization, and
+      # the trailing-comma check of clang-tidy 22+ (it asks for and against them both)
+      modernize-use-trailing-return-type,
+      modernize-use-designated-initializers,
+      readability-trailing-comma,
     ]
 
     CheckOptions:

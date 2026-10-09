@@ -1,0 +1,9 @@
+{
+    "recommendations": [
+        "llvm-vs-code-extensions.vscode-clangd",  // C/C++ language server
+        "ms-vscode.cpptools",  // C/C++ debugging
+        "twxs.cmake",  // CMake
+        "ms-python.python",  // Python
+        "charliermarsh.ruff",
+    ],
+}

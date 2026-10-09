@@ -1,0 +1,25 @@
+{
+    // C/C++ language features come from clangd (`scoop install llvm`); the Microsoft C/C++
+    // extension is kept for debugging only.
+    "C_Cpp.intelliSenseEngine": "disabled",
+    "clangd.path": "clangd",
+    "clangd.arguments": [
+        // The Ninja build writes compile_commands.json (`cmake --preset mingw`, or the task
+        // "CMake: configure mingw"); the Visual Studio generator writes none.
+        "--compile-commands-dir=${workspaceFolder}/build/mingw",
+        // Ask g++ for its target and system headers (MinGW's libstdc++, not MSVC's STL)
+        "--query-driver=**/g++.exe,**/gcc.exe",
+        // Builds the starcore.raster module for the files that import it
+        "--experimental-modules-support",
+        "--clang-tidy",
+        "--background-index",
+        "--all-scopes-completion",
+        "--completion-style=bundled",
+        "--header-insertion=iwyu",
+        "--header-insertion-decorators",
+        "--pch-storage=memory",
+        "--function-arg-placeholders=false",
+        "--log=verbose",
+        "--pretty",
+    ],
+}

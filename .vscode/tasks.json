@@ -1,0 +1,13 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            // Rewrites build/mingw/compile_commands.json for clangd: run it after adding or
+            // removing source files, then "clangd: Restart language server"
+            "label": "CMake: configure mingw",
+            "type": "shell",
+            "command": "cmake --preset mingw",
+            "problemMatcher": [],
+        },
+    ],
+}

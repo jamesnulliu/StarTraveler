@@ -1,13 +1,15 @@
 #pragma once
 // The Hybrid pipeline of GpuRenderer (private). Per frame:
+//   0. with ProbeSettings::enabled, update the irradiance probes (ProbeField);
 //   1. visibility (VisibilityPass): rasterize instance and triangle ids with a
 //      jittered projection, the primary surfaces and then, over a copy of
 //      their depth, the nearest smooth window panes (the glass layer);
 //   2. trace (hybrid_trace.comp): rebuild the hits of both from those ids,
 //      write their guides and motion vectors, trace paths from them into
 //      three layers: the primary surfaces' lighting, what they reflect
-//      (specular) and what the panes reflect (glass); while things move, the
-//      temporal gradients of their direct light (filtered by gradient.comp);
+//      (specular) and what the panes reflect (glass), with the probes ending
+//      them at diffuse surfaces; while things move, the temporal gradients of
+//      their direct light (filtered by gradient.comp);
 //   3. temporal (temporal.comp, per layer): reproject and accumulate;
 //   4. a-trous (atrous.comp): the SVGF spatial filter, a few iterations;
 //   5. composite (composite.comp): lighting x albedo + emission + specular +
@@ -19,6 +21,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include "probe_field.hpp"
 #include "rasterization.hpp"
 #include "starcore/gpu/gpu_renderer.hpp"
 #include "starcore/gpu/gpu_scene.hpp"
@@ -74,6 +77,7 @@ private:
     vulkan::ComputePipeline m_atrous;
     vulkan::ComputePipeline m_gradient;
     vulkan::ComputePipeline m_composite;
+    ProbeField m_probes;
     std::array<vulkan::Buffer, kFramesInFlight> m_uniforms;
     std::unique_ptr<Images> m_images;
     std::uint32_t m_current = 0;  // Which of the ping-pong images this frame writes.

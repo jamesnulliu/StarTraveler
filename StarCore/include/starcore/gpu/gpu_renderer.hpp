@@ -99,6 +99,36 @@ struct DenoiserSettings
 };
 
 /**
+ * @brief Irradiance probes of the hybrid pipeline (DDGI, Majercik et al.
+ *        2019): the light diffuse surfaces get from other surfaces comes from
+ *        grids of probes instead of paths traced on from every pixel. The
+ *        probes trace rays of their own every frame and keep a running mean,
+ *        in world space: moving the camera loses nothing, where the paths'
+ *        mean is kept per pixel and must be cut short while things move. So
+ *        shadowed parts, lit only by other surfaces, no longer swarm with
+ *        noise. At a cost: the light is smoothed between probes (no small
+ *        shadows of it), lags a little behind changes, and a still image no
+ *        longer converges to the path tracer's.
+ *
+ * One grid moves with the camera (whole cells at a time, its probes stay
+ * where they are); entities with a ProbeVolumeComponent carry grids of their
+ * own (a ship's cockpit), used for what is inside them.
+ */
+struct ProbeSettings
+{
+    bool enabled = false;
+    // The grid around the camera: probes per axis and the distance between them.
+    IVec3 probes{24, 12, 24};
+    float spacing = 1.0F;
+    std::uint32_t raysPerProbe = 128;  // 32-256.
+    // Of the probes' light, the fraction kept from earlier frames each frame:
+    // more is smoother, less follows changes faster.
+    float hysteresis = 0.97F;
+
+    auto operator==(const ProbeSettings&) const -> bool = default;
+};
+
+/**
  * @brief Image effects applied after any pipeline (all off: exactly the
  *        tone-mapped image, as the CPU path tracer's).
  */
@@ -122,6 +152,7 @@ struct GpuRenderOptions
 {
     GpuPipeline pipeline = GpuPipeline::PathTracing;
     DenoiserSettings denoiser;
+    ProbeSettings probes;  // Hybrid.
     HybridView view = HybridView::Final;
     EffectSettings effects;
 
@@ -303,6 +334,7 @@ private:
     PathTracerSettings m_lastSettings{};
     GpuPipeline m_lastPipeline = GpuPipeline::PathTracing;
     bool m_lastTemporal = true;
+    ProbeSettings m_lastProbes;
     Camera m_lastCamera;  // For the hybrid pipeline's motion vectors.
 };
 

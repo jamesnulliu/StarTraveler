@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <unordered_map>
 
+#include <glm/common.hpp>
 #include <glm/geometric.hpp>
 #include <glm/matrix.hpp>
 
@@ -195,6 +196,25 @@ auto RenderSceneBuilder::update(const Scene& scene) -> const RenderScene&
         update.changed = true;
         update.contentChanged = true;
     }
+
+    // Probe volumes: a few, placed anew every update (their renderer follows them).
+    m_scene.probeVolumes.clear();
+    for (const auto [entity, volume] : registry.view<const ProbeVolumeComponent>().each()) {
+        const IVec3 probes = glm::max(volume.probes, IVec3(2));
+        // Grid coordinates to local: probe (0, 0, 0) at the box's corner.
+        Mat4 gridToLocal(1.0F);
+        const Vec3 cell = volume.size / Vec3(probes - 1);
+        gridToLocal[0][0] = cell.x;
+        gridToLocal[1][1] = cell.y;
+        gridToLocal[2][2] = cell.z;
+        gridToLocal[3] = Vec4(volume.center - 0.5F * volume.size, 1.0F);
+        m_scene.probeVolumes.push_back(RenderProbeVolume{
+            .gridToWorld = scene.worldTransform(entity) * gridToLocal,
+            .probes = probes,
+            .entityId = entt::to_integral(entity),
+        });
+    }
+    std::ranges::sort(m_scene.probeVolumes, {}, &RenderProbeVolume::entityId);
     if (update.lightsChanged) {
         syncLights(update);
     }

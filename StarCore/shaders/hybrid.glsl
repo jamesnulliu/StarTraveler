@@ -33,6 +33,7 @@ const uint kFlagPreview = 1u;
 const uint kFlagNextEvent = 2u;
 const uint kFlagSrgb = 4u;
 const uint kFlagWriteIds = 8u;
+const uint kFlagProbes = 16u;  // Diffuse vertices take the light of others from the probes.
 // history.y
 const uint kHistoryReset = 1u;   // Ignore earlier frames.
 const uint kHistoryStatic = 2u;  // Nothing moved since the last frame.

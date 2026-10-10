@@ -43,6 +43,7 @@ struct GpuOptions
     std::string view = "Final";
     bool spatial = true;
     bool temporal = true;
+    starcore::ProbeSettings probes;
     starcore::Vec3 move{0.0F};  // Camera translation per frame.
     starcore::Entity movedEntity;
     starcore::Vec3 entityMove{0.0F};  // Its translation per frame.
@@ -67,6 +68,7 @@ auto renderOnGpu([[maybe_unused]] starcore::Scene& scene,
         options.pipeline = starcore::GpuPipeline::Hybrid;
         options.denoiser.spatial = gpuOptions.spatial;
         options.denoiser.temporal = gpuOptions.temporal;
+        options.probes = gpuOptions.probes;
         if (!starcore::enumFromString(gpuOptions.view, options.view)) {
             SC_ERROR("Unknown view \"{}\"", gpuOptions.view);
             return std::nullopt;
@@ -141,6 +143,8 @@ auto main(int argc, char** argv) -> int
     bool noTemporal = false;
     std::vector<float> move;
     std::vector<std::string> moveEntity;
+    std::vector<int> probeGrid;
+    std::vector<std::string> probeVolume;
     starcore::PathTracerSettings settings;
     std::vector<float> cameraPosition{0.0F, 0.0F, 10.0F};
     std::vector<float> cameraLookAt;
@@ -166,6 +170,19 @@ auto main(int argc, char** argv) -> int
                    "History");
     app.add_flag("--no-spatial", noSpatial, "Hybrid: no spatial filter");
     app.add_flag("--no-temporal", noTemporal, "Hybrid: no reprojection");
+    app.add_flag("--probes", gpuOptions.probes.enabled,
+                 "Hybrid: the light of other surfaces from irradiance probes");
+    app.add_option("--probe-spacing", gpuOptions.probes.spacing,
+                   "Hybrid: distance between the probes around the camera");
+    app.add_option("--probe-grid", probeGrid, "Hybrid: probes around the camera per axis x y z")
+        ->expected(3);
+    app.add_option("--probe-rays", gpuOptions.probes.raysPerProbe, "Hybrid: rays per probe");
+    app.add_option("--probe-hysteresis", gpuOptions.probes.hysteresis,
+                   "Hybrid: of the probes' light, what earlier frames keep");
+    app.add_option("--probe-volume", probeVolume,
+                   "Hybrid: probes moving with an entity (by name): name, center x y z, size "
+                   "x y z, probes x y z")
+        ->expected(10);
     app.add_option("--move", move, "GPU: camera translation per frame x y z")->expected(3);
     app.add_option("--move-entity", moveEntity,
                    "GPU: translation per frame of an entity (by name): name x y z")
@@ -199,6 +216,22 @@ auto main(int argc, char** argv) -> int
         }
         gpuOptions.entityMove = {std::stof(moveEntity[1]), std::stof(moveEntity[2]),
                                  std::stof(moveEntity[3])};
+    }
+    if (probeGrid.size() == 3) {
+        gpuOptions.probes.probes = {probeGrid[0], probeGrid[1], probeGrid[2]};
+    }
+    if (probeVolume.size() == 10) {
+        starcore::Entity entity = scene.findEntityByName(probeVolume[0]);
+        if (!entity) {
+            SC_ERROR("No entity named \"{}\"", probeVolume[0]);
+            return EXIT_FAILURE;
+        }
+        auto value = [&](std::size_t i) { return std::stof(probeVolume[i]); };
+        entity.addOrReplace<starcore::ProbeVolumeComponent>(starcore::ProbeVolumeComponent{
+            .center = {value(1), value(2), value(3)},
+            .size = {value(4), value(5), value(6)},
+            .probes = {std::stoi(probeVolume[7]), std::stoi(probeVolume[8]),
+                       std::stoi(probeVolume[9])}});
     }
 
     starcore::Camera camera;

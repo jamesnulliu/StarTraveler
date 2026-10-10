@@ -24,9 +24,12 @@ constexpr VkDescriptorType kUniform = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 constexpr VkDescriptorType kImage = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
 constexpr VkDescriptorType kTlas = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR;
 constexpr VkDescriptorType kTraceBindings[] = {
-    kTlas,  kUniform, kBuffer, kImage, kBuffer, kBuffer, kBuffer, kImage, kImage, kImage,
-    kImage, kImage,   kImage,  kImage, kImage,  kImage,  kImage,  kImage, kImage, kBuffer,
-    kImage, kImage,   kImage,  kImage, kImage,  kImage,  kImage,  kImage};
+    kTlas,  kUniform, kBuffer, kImage, kBuffer, kBuffer, kBuffer, kImage,  kImage, kImage,
+    kImage, kImage,   kImage,  kImage, kImage,  kImage,  kImage,  kImage,  kImage, kBuffer,
+    kImage, kImage,   kImage,  kImage, kImage,  kImage,  kImage,  kImage,
+    // The probes (ProbeField::bind).
+    kBuffer, kImage, kImage, kBuffer};
+constexpr std::uint32_t kTraceProbeBinding = 28;
 constexpr VkDescriptorType kTemporalBindings[] = {
     kBuffer, kUniform, kBuffer, kImage, kBuffer, kBuffer, kBuffer, kImage, kImage, kImage, kImage,
     kImage,  kImage,   kImage,  kImage, kImage,  kImage,  kImage,  kImage, kImage, kImage, kImage,
@@ -169,7 +172,8 @@ HybridRenderer::HybridRenderer(vulkan::Context& context)
       m_temporal(context, temporal_comp_spv, kTemporalBindings, sizeof(std::uint32_t)),
       m_atrous(context, atrous_comp_spv, kAtrousBindings, sizeof(AtrousPass)),
       m_gradient(context, gradient_comp_spv, kGradientBindings, sizeof(std::int32_t)),
-      m_composite(context, composite_comp_spv, kCompositeBindings)
+      m_composite(context, composite_comp_spv, kCompositeBindings),
+      m_probes(context)
 {
 }
 
@@ -276,6 +280,9 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
     if (frame.writeIds) {
         flags |= kFlagWriteIds;
     }
+    if (frame.options.probes.enabled) {
+        flags |= kFlagProbes;
+    }
     const std::uint32_t samples =
         settings.mode == RenderMode::Preview ? 1U : std::max(1U, settings.samplesPerPixel);
     uniforms.frame[0] = frame.frameIndex;
@@ -293,6 +300,16 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
     vulkan::Buffer& uniformBuffer = m_uniforms[frame.frameSlot];
     writeUniforms(*m_context, uniformBuffer, uniforms);
 
+    // 0. Probes -----------------------------------------------------------------------------------
+    m_probes.record(commandBuffer,
+                    ProbeFrame{.scene = frame.scene,
+                               .camera = frame.camera,
+                               .settings = frame.options.probes,
+                               .frameSlot = frame.frameSlot,
+                               .frameIndex = frame.frameIndex,
+                               .uniforms = uniformBuffer.handle()},
+                    scene);
+
     // 1. Visibility -------------------------------------------------------------------------------
     visibility.record(commandBuffer, uniformBuffer.handle(), scene, renderScene,
                       settings.instanceMask, GlassLayer::SmoothPanes);
@@ -308,7 +325,7 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
                             frame.traceQuery);
     }
     {
-        vulkan::DescriptorWrites writes;
+        vulkan::DescriptorWrites writes(std::size(kTraceBindings));
         writes.accelerationStructure(0, scene.tlas())
             .uniformBuffer(1, uniformBuffer.handle())
             .storageBuffer(2, scene.transformBuffer())
@@ -337,6 +354,7 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
             .storageImage(25, images.directLight[previous].view())
             .storageImage(26, images.directLight[current].view())
             .storageImage(27, images.gradients[0].view());
+        m_probes.bind(writes, kTraceProbeBinding, frame.frameSlot);
         m_trace.bind(commandBuffer);
         m_trace.pushDescriptors(commandBuffer, writes.writes());
         // The samples per pixel (timed), then the reflected paths: one per pixel and

@@ -26,8 +26,8 @@
 
 #extension GL_GOOGLE_include_directive : require
 
-#include "hybrid.glsl"
-#include "path.glsl"
+#define PROBE_BINDING 28
+#include "hybrid_path.glsl"
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -78,39 +78,10 @@ layout(set = 0, binding = 25, r32f) uniform readonly image2D previousDirectLight
 layout(set = 0, binding = 26, r32f) uniform writeonly image2D directLight;
 // One per stratum (hybrid.glsl, kGradientStratum).
 layout(set = 0, binding = 27, rgba32f) uniform writeonly image2D gradients;
+// Bindings 28-31: the probes (probes.glsl).
 
 // The sky, reflected: this far away, where it does not move.
 const float kReflectedSky = 1e5;
-
-uint instanceMask()
-{
-    return frameData.options.y;
-}
-
-uint lightCount()
-{
-    return frameData.options.z;
-}
-
-vec3 skyColor()
-{
-    return frameData.skyColor.rgb;
-}
-
-uint maxBounces()
-{
-    return frameData.frame.w;
-}
-
-bool nextEventEnabled()
-{
-    return (frameData.options.x & kFlagNextEvent) != 0u;
-}
-
-float fireflyClamp()
-{
-    return frameData.cameraForward.w;
-}
 
 float viewDepth(SurfaceHit hit, vec3 direction)
 {
@@ -420,7 +391,7 @@ vec4 gradientAt(ivec2 pixel)
     vec3 nextDirection;
     pathVertex(hit, surface, instances[instanceIndex].lightIndex, direction, bounce,
                kVertexSkipEmission | lobes, path, rng, nextOrigin, nextDirection);
-    float now = luminance(path.radiance);
+    float now = luminance(path.radiance - path.cached);
     return vec4(abs(now - before), max(now, before), 1.0, none.w);
 }
 
@@ -561,7 +532,8 @@ void main()
                                    direction, primaryBounce, kVertexSkipEmission | lobes, path,
                                    rng, nextOrigin, nextDirection);
             if (s == 0u) {
-                firstLight = luminance(path.radiance);
+                // Not the probes' light: it changes as they update, not as the scene does.
+                firstLight = luminance(path.radiance - path.cached);
             }
             if (more) {
                 continuePath(nextOrigin, nextDirection, primaryBounce + 1u, maxBounces(), path,

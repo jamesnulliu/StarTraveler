@@ -1,0 +1,89 @@
+#version 460
+// Irradiance probes (probes.glsl), trace pass: per probe and ray, the light
+// arriving at the probe from the ray's direction and the distance it came
+// from. That light is what the surface hit there reflects (as a diffuse one)
+// of the light it gets: from the lights (next event estimation), and from the
+// other surfaces by the probes as of the previous frame -- so over the frames
+// light bounces any number of times. See-through panes are looked through.
+// The lights themselves are left out (surfaces sample them directly).
+
+#extension GL_GOOGLE_include_directive : require
+
+#define PROBE_BINDING 8
+#include "hybrid_path.glsl"
+
+layout(local_size_x = 64) in;
+
+// Per probe and ray: rgb the light, a the distance (negative: a back face, inside something).
+layout(set = 0, binding = 7, std430) writeonly buffer ProbeRays
+{
+    vec4 probeRays[];
+};
+
+/**
+ * How much of the light it gets a surface sends towards a probe, as a
+ * diffuse one: its diffuse albedo, and metals' as if they were rough.
+ */
+vec3 probeAlbedo(Material m)
+{
+    return m.albedo.rgb * ((1.0 - m.metallic) * (1.0 - m.transmission) + m.metallic);
+}
+
+void main()
+{
+    uint probe = gl_WorkGroupID.y;
+    uint ray = gl_GlobalInvocationID.x;
+    uint volumeIndex;
+    ivec3 grid;
+    if (ray >= probeInfo.y || !probeOf(probe, volumeIndex, grid)) {
+        return;
+    }
+    ProbeVolume volume = volumes[volumeIndex];
+    vec3 origin = transformPoint(volume.gridToWorld, vec3(grid));
+    vec3 direction = normalize(toProbeWorld(volume, probeRayDirection(ray)));
+    uint rng = rngForPixel(ray, probe, frameData.frame.x, pcgHash(frameData.frame.y ^ 0x5bd1e995u));
+
+    vec3 transmittance = vec3(1.0);
+    float distance = 0.0;
+    vec4 result = vec4(0.0, 0.0, 0.0, kFar);
+    for (int layer = 0; layer < kMaxThinLayers; ++layer) {
+        SurfaceHit hit;
+        if (!traceClosestHit(origin, direction, instanceMask(), hit)) {
+            result = vec4(transmittance * skyColor(), kFar);
+            break;
+        }
+        distance += hit.t;
+        Material material = materialOf(hit.instanceIndex);
+        if (isSeeThrough(material)) {
+            transmittance *= thinTransmittance(material, abs(dot(direction, hit.geometricNormal)));
+            origin = offsetOrigin(hit.position, hit.geometricNormal, direction);
+            continue;
+        }
+        if (!hit.frontFace) {
+            // Inside something: no light, and closer than it is (as DDGI), so the probe
+            // does not light what is outside. Probes seeing many are not used.
+            result = vec4(0.0, 0.0, 0.0, -0.2 * distance);
+            break;
+        }
+        vec3 radiance = vec3(0.0);
+        if (!nextEventEnabled() || instances[hit.instanceIndex].lightIndex < 0) {
+            radiance += material.emission.rgb;
+        }
+        vec3 albedo = probeAlbedo(material);
+        if (maxComponent(albedo) > 0.0) {
+            vec3 incoming = vec3(0.0);
+            if (nextEventEnabled() && lightCount() > 0u) {
+                incoming += sampleDirectLight(hit, false, rng);
+            }
+            float coverage;
+            vec3 light = probeLight(hit.position, hit.normal, -direction, coverage);
+            radiance += albedo * (incoming + coverage * light);
+        }
+        result = vec4(transmittance * radiance, distance);
+        break;
+    }
+    if (any(isnan(result)) || any(isinf(result.rgb))) {
+        result = vec4(0.0, 0.0, 0.0, kFar);  // Never into the probes: it would stay.
+    }
+    probeRays[probe * probeInfo.y + ray] = result;
+}

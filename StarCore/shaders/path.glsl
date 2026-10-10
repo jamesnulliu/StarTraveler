@@ -15,6 +15,11 @@ vec3 skyColor();
 uint maxBounces();
 bool nextEventEnabled();
 float fireflyClamp();  // 0 = off.
+// Irradiance probes (the hybrid pipeline's, probes.glsl; the path tracer has none):
+// whether diffuse vertices may take the light of other surfaces from them, and
+// that light (per unit albedo) and how much of it they give (`coverage`, 0-1).
+bool probesEnabled();
+vec3 probeLight(vec3 position, vec3 normal, vec3 toViewer, out float coverage);
 
 const uint kRussianRouletteStart = 3u;
 // Thin surfaces a shadow ray (or a preview ray) may pass through.
@@ -93,8 +98,12 @@ float directLightPdf(uint index, vec3 position)
     return conePdf(coneOneMinusCos(light.radius, distance2)) / float(lightCount());
 }
 
-/** Next event estimation for the diffuse lobe (its weight applied by the caller). */
-vec3 sampleDirectLight(SurfaceHit hit, inout uint rng)
+/**
+ * Next event estimation for the diffuse lobe (its weight applied by the
+ * caller). `mis`: weighted against BSDF sampling finding the light (off when
+ * the path ends here, so nothing else finds it).
+ */
+vec3 sampleDirectLight(SurfaceHit hit, bool mis, inout uint rng)
 {
     uint count = lightCount();
     uint index = min(count - 1u, uint(nextFloat(rng) * float(count)));
@@ -120,8 +129,13 @@ vec3 sampleDirectLight(SurfaceHit hit, inout uint rng)
     }
     float lightPdf = conePdf(oneMinusCos) / float(count);
     float bsdfPdf = cosine / kPi;
-    return light.emission * transmittance * (cosine / kPi) *
-           (powerHeuristic(lightPdf, bsdfPdf) / lightPdf);
+    float weight = mis ? powerHeuristic(lightPdf, bsdfPdf) : 1.0;
+    return light.emission * transmittance * (cosine / kPi) * (weight / lightPdf);
+}
+
+vec3 sampleDirectLight(SurfaceHit hit, inout uint rng)
+{
+    return sampleDirectLight(hit, true, rng);
 }
 
 struct Scatter
@@ -314,6 +328,7 @@ bool sampleLobes(Material material, vec3 wo, SurfaceHit hit, uint lobes, inout u
 struct PathState
 {
     vec3 radiance;
+    vec3 cached;  // Of the radiance, the probes' light (in it).
     vec3 throughput;
     // Scattering events so far (straight passes through window panes don't count).
     uint scatterings;
@@ -328,6 +343,7 @@ PathState newPath()
 {
     PathState path;
     path.radiance = vec3(0.0);
+    path.cached = vec3(0.0);
     path.throughput = vec3(1.0);
     path.scatterings = 0u;
     path.fromDiffuse = false;
@@ -385,10 +401,27 @@ bool pathVertex(SurfaceHit hit, Material material, int lightIndex, vec3 directio
     if (!scattered) {
         return false;  // Absorbed.
     }
+    // Diffuse: the light of other surfaces may come from the probes, which ends the
+    // path here (inside their volumes; at their edges by chance, as much as they give).
+    // Then no path finds the lights from here: their light is all next event's.
+    bool probed = false;
+    vec3 probe = vec3(0.0);
+    if (scatter.lobe == kLobeDiffuse && probesEnabled()) {
+        float coverage;
+        probe = probeLight(hit.position, hit.normal, wo, coverage);
+        probed = coverage > 0.0 && nextFloat(rng) < coverage;
+    }
     if (scatter.lobe == kLobeDiffuse && nextEvent) {
         path.radiance += clampContribution(
-            path.throughput * scatter.weight * sampleDirectLight(hit, rng),
+            path.throughput * scatter.weight * sampleDirectLight(hit, !probed, rng),
             path.scatterings + 1u, path.scale);
+    }
+    if (probed) {
+        // An expectation, no firefly to clamp.
+        vec3 light = path.throughput * scatter.weight * probe;
+        path.radiance += light;
+        path.cached += light;
+        return false;
     }
     path.throughput *= scatter.weight;
     path.scale *= scatter.scale;

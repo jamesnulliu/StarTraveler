@@ -1,0 +1,99 @@
+#version 460
+// Irradiance probes (probes.glsl), update pass: one workgroup per probe blends
+// this frame's rays (probe_trace.comp) into its maps, each thread a texel of
+// the distance map (16 x 16 with its border), the first 8 x 8 also one of the
+// irradiance map. The previous frames keep the hysteresis of the result,
+// nothing for a probe new to its cell (the grid around the camera scrolled).
+
+#extension GL_GOOGLE_include_directive : require
+
+#define STARCORE_NO_RAY_QUERY
+#define PROBE_BINDING 8
+#define PROBE_ACCESS
+#include "hybrid.glsl"
+#include "probes.glsl"
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(set = 0, binding = 7, std430) readonly buffer ProbeRays
+{
+    vec4 probeRays[];
+};
+
+const uint kMaxRays = 256u;
+// How sharply the distance map follows directions (DDGI): distances jump at edges.
+const float kDistanceExponent = 50.0;
+
+shared vec4 rays[kMaxRays];
+shared vec3 directions[kMaxRays];
+
+void main()
+{
+    uint probe = gl_WorkGroupID.x + gl_WorkGroupID.y * gl_NumWorkGroups.x;
+    uint volumeIndex;
+    ivec3 grid;
+    // The same probe for the whole workgroup: all return, or none.
+    if (probe >= probeInfo.z || !probeOf(probe, volumeIndex, grid)) {
+        return;
+    }
+    uint count = min(probeInfo.y, kMaxRays);
+    uint thread = gl_LocalInvocationIndex;
+    for (uint i = thread; i < count; i += 256u) {
+        rays[i] = probeRays[probe * probeInfo.y + i];
+        directions[i] = probeRayDirection(i);
+    }
+    ProbeVolume volume = volumes[volumeIndex];
+    ivec3 cell = grid + volume.origin.xyz;
+    ProbeState state = probeStates[probe];
+    bool fresh = state.cell.w == 0 || state.cell.xyz != cell;
+    float hysteresis = probeBlend.x;
+    barrier();
+
+    ivec2 texel = ivec2(gl_LocalInvocationID.xy);
+    {
+        vec3 direction = probeTexelDirection(probeBorderSource(texel, kDistanceTexels),
+                                             kDistanceTexels);
+        vec3 sum = vec3(0.0);  // Weighted distance, its square, weights.
+        for (uint i = 0u; i < count; ++i) {
+            float w = pow(max(0.0, dot(direction, directions[i])), kDistanceExponent);
+            float d = min(abs(rays[i].w), volume.bias.z);
+            sum += w * vec3(d, d * d, 1.0);
+        }
+        ivec2 at = probeTile(probe, kDistanceTexels) + texel;
+        vec2 value = sum.z > 0.0 ? sum.xy / sum.z : vec2(volume.bias.z, volume.bias.z * volume.bias.z);
+        if (!fresh) {
+            value = mix(value, imageLoad(probeDistance, at).xy, hysteresis);
+        }
+        imageStore(probeDistance, at, vec4(value, 0.0, 0.0));
+    }
+    if (all(lessThan(texel, ivec2(kIrradianceTexels + 2)))) {
+        vec3 direction = probeTexelDirection(probeBorderSource(texel, kIrradianceTexels),
+                                             kIrradianceTexels);
+        vec4 sum = vec4(0.0);
+        for (uint i = 0u; i < count; ++i) {
+            if (rays[i].w >= 0.0) {  // Back faces bring no light: inside something.
+                sum += max(0.0, dot(direction, directions[i])) * vec4(rays[i].rgb, 1.0);
+            }
+        }
+        ivec2 at = probeTile(probe, kIrradianceTexels) + texel;
+        vec3 previous = fresh ? vec3(0.0) : imageLoad(probeIrradiance, at).rgb;
+        vec3 value = sum.w > 0.0 ? sum.rgb / sum.w : previous;
+        if (!fresh) {
+            value = mix(value, previous, hysteresis);
+        }
+        imageStore(probeIrradiance, at, vec4(value, 0.0));
+    }
+    if (thread == 0u) {
+        float backfaces = 0.0;
+        for (uint i = 0u; i < count; ++i) {
+            backfaces += rays[i].w < 0.0 ? 1.0 : 0.0;
+        }
+        backfaces /= float(count);
+        // Smoothed: the rays turn every frame, a probe near the limit would flicker.
+        if (!fresh) {
+            backfaces = mix(backfaces, state.info.x, 0.9);
+        }
+        int updates = fresh ? 1 : min(state.cell.w, 1 << 30) + 1;
+        probeStates[probe] = ProbeState(ivec4(cell, updates), vec4(backfaces, 0.0, 0.0, 0.0));
+    }
+}

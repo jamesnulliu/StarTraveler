@@ -59,9 +59,14 @@ protected:
 class ComputePipeline final : public Pipeline
 {
 public:
+    /**
+     * @param constants Values of the shader's specialization constants 0, 1, ...
+     *        (32-bit): code they disable is compiled out of the pipeline.
+     */
     ComputePipeline(Context& context, std::span<const std::uint32_t> spirv,
                     std::span<const VkDescriptorType> bindings,
-                    std::uint32_t pushConstantSize = 0);
+                    std::uint32_t pushConstantSize = 0,
+                    std::span<const std::uint32_t> constants = {});
 };
 
 struct GraphicsPipelineConfig

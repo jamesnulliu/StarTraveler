@@ -69,7 +69,8 @@ private:
     struct Images;
 
     vulkan::Context* m_context;
-    vulkan::ComputePipeline m_trace;
+    // hybrid_trace.comp, a pipeline per stage (TraceStage).
+    std::array<vulkan::ComputePipeline, 3> m_trace;
     vulkan::ComputePipeline m_temporal;
     vulkan::ComputePipeline m_atrous;
     vulkan::ComputePipeline m_gradient;

@@ -36,13 +36,15 @@ constexpr VkDescriptorType kAtrousBindings[] = {kBuffer, kUniform, kBuffer, kIma
 constexpr VkDescriptorType kGradientBindings[] = {kBuffer, kUniform, kBuffer, kImage,
                                                   kBuffer, kBuffer,  kBuffer, kImage};
 
-/** @brief Stages of hybrid_trace.comp (push constant). */
+/** @brief Stages of hybrid_trace.comp (specialization constant 0, a pipeline each). */
 enum class TraceStage : std::uint32_t
 {
     Samples = 0,      // Per pixel: the primary layer's paths and guides.
     Reflections = 1,  // Per pixel: the reflected paths.
     Gradients = 2,    // Per stratum: the temporal gradients.
 };
+constexpr std::uint32_t kStageConstants[] = {0, 1, 2};
+
 // Pixels per side of a temporal gradient's stratum (kGradientStratum in hybrid.glsl).
 constexpr std::uint32_t kGradientStratum = 3;
 // Filter iterations of the gradients (radius 3 strata): one pixel per stratum
@@ -165,7 +167,12 @@ struct HybridRenderer::Images
 
 HybridRenderer::HybridRenderer(vulkan::Context& context)
     : m_context(&context),
-      m_trace(context, hybrid_trace_comp_spv, kTraceBindings, sizeof(std::uint32_t)),
+      m_trace{vulkan::ComputePipeline(context, hybrid_trace_comp_spv, kTraceBindings, 0,
+                                      std::span(&kStageConstants[0], 1)),
+              vulkan::ComputePipeline(context, hybrid_trace_comp_spv, kTraceBindings, 0,
+                                      std::span(&kStageConstants[1], 1)),
+              vulkan::ComputePipeline(context, hybrid_trace_comp_spv, kTraceBindings, 0,
+                                      std::span(&kStageConstants[2], 1))},
       m_temporal(context, temporal_comp_spv, kTemporalBindings, sizeof(std::uint32_t)),
       m_atrous(context, atrous_comp_spv, kAtrousBindings, sizeof(AtrousPass)),
       m_gradient(context, gradient_comp_spv, kGradientBindings, sizeof(std::int32_t)),
@@ -337,12 +344,15 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
             .storageImage(25, images.directLight[previous].view())
             .storageImage(26, images.directLight[current].view())
             .storageImage(27, images.gradients[0].view());
-        m_trace.bind(commandBuffer);
-        m_trace.pushDescriptors(commandBuffer, writes.writes());
+        auto bindStage = [&](TraceStage stage) {
+            const vulkan::ComputePipeline& pipeline = m_trace[static_cast<std::size_t>(stage)];
+            pipeline.bind(commandBuffer);
+            pipeline.pushDescriptors(commandBuffer, writes.writes());
+        };
         // The samples per pixel (timed), then the reflected paths: one per pixel and
         // layer, a fixed cost like the other passes.
         for (const TraceStage stage : {TraceStage::Samples, TraceStage::Reflections}) {
-            m_trace.pushConstants(commandBuffer, &stage, sizeof(stage));
+            bindStage(stage);
             vkCmdDispatch(commandBuffer, groupsX, groupsY, 1);
             if (stage == TraceStage::Samples && frame.queryPool != VK_NULL_HANDLE) {
                 vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
@@ -351,8 +361,7 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
         }
         // The temporal gradients, while things move (still, the lighting is what it was).
         if (moving) {
-            const TraceStage stage = TraceStage::Gradients;
-            m_trace.pushConstants(commandBuffer, &stage, sizeof(stage));
+            bindStage(TraceStage::Gradients);
             vkCmdDispatch(commandBuffer, (images.gradients[0].width() + kWorkgroupSize - 1) /
                                              kWorkgroupSize,
                           (images.gradients[0].height() + kWorkgroupSize - 1) / kWorkgroupSize, 1);

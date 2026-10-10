@@ -25,6 +25,9 @@ constexpr int kMaxThinLayers = 8;
 constexpr float kSeeThrough = 0.5F;
 // Shadow rays to a point of a mesh light stop this fraction of the way short of it.
 constexpr float kShadowShortening = 1e-3F;
+// Reflections at least this rough also sample the lights (smoother ones are too
+// sharp for it: their lights are found by sampling the reflection).
+constexpr float kGlossyLightRoughness = 0.15F;
 
 auto maxComponent(Vec3 v) -> float
 {
@@ -80,25 +83,20 @@ auto materialOf(const RenderScene& scene, const SurfaceHit& hit) -> const Render
 }
 
 /**
- * @brief Fraction of light from `lightInstance` arriving along `ray`: 1 when
- *        unoccluded, attenuated by thin-walled transmissive surfaces, 0 when
- *        blocked by anything else. `distance`: to the point of a mesh light
- *        (anything before it blocks it, the mesh too); infinite for a sphere
- *        light, which the ray must hit.
+ * @brief Fraction of the light of a point `distance` along `ray` that arrives:
+ *        1 when unoccluded, attenuated by thin-walled transmissive surfaces, 0
+ *        when anything else is before it (the light's own surface too: a
+ *        closed mesh's far side behind its near side).
  */
-auto shadowTransmittance(const RenderScene& scene, Ray ray, std::uint32_t lightInstance,
-                         float distance, std::uint32_t mask) -> Vec3
+auto shadowTransmittance(const RenderScene& scene, Ray ray, float distance, std::uint32_t mask)
+    -> Vec3
 {
-    const bool toPoint = distance < kInfinity;
-    // Short of the point: not its own triangle.
-    float remaining = toPoint ? distance * (1.0F - kShadowShortening) : kInfinity;
+    // Short of the point: not its own surface.
+    float remaining = distance * (1.0F - kShadowShortening);
     Vec3 transmittance{1.0F};
     for (int layer = 0; layer < kMaxThinLayers; ++layer) {
         const auto hit = traceClosestHit(scene, ray, 0.0F, remaining, mask);
         if (!hit) {
-            return toPoint ? transmittance : Vec3(0.0F);
-        }
-        if (!toPoint && hit->instanceIndex == lightInstance) {
             return transmittance;
         }
         const RenderMaterial& material = materialOf(scene, *hit);
@@ -228,11 +226,11 @@ auto meshLightPdf(const RenderScene& scene, const RenderLight& light, std::uint3
     return picked * (2.0F / doubleArea) * distance2 / cosine;
 }
 
-/** @brief A direction to a light: to a point of it (meshes), with its solid-angle pdf. */
+/** @brief A direction to a light, the distance to its point there and the solid-angle pdf. */
 struct LightSample
 {
     Vec3 direction{0.0F};
-    float distance = kInfinity;  // To the point (meshes); spheres: infinite.
+    float distance = 0.0F;
     float pdf = 0.0F;
 };
 
@@ -248,8 +246,14 @@ auto sampleLight(const RenderScene& scene, const RenderLight& light, Vec3 positi
             return std::nullopt;
         }
         const float oneMinusCos = coneOneMinusCos(light.radius, distance2);
+        const Vec3 direction = sampleCone(toCenter / std::sqrt(distance2), oneMinusCos, u1, u2);
+        // To the sphere's near surface that way (the cone's directions all meet it).
+        const float along = glm::dot(toCenter, direction);
+        const float offAxis2 = std::max(0.0F, distance2 - along * along);
         return LightSample{
-            .direction = sampleCone(toCenter / std::sqrt(distance2), oneMinusCos, u1, u2),
+            .direction = direction,
+            .distance =
+                along - std::sqrt(std::max(0.0F, light.radius * light.radius - offAxis2)),
             .pdf = conePdf(oneMinusCos)};
     }
     // The first triangle whose cumulative area exceeds u.
@@ -326,7 +330,7 @@ auto sampleDirectLight(const RenderScene& scene, const PathTracerSettings& setti
     }
     const Vec3 transmittance = shadowTransmittance(
         scene, Ray{offsetOrigin(hit.position, hit.geometricNormal, direction), direction},
-        light.instanceIndex, sample->distance, settings.instanceMask);
+        sample->distance, settings.instanceMask);
     if (maxComponent(transmittance) <= 0.0F) {
         return Vec3(0.0F);
     }
@@ -350,6 +354,9 @@ struct Scatter
     Lobe lobe = Lobe::Diffuse;
     // Straight through a thin sheet: the path keeps its MIS state.
     bool passThrough = false;
+    // Probability that the sampled microfacet chose this lobe (reflection: metal or
+    // dielectric).
+    float probability = 1.0F;
 };
 
 /**
@@ -387,25 +394,27 @@ auto sampleBsdf(const RenderMaterial& material, Vec3 wo, const SurfaceHit& hit, 
     const float u1 = rng.nextFloat();
     const float u2 = rng.nextFloat();
     const Vec3 h = sampleGgxVisibleNormal(woLocal, alpha, u1, u2);
+    const bool thin = (material.flags & kMaterialThinWalled) != 0U;
+    // n_incident / n_transmitted: entering the volume through its front face.
+    const float eta = thin || hit.frontFace ? 1.0F / material.ior : material.ior;
+    const float reflectance = fresnelDielectric(glm::dot(woLocal, h), eta);
+    const float reflection = material.metallic + (1.0F - material.metallic) * reflectance;
     if (rng.nextFloat() < material.metallic) {
         const Vec3 wi = reflectLocal(h);
         const Vec3 world = frame.toWorld(wi);
         if (!aboveSurface(world)) {
             return std::nullopt;
         }
-        return Scatter{world, fresnelSchlick(baseColor, glm::dot(woLocal, h)), Lobe::Specular};
+        return Scatter{world, fresnelSchlick(baseColor, glm::dot(woLocal, h)), Lobe::Specular,
+                       false, reflection};
     }
 
-    const bool thin = (material.flags & kMaterialThinWalled) != 0U;
-    // n_incident / n_transmitted: entering the volume through its front face.
-    const float eta = thin || hit.frontFace ? 1.0F / material.ior : material.ior;
-    const float reflectance = fresnelDielectric(glm::dot(woLocal, h), eta);
     if (rng.nextFloat() < reflectance) {
         const Vec3 world = frame.toWorld(reflectLocal(h));
         if (!aboveSurface(world)) {
             return std::nullopt;
         }
-        return Scatter{world, Vec3(1.0F), Lobe::Specular};
+        return Scatter{world, Vec3(1.0F), Lobe::Specular, false, reflection};
     }
 
     if (rng.nextFloat() < material.transmission) {
@@ -430,6 +439,95 @@ auto sampleBsdf(const RenderMaterial& material, Vec3 wo, const SurfaceHit& hit, 
     }
     return Scatter{direction, baseColor, Lobe::Diffuse};
 }
+
+/** @brief The reflection lobe at a direction: BSDF times cosine, and sampling's density. */
+struct Reflection
+{
+    Vec3 value{0.0F};
+    float pdf = 0.0F;
+};
+
+/**
+ * @brief The reflection lobe as sampleBsdf samples it, for a direction `wi`:
+ *        metal and dielectric reflection about a visible microfacet normal,
+ *        directions below the surface folded up -- so `wi` comes from two
+ *        microfacets, the one mirroring `wo` to it and, if `wi` is lower than
+ *        `wo`, the one mirroring `wo` below it. `pdf`: the density with which
+ *        sampleBsdf returns `wi` from the reflection lobe (of all lobes).
+ */
+auto evaluateReflection(const RenderMaterial& material, Vec3 wo, const SurfaceHit& hit, Vec3 wi)
+    -> Reflection
+{
+    const Frame frame = makeFrame(hit.normal);
+    Vec3 woLocal = frame.toLocal(wo);
+    woLocal.z = std::max(woLocal.z, 1e-5F);
+    woLocal = glm::normalize(woLocal);
+    const Vec3 wiLocal = frame.toLocal(wi);
+    Reflection result;
+    if (wiLocal.z <= 0.0F) {
+        return result;
+    }
+    const float alpha = roughnessToAlpha(material.roughness);
+    const bool thin = (material.flags & kMaterialThinWalled) != 0U;
+    const float eta = thin || hit.frontFace ? 1.0F / material.ior : material.ior;
+    const float metal = material.metallic;
+    for (int folded = 0; folded < 2; ++folded) {
+        if (folded == 1 && wiLocal.z >= woLocal.z) {
+            break;  // The microfacet would face down.
+        }
+        const Vec3 h =
+            glm::normalize(woLocal + Vec3(wiLocal.x, wiLocal.y, folded == 1 ? -wiLocal.z : wiLocal.z));
+        const float density = ggxVisibleNormalPdf(woLocal, h, alpha);
+        if (density <= 0.0F) {
+            continue;
+        }
+        const float cosine = glm::dot(woLocal, h);
+        const float perDirection = density / (4.0F * cosine);  // Mirroring's Jacobian.
+        const float reflectance = fresnelDielectric(cosine, eta);
+        result.pdf += (metal + (1.0F - metal) * reflectance) * perDirection;
+        result.value += (metal * fresnelSchlick(Vec3(material.albedo), cosine) +
+                         Vec3((1.0F - metal) * reflectance)) *
+                        perDirection;
+    }
+    return result;
+}
+
+/**
+ * @brief Next event estimation for the reflection lobe: radiance of one
+ *        sampled light times the lobe (BSDF times cosine), MIS-weighted
+ *        against sampling the lobe.
+ */
+auto sampleReflectedLight(const RenderScene& scene, const PathTracerSettings& settings,
+                          const RenderMaterial& material, Vec3 wo, const SurfaceHit& hit, Rng& rng)
+    -> Vec3
+{
+    float probability = 0.0F;
+    const auto index =
+        pickLight(scene, hit.position, hit.normal, hit.instanceIndex, rng.nextFloat(), probability);
+    if (!index) {
+        return Vec3(0.0F);
+    }
+    const RenderLight& light = scene.lights[*index];
+    const auto sample = sampleLight(scene, light, hit.position, rng);
+    if (!sample || glm::dot(sample->direction, hit.geometricNormal) <= 0.0F) {
+        return Vec3(0.0F);
+    }
+    const Reflection reflection = evaluateReflection(material, wo, hit, sample->direction);
+    if (maxComponent(reflection.value) <= 0.0F) {
+        return Vec3(0.0F);
+    }
+    const Vec3 transmittance = shadowTransmittance(
+        scene,
+        Ray{offsetOrigin(hit.position, hit.geometricNormal, sample->direction), sample->direction},
+        sample->distance, settings.instanceMask);
+    if (maxComponent(transmittance) <= 0.0F) {
+        return Vec3(0.0F);
+    }
+    const float lightPdf = probability * sample->pdf;
+    return light.emission * transmittance * reflection.value *
+           (powerHeuristic(lightPdf, reflection.pdf) / lightPdf);
+}
+
 }  // namespace
 
 auto tracePath(const RenderScene& scene, Ray ray, const PathTracerSettings& settings, Rng& rng,
@@ -456,12 +554,14 @@ auto tracePath(const RenderScene& scene, Ray ray, const PathTracerSettings& sett
 
     // Scattering events so far (straight passes through window panes don't count).
     std::uint32_t scatterings = 0;
-    // Last diffuse vertex, to MIS-weight lights found by BSDF sampling.
-    bool fromDiffuse = false;
-    Vec3 diffusePosition{0.0F};
-    Vec3 diffuseNormal{0.0F};
-    std::uint32_t diffuseInstance = 0;
-    float diffusePdf = 0.0F;
+    // The last vertex that also sampled the lights (diffuse or glossy), to MIS-weight
+    // lights found by BSDF sampling from it: where it was and the density of the
+    // direction sampled there (diffuse: given the lobe; glossy: of all lobes).
+    bool mis = false;
+    Vec3 misPosition{0.0F};
+    Vec3 misNormal{0.0F};
+    std::uint32_t misInstance = 0;
+    float misPdf = 0.0F;
 
     for (std::uint32_t bounce = 0; bounce < settings.maxBounces; ++bounce) {
         const auto hit = traceClosestHit(scene, ray, 0.0F, kInfinity, settings.instanceMask);
@@ -475,13 +575,12 @@ auto tracePath(const RenderScene& scene, Ray ray, const PathTracerSettings& sett
         const Vec3 emission(material.emission);
         if (maxComponent(emission) > 0.0F) {
             float weight = 1.0F;
-            if (nextEvent && fromDiffuse) {
+            if (nextEvent && mis) {
                 if (const std::int32_t light = scene.lightOfInstance[hit->instanceIndex];
                     light >= 0) {
                     weight = powerHeuristic(
-                        diffusePdf, directLightPdf(scene, static_cast<std::size_t>(light),
-                                                   diffusePosition, diffuseNormal,
-                                                   diffuseInstance, *hit));
+                        misPdf, directLightPdf(scene, static_cast<std::size_t>(light),
+                                               misPosition, misNormal, misInstance, *hit));
                 }
             }
             add(throughput * emission * weight, scatterings);
@@ -492,22 +591,32 @@ auto tracePath(const RenderScene& scene, Ray ray, const PathTracerSettings& sett
         if (!scatter.has_value()) {
             break;  // Absorbed.
         }
+        // The lights for the lobe sampled: diffuse, or glossy reflection (not near
+        // mirrors: their lights are better found by sampling the lobe).
+        const bool glossy =
+            scatter->lobe == Lobe::Specular && material.roughness >= kGlossyLightRoughness;
         if (scatter->lobe == Lobe::Diffuse && nextEvent) {
             add(throughput * Vec3(material.albedo) * sampleDirectLight(scene, settings, *hit, rng),
+                scatterings + 1);
+        } else if (glossy && nextEvent) {
+            // Done when the microfacet picked reflection: weighted up by that chance.
+            add(throughput * sampleReflectedLight(scene, settings, material, wo, *hit, rng) /
+                    scatter->probability,
                 scatterings + 1);
         }
         throughput *= scatter->weight;
         if (!scatter->passThrough) {
             ++scatterings;
         }
-        if (scatter->lobe == Lobe::Diffuse) {
-            fromDiffuse = true;
-            diffusePosition = hit->position;
-            diffuseNormal = hit->normal;
-            diffuseInstance = hit->instanceIndex;
-            diffusePdf = std::max(0.0F, glm::dot(scatter->direction, hit->normal)) / kPi;
+        if (scatter->lobe == Lobe::Diffuse || glossy) {
+            mis = true;
+            misPosition = hit->position;
+            misNormal = hit->normal;
+            misInstance = hit->instanceIndex;
+            misPdf = glossy ? evaluateReflection(material, wo, *hit, scatter->direction).pdf
+                            : std::max(0.0F, glm::dot(scatter->direction, hit->normal)) / kPi;
         } else if (!scatter->passThrough) {
-            fromDiffuse = false;
+            mis = false;
         }
 
         if (bounce >= kRussianRouletteStart) {
@@ -564,7 +673,7 @@ auto shadePreview(const RenderScene& scene, Ray ray, const PathTracerSettings& s
                               scene,
                               Ray{offsetOrigin(hit->position, hit->geometricNormal, direction),
                                   direction},
-                              light.instanceIndex, kInfinity, settings.instanceMask);
+                              std::sqrt(distance2) - light.radius, settings.instanceMask);
         }
 
         const float transmitted = isThinTransmissive(material)

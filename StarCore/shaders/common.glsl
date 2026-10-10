@@ -108,6 +108,35 @@ float fresnelDielectric(float cosThetaI, float eta)
     return 0.5 * (rs * rs + rp * rp);
 }
 
+/** Smith Lambda of GGX for a local direction (z = normal). */
+float smithLambda(vec3 v, float alpha)
+{
+    float z2 = v.z * v.z;
+    if (z2 <= 0.0) {
+        return 1e30;
+    }
+    float tan2 = (v.x * v.x + v.y * v.y) / z2;
+    return 0.5 * (-1.0 + sqrt(1.0 + alpha * alpha * tan2));
+}
+
+/** GGX distribution of microfacet normals D(h), h local. */
+float ggxDistribution(vec3 h, float alpha)
+{
+    float a2 = alpha * alpha;
+    float d = h.z * h.z * (a2 - 1.0) + 1.0;
+    return a2 / (kPi * d * d);
+}
+
+/** Density of sampleGgxVisibleNormal: G1(wo) max(0, wo.h) D(h) / wo.z. */
+float ggxVisibleNormalPdf(vec3 wo, vec3 h, float alpha)
+{
+    float cosine = dot(wo, h);
+    if (cosine <= 0.0 || h.z <= 0.0) {
+        return 0.0;
+    }
+    return cosine * ggxDistribution(h, alpha) / ((1.0 + smithLambda(wo, alpha)) * wo.z);
+}
+
 /** GGX visible normal sample (Heitz, JCGT 2018); wo local with wo.z > 0. */
 vec3 sampleGgxVisibleNormal(vec3 wo, float alpha, float u1, float u2)
 {

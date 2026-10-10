@@ -85,17 +85,30 @@ void Pipeline::pushConstants(VkCommandBuffer commandBuffer, const void* data,
 
 ComputePipeline::ComputePipeline(Context& context, std::span<const std::uint32_t> spirv,
                                  std::span<const VkDescriptorType> bindings,
-                                 std::uint32_t pushConstantSize)
+                                 std::uint32_t pushConstantSize,
+                                 std::span<const std::uint32_t> constants)
     : Pipeline(context, VK_PIPELINE_BIND_POINT_COMPUTE, VK_SHADER_STAGE_COMPUTE_BIT, bindings,
                pushConstantSize)
 {
     const VkShaderModule module = createShaderModule(spirv);
+    std::vector<VkSpecializationMapEntry> entries;
+    for (std::uint32_t i = 0; i < constants.size(); ++i) {
+        entries.push_back({i, static_cast<std::uint32_t>(i * sizeof(std::uint32_t)),
+                           sizeof(std::uint32_t)});
+    }
+    const VkSpecializationInfo specialization{
+        .mapEntryCount = static_cast<std::uint32_t>(entries.size()),
+        .pMapEntries = entries.data(),
+        .dataSize = constants.size_bytes(),
+        .pData = constants.data(),
+    };
     VkComputePipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
     pipelineInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     pipelineInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
     pipelineInfo.stage.module = module;
     pipelineInfo.stage.pName = "main";
+    pipelineInfo.stage.pSpecializationInfo = constants.empty() ? nullptr : &specialization;
     pipelineInfo.layout = m_layout;
     const VkResult result = vkCreateComputePipelines(context.device(), VK_NULL_HANDLE, 1,
                                                      &pipelineInfo, nullptr, &m_pipeline);

@@ -15,7 +15,7 @@
 //     the primary surface with the pane's expected transmittance, the other
 //     lobes (reflections) are traced as their own path into this layer.
 //
-// Dispatched three times (stages): for everything but the reflected paths;
+// Three stages, each a pipeline of its own (kStage): for everything but the reflected paths;
 // for those: one per pixel, frame and layer (their layers keep their own
 // history), a fixed cost outside the samples per pixel, often the expensive
 // ones (from a cockpit's canopy back into the cockpit); and, while things
@@ -25,6 +25,7 @@
 // reflected.
 
 #extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_control_flow_attributes : require
 
 #include "hybrid.glsl"
 #include "path.glsl"
@@ -35,11 +36,9 @@ const uint kStageSamples = 0u;      // Primary layer and guides.
 const uint kStageReflections = 1u;  // Reflected paths.
 const uint kStageGradients = 2u;    // One invocation per gradient stratum.
 
-layout(push_constant) uniform Pass
-{
-    uint stage;
-}
-pass;
+// A pipeline per stage: each holds only its stage's code (as one shader, all
+// stages would get the registers of the most demanding: many paths inlined).
+layout(constant_id = 0) const uint kStage = kStageSamples;
 
 layout(set = 0, binding = 3, rg32ui) uniform readonly uimage2D visibility;
 layout(set = 0, binding = 7, rg32ui) uniform readonly uimage2D glassVisibility;
@@ -285,62 +284,56 @@ void traceReflections(ivec2 pixel, vec3 origin, vec3 direction)
     vec4 motion = vec4(0.0);
     uvec4 reflected = uvec4(0u);
 
-    vec4 glass = vec4(0.0);
-    if (hasPane && !preview) {
-        // A stream of its own.
-        uint rng = rngForPixel(uint(pixel.x), uint(pixel.y), frameData.frame.x,
-                               pcgHash(frameData.frame.y ^ 0x68e31da4u));
-        PathState path = newPath();
-        vec3 nextOrigin;
-        vec3 nextDirection;
-        if (pathVertex(pane, materialOf(pane.instanceIndex),
-                       instances[pane.instanceIndex].lightIndex, direction, 0u,
-                       kVertexSkipEmission | kLobesReflection | kLobesDiffuse, path, rng,
-                       nextOrigin, nextDirection)) {
-            continuePath(nextOrigin, nextDirection, 1u, maxBounces(), path, rng);
-        }
-        float l = luminance(path.radiance);
-        glass = vec4(path.radiance, l * l);
-        uvec2 reflection;
-        motion.zw = virtualMotion(pane, imageLoad(glassVisibility, pixel).y, direction,
-                                  nextDirection, reflection);
-        reflected.zw = reflection;
-    }
-
-    vec4 specular = vec4(0.0);
-    vec3 specularRay = vec3(0.0);  // The sample's reflected ray (none: it ended there).
+    // The pane's reflection (layer 0, the glass layer's), and the primary surface's
+    // seen through the pane (layer 1, the specular layer's).
+    bool glass = hasPane && !preview;
     Material surface;
     if (hasPrimary) {
         surface = materialOf(primary.instanceIndex);
     }
-    if (hasPrimary && !preview && hasSpecularLayer(surface)) {
-        vec3 transmittance;
+    bool reflecting = hasPrimary && !preview && hasSpecularLayer(surface);
+    vec3 transmittance = vec3(0.0);
+    uint bounce = 0u;
+    if (reflecting) {
         vec3 emission;
-        uint bounce;
         throughPanes(hasPane, pane, primary.t, direction, transmittance, emission, bounce);
-        if (bounce < maxBounces() && maxComponent(transmittance) > 0.0) {
-            uint rng = rngForPixel(uint(pixel.x), uint(pixel.y), frameData.frame.x,
-                                   pcgHash(frameData.frame.y ^ 0x2c1b3c6du));
-            PathState path = newPath();
-            vec3 nextOrigin;
-            vec3 nextDirection;
-            if (pathVertex(primary, surface, instances[primary.instanceIndex].lightIndex,
-                           direction, bounce, kVertexSkipEmission | kLobesReflection, path, rng,
-                           nextOrigin, nextDirection)) {
-                continuePath(nextOrigin, nextDirection, bounce + 1u, maxBounces(), path, rng);
-            }
-            specularRay = nextDirection;
-            vec3 radiance = transmittance * path.radiance;
-            float l = luminance(radiance);
-            specular = vec4(radiance, l * l);
+    }
+    bool specular = reflecting && bounce < maxBounces() && maxComponent(transmittance) > 0.0;
+    vec4 results[2] = vec4[](vec4(0.0), vec4(0.0));
+    vec3 rays[2] = vec3[](vec3(0.0), vec3(0.0));  // The samples' reflected rays (0: none).
+    // One loop for both: a single copy of the path code (see tracePathFrom).
+    [[dont_unroll]] for (int layer = 0; layer < 2; ++layer) {
+        if (layer == 0 ? !glass : !specular) {
+            continue;
         }
+        // A random stream of its own.
+        uint rng = rngForPixel(uint(pixel.x), uint(pixel.y), frameData.frame.x,
+                               pcgHash(frameData.frame.y ^ (layer == 0 ? 0x68e31da4u : 0x2c1b3c6du)));
+        PathState path = newPath();
+        vec3 firstRadiance;
+        tracePathFrom(layer == 0 ? pane : primary, direction, layer == 0 ? 0u : bounce,
+                      maxBounces(),
+                      kVertexSkipEmission |
+                          (layer == 0 ? kLobesReflection | kLobesDiffuse : kLobesReflection),
+                      path, rng, firstRadiance, rays[layer]);
+        vec3 radiance = (layer == 0 ? vec3(1.0) : transmittance) * path.radiance;
+        float l = luminance(radiance);
+        results[layer] = vec4(radiance, l * l);
+    }
+    if (glass) {
         uvec2 reflection;
-        motion.xy = virtualMotion(primary, imageLoad(visibility, pixel).y, direction,
-                                  specularRay, reflection);
+        motion.zw = virtualMotion(pane, imageLoad(glassVisibility, pixel).y, direction, rays[0],
+                                  reflection);
+        reflected.zw = reflection;
+    }
+    if (reflecting) {
+        uvec2 reflection;
+        motion.xy = virtualMotion(primary, imageLoad(visibility, pixel).y, direction, rays[1],
+                                  reflection);
         reflected.xy = reflection;
     }
-    imageStore(noisyGlass, pixel, glass);
-    imageStore(noisySpecular, pixel, specular);
+    imageStore(noisyGlass, pixel, results[0]);
+    imageStore(noisySpecular, pixel, results[1]);
     imageStore(reflectionMotion, pixel, motion);
     imageStore(reflectionGuide, pixel, reflected);
 }
@@ -440,7 +433,7 @@ void traceGradient(ivec2 stratum)
 void main()
 {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-    if (pass.stage == kStageGradients) {
+    if (kStage == kStageGradients) {
         if (all(lessThan(pixel, imageSize(gradients)))) {
             traceGradient(pixel);
         }
@@ -451,7 +444,7 @@ void main()
     }
     vec3 origin = frameData.cameraPosition.xyz;
     vec3 direction = cameraDirection(vec2(pixel) + frameData.viewport.zw);
-    if (pass.stage == kStageReflections) {
+    if (kStage == kStageReflections) {
         traceReflections(pixel, origin, direction);
         return;
     }
@@ -555,17 +548,12 @@ void main()
         uint lobes = hasSpecularLayer(surface) ? kLobesDiffuse | kLobesTransmission : 0u;
         for (uint s = 0u; s < samples; ++s) {
             PathState path = newPath();
-            vec3 nextOrigin;
-            vec3 nextDirection;
-            bool more = pathVertex(primary, surface, instances[primary.instanceIndex].lightIndex,
-                                   direction, primaryBounce, kVertexSkipEmission | lobes, path,
-                                   rng, nextOrigin, nextDirection);
+            vec3 firstRadiance;
+            vec3 firstDirection;
+            tracePathFrom(primary, direction, primaryBounce, maxBounces(),
+                          kVertexSkipEmission | lobes, path, rng, firstRadiance, firstDirection);
             if (s == 0u) {
-                firstLight = luminance(path.radiance);
-            }
-            if (more) {
-                continuePath(nextOrigin, nextDirection, primaryBounce + 1u, maxBounces(), path,
-                             rng);
+                firstLight = luminance(firstRadiance);
             }
             vec3 radiance = transmittance * path.radiance;
             sum += radiance;

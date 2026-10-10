@@ -60,36 +60,60 @@ vec3 thinTransmittance(Material m, float cosTheta)
 const float kShadowShortening = 1e-3;
 
 /**
- * Light from `lightInstance` arriving along the ray: attenuated by thin panes,
- * 0 if blocked. `distance`: to the point of a mesh light (anything before it
- * blocks it, the mesh too); kFar for a sphere light, which the ray must hit.
+ * Fraction of the light of a point `distance` along the ray that arrives:
+ * attenuated by thin panes, 0 if anything else is before it (see
+ * shadowTransmittance in path_tracer.cpp). One ray query that ends at the
+ * first opaque surface (not the nearest: any blocks the light): thin
+ * see-through instances are not opaque in the TLAS (GpuScene), so they come
+ * up as candidates, which only attenuate the light (in any order: it is a
+ * product).
  */
-vec3 shadowTransmittance(vec3 origin, vec3 direction, uint lightInstance, float distance)
+vec3 shadowTransmittance(vec3 origin, vec3 direction, float distance)
 {
-    bool toPoint = distance < kFar;
-    // Short of the point: not its own triangle.
-    float remaining = toPoint ? distance * (1.0 - kShadowShortening) : kFar;
+    // Short of the point: not its own surface.
+    float tMax = distance * (1.0 - kShadowShortening);
     vec3 transmittance = vec3(1.0);
-    for (int layer = 0; layer < kMaxThinLayers; ++layer) {
-        SurfaceHit hit;
-        if (!traceClosestHit(origin, direction, instanceMask(), remaining, hit)) {
-            return toPoint ? transmittance : vec3(0.0);
+    rayQueryEXT query;
+    rayQueryInitializeEXT(query, tlas, gl_RayFlagsTerminateOnFirstHitEXT, instanceMask() & 0xFFu,
+                          origin, 0.0, direction, tMax);
+    while (rayQueryProceedEXT(query)) {
+        uint instanceIndex = uint(rayQueryGetIntersectionInstanceCustomIndexEXT(query, false));
+        Material material = materialOf(instanceIndex);
+        bool thin = isThinTransmissive(material);
+        mat3 worldToObject = mat3(rayQueryGetIntersectionWorldToObjectEXT(query, false));
+        if (rayQueryGetIntersectionTypeEXT(query, false) == gl_RayQueryCandidateIntersectionAABBEXT) {
+            // A sphere: crossed twice if see-through (as two surfaces).
+            vec3 o = rayQueryGetIntersectionObjectRayOriginEXT(query, false);
+            vec3 d = rayQueryGetIntersectionObjectRayDirectionEXT(query, false);
+            float t;
+            for (float tMin = 0.0; intersectUnitSphere(o, d, tMin, tMax, t); tMin = t) {
+                if (!thin) {
+                    rayQueryGenerateIntersectionEXT(query, t);
+                    break;
+                }
+                vec3 normal = normalize((o + t * d) * worldToObject);
+                transmittance *= thinTransmittance(material, abs(dot(direction, normal)));
+            }
+        } else if (!thin) {
+            rayQueryConfirmIntersectionEXT(query);  // Not see-through after all: blocks.
+        } else {
+            vec3 objectGeometric;
+            vec3 objectShading;
+            objectNormals(instances[instanceIndex],
+                          uint(rayQueryGetIntersectionPrimitiveIndexEXT(query, false)),
+                          rayQueryGetIntersectionBarycentricsEXT(query, false), vec3(0.0),
+                          objectGeometric, objectShading);
+            vec3 normal = normalize(objectGeometric * worldToObject);
+            transmittance *= thinTransmittance(material, abs(dot(direction, normal)));
         }
-        if (!toPoint && hit.instanceIndex == lightInstance) {
-            return transmittance;
-        }
-        Material material = materialOf(hit.instanceIndex);
-        if (!isThinTransmissive(material)) {
-            return vec3(0.0);
-        }
-        transmittance *= thinTransmittance(material, abs(dot(direction, hit.geometricNormal)));
         if (maxComponent(transmittance) <= 0.0) {
             return vec3(0.0);
         }
-        origin = offsetOrigin(hit.position, hit.geometricNormal, direction);
-        remaining -= hit.t;
     }
-    return vec3(0.0);
+    if (rayQueryGetIntersectionTypeEXT(query, true) != gl_RayQueryCommittedIntersectionNoneEXT) {
+        return vec3(0.0);
+    }
+    return transmittance;
 }
 
 /** How bright a light is (luminance of its emission), to pick it by. */
@@ -222,6 +246,10 @@ bool sampleLight(Light light, vec3 position, inout uint rng, out vec3 direction,
         }
         float oneMinusCos = coneOneMinusCos(light.radius, distance2);
         direction = sampleCone(toCenter / sqrt(distance2), oneMinusCos, u1, u2);
+        // To the sphere's near surface that way (the cone's directions all meet it).
+        float along = dot(toCenter, direction);
+        float offAxis2 = max(0.0, distance2 - along * along);
+        distance = along - sqrt(max(0.0, light.radius * light.radius - offAxis2));
         pdf = conePdf(oneMinusCos);
         return true;
     }
@@ -276,38 +304,6 @@ float directLightPdf(uint index, vec3 position, vec3 normal, uint surfaceInstanc
     return probability * meshLightPdf(light, lightHit.primitive, position, lightHit.position);
 }
 
-/** Next event estimation for the diffuse lobe (its weight applied by the caller). */
-vec3 sampleDirectLight(SurfaceHit hit, inout uint rng)
-{
-    uint index;
-    float probability;
-    if (!pickLight(hit.position, hit.normal, hit.instanceIndex, nextFloat(rng), index,
-                   probability)) {
-        return vec3(0.0);
-    }
-    Light light = lights[index];
-    vec3 direction;
-    float distance;
-    float pdf;
-    if (!sampleLight(light, hit.position, rng, direction, distance, pdf)) {
-        return vec3(0.0);
-    }
-    float cosine = dot(direction, hit.normal);
-    if (cosine <= 0.0 || dot(direction, hit.geometricNormal) <= 0.0) {
-        return vec3(0.0);
-    }
-    vec3 transmittance = shadowTransmittance(
-        offsetOrigin(hit.position, hit.geometricNormal, direction), direction,
-        light.instanceIndex, distance);
-    if (maxComponent(transmittance) <= 0.0) {
-        return vec3(0.0);
-    }
-    float lightPdf = probability * pdf;
-    float bsdfPdf = cosine / kPi;
-    return light.emission * transmittance * (cosine / kPi) *
-           (powerHeuristic(lightPdf, bsdfPdf) / lightPdf);
-}
-
 struct Scatter
 {
     vec3 direction;
@@ -317,6 +313,9 @@ struct Scatter
     bool passThrough;
     // Probability of the sampled set of lobes (sampleLobes), else 1.
     float scale;
+    // Probability that the sampled microfacet chose this lobe (reflection: metal or
+    // dielectric), among the sampled set.
+    float probability;
 };
 
 /** Mirror wo about h, folding multiply-scattered light back above the surface. */
@@ -335,6 +334,7 @@ bool sampleBsdf(Material material, vec3 wo, SurfaceHit hit, inout uint rng, out 
     scatter.lobe = kLobeDiffuse;
     scatter.passThrough = false;
     scatter.scale = 1.0;
+    scatter.probability = 1.0;
 
     vec3 baseColor = material.albedo.rgb;
     Frame frame = makeFrame(hit.normal);
@@ -346,6 +346,11 @@ bool sampleBsdf(Material material, vec3 wo, SurfaceHit hit, inout uint rng, out 
     float u1 = nextFloat(rng);
     float u2 = nextFloat(rng);
     vec3 h = sampleGgxVisibleNormal(woLocal, alpha, u1, u2);
+    bool thin = (material.flags & kMaterialThinWalled) != 0u;
+    // n_incident / n_transmitted: entering the volume through its front face.
+    float eta = thin || hit.frontFace ? 1.0 / material.ior : material.ior;
+    float reflectance = fresnelDielectric(dot(woLocal, h), eta);
+    float reflection = material.metallic + (1.0 - material.metallic) * reflectance;
     if (nextFloat(rng) < material.metallic) {
         vec3 world = toWorld(frame, reflectLocal(woLocal, h));
         if (dot(world, hit.geometricNormal) <= 0.0) {
@@ -354,13 +359,10 @@ bool sampleBsdf(Material material, vec3 wo, SurfaceHit hit, inout uint rng, out 
         scatter.direction = world;
         scatter.weight = fresnelSchlick(baseColor, dot(woLocal, h));
         scatter.lobe = kLobeSpecular;
+        scatter.probability = reflection;
         return true;
     }
 
-    bool thin = (material.flags & kMaterialThinWalled) != 0u;
-    // n_incident / n_transmitted: entering the volume through its front face.
-    float eta = thin || hit.frontFace ? 1.0 / material.ior : material.ior;
-    float reflectance = fresnelDielectric(dot(woLocal, h), eta);
     if (nextFloat(rng) < reflectance) {
         vec3 world = toWorld(frame, reflectLocal(woLocal, h));
         if (dot(world, hit.geometricNormal) <= 0.0) {
@@ -369,6 +371,7 @@ bool sampleBsdf(Material material, vec3 wo, SurfaceHit hit, inout uint rng, out 
         scatter.direction = world;
         scatter.weight = vec3(1.0);
         scatter.lobe = kLobeSpecular;
+        scatter.probability = reflection;
         return true;
     }
 
@@ -423,6 +426,7 @@ bool sampleLobes(Material material, vec3 wo, SurfaceHit hit, uint lobes, inout u
     scatter.lobe = kLobeDiffuse;
     scatter.passThrough = false;
     scatter.scale = 1.0;
+    scatter.probability = 1.0;
 
     vec3 baseColor = material.albedo.rgb;
     Frame frame = makeFrame(hit.normal);
@@ -460,6 +464,7 @@ bool sampleLobes(Material material, vec3 wo, SurfaceHit hit, uint lobes, inout u
                           vec3((1.0 - metal) * reflectance)) *
                          (total / reflection);
         scatter.lobe = kLobeSpecular;
+        scatter.probability = reflection / total;
         return true;
     }
     if (choice < reflection + transmission) {
@@ -490,6 +495,108 @@ bool sampleLobes(Material material, vec3 wo, SurfaceHit hit, uint lobes, inout u
     return true;
 }
 
+// Reflections at least this rough also sample the lights (smoother ones are too
+// sharp for it: their lights are found by sampling the reflection).
+const float kGlossyLightRoughness = 0.15;
+
+/**
+ * The reflection lobe as sampleBsdf / sampleLobes (`lobes`, 0: all) sample it,
+ * for a direction `wi` (see evaluateReflection in path_tracer.cpp): BSDF
+ * times cosine (`value`), and the density with which sampling returns `wi`
+ * from the reflection lobe (of the lobes sampled).
+ */
+vec3 evaluateReflection(Material material, vec3 wo, SurfaceHit hit, vec3 wi, uint lobes,
+                        out float pdf)
+{
+    pdf = 0.0;
+    Frame frame = makeFrame(hit.normal);
+    vec3 woLocal = toLocal(frame, wo);
+    woLocal.z = max(woLocal.z, 1e-5);
+    woLocal = normalize(woLocal);
+    vec3 wiLocal = toLocal(frame, wi);
+    vec3 value = vec3(0.0);
+    if (wiLocal.z <= 0.0) {
+        return value;
+    }
+    float alpha = roughnessToAlpha(material.roughness);
+    bool thin = (material.flags & kMaterialThinWalled) != 0u;
+    float eta = thin || hit.frontFace ? 1.0 / material.ior : material.ior;
+    float metal = material.metallic;
+    for (int folded = 0; folded < 2; ++folded) {
+        if (folded == 1 && wiLocal.z >= woLocal.z) {
+            break;  // The microfacet would face down.
+        }
+        vec3 h = normalize(woLocal + vec3(wiLocal.xy, folded == 1 ? -wiLocal.z : wiLocal.z));
+        float density = ggxVisibleNormalPdf(woLocal, h, alpha);
+        if (density <= 0.0) {
+            continue;
+        }
+        float cosine = dot(woLocal, h);
+        float perDirection = density / (4.0 * cosine);  // Mirroring's Jacobian.
+        float reflectance = fresnelDielectric(cosine, eta);
+        float reflection = metal + (1.0 - metal) * reflectance;
+        // Of the lobes sampled, the reflection's share for this microfacet.
+        float total = 1.0;
+        if (lobes != 0u) {
+            float rest = (1.0 - metal) * (1.0 - reflectance);
+            total = reflection +
+                    ((lobes & kLobesTransmission) != 0u ? rest * material.transmission : 0.0) +
+                    ((lobes & kLobesDiffuse) != 0u ? rest * (1.0 - material.transmission) : 0.0);
+        }
+        pdf += reflection / total * perDirection;
+        value += (metal * fresnelSchlick(material.albedo.rgb, cosine) +
+                  vec3((1.0 - metal) * reflectance)) *
+                 perDirection;
+    }
+    return value;
+}
+
+/**
+ * Next event estimation for the lobe a vertex sampled (see sampleDirectLight
+ * and sampleReflectedLight in path_tracer.cpp): radiance of one sampled light
+ * times, for the diffuse lobe, cos / pi (MIS-weighted against cosine sampling;
+ * the caller applies the albedo), for the reflection, the lobe (BSDF times
+ * cosine; MIS-weighted against sampling it). One function for both: shaders
+ * inline every call, and a second copy of the shadow ray costs registers.
+ */
+vec3 sampleLobeLight(Material material, vec3 wo, SurfaceHit hit, bool reflection, uint lobes,
+                     inout uint rng)
+{
+    uint index;
+    float probability;
+    if (!pickLight(hit.position, hit.normal, hit.instanceIndex, nextFloat(rng), index,
+                   probability)) {
+        return vec3(0.0);
+    }
+    Light light = lights[index];
+    vec3 direction;
+    float distance;
+    float pdf;
+    if (!sampleLight(light, hit.position, rng, direction, distance, pdf) ||
+        dot(direction, hit.geometricNormal) <= 0.0) {
+        return vec3(0.0);
+    }
+    vec3 value;
+    float bsdfPdf;
+    if (reflection) {
+        value = evaluateReflection(material, wo, hit, direction, lobes, bsdfPdf);
+    } else {
+        bsdfPdf = max(0.0, dot(direction, hit.normal)) / kPi;
+        value = vec3(bsdfPdf);
+    }
+    if (maxComponent(value) <= 0.0) {
+        return vec3(0.0);
+    }
+    vec3 transmittance = shadowTransmittance(
+        offsetOrigin(hit.position, hit.geometricNormal, direction), direction, distance);
+    if (maxComponent(transmittance) <= 0.0) {
+        return vec3(0.0);
+    }
+    float lightPdf = probability * pdf;
+    return light.emission * transmittance * value *
+           (powerHeuristic(lightPdf, bsdfPdf) / lightPdf);
+}
+
 /**
  * State of a camera path. `scale` is the throughput the path started with
  * (paths split at window panes start below 1): Russian roulette and the
@@ -501,12 +608,14 @@ struct PathState
     vec3 throughput;
     // Scattering events so far (straight passes through window panes don't count).
     uint scatterings;
-    // Last diffuse vertex, to MIS-weight lights found by BSDF sampling.
-    bool fromDiffuse;
-    vec3 diffusePosition;
-    vec3 diffuseNormal;
-    uint diffuseInstance;
-    float diffusePdf;
+    // The last vertex that also sampled the lights (diffuse or glossy), to MIS-weight
+    // lights found by BSDF sampling from it: where it was and the density of the
+    // direction sampled there (diffuse: given the lobe; glossy: of the lobes sampled).
+    bool mis;
+    vec3 misPosition;
+    vec3 misNormal;
+    uint misInstance;
+    float misPdf;
     float scale;
 };
 
@@ -516,11 +625,11 @@ PathState newPath()
     path.radiance = vec3(0.0);
     path.throughput = vec3(1.0);
     path.scatterings = 0u;
-    path.fromDiffuse = false;
-    path.diffusePosition = vec3(0.0);
-    path.diffuseNormal = vec3(0.0);
-    path.diffuseInstance = 0u;
-    path.diffusePdf = 0.0;
+    path.mis = false;
+    path.misPosition = vec3(0.0);
+    path.misNormal = vec3(0.0);
+    path.misInstance = 0u;
+    path.misPdf = 0.0;
     path.scale = 1.0;
     return path;
 }
@@ -557,10 +666,10 @@ bool pathVertex(SurfaceHit hit, Material material, int lightIndex, vec3 directio
     vec3 emission = material.emission.rgb;
     if ((flags & kVertexSkipEmission) == 0u && maxComponent(emission) > 0.0) {
         float weight = 1.0;
-        if (nextEvent && path.fromDiffuse && lightIndex >= 0) {
-            weight = powerHeuristic(path.diffusePdf,
-                                    directLightPdf(uint(lightIndex), path.diffusePosition,
-                                                   path.diffuseNormal, path.diffuseInstance, hit));
+        if (nextEvent && path.mis && lightIndex >= 0) {
+            weight = powerHeuristic(path.misPdf,
+                                    directLightPdf(uint(lightIndex), path.misPosition,
+                                                   path.misNormal, path.misInstance, hit));
         }
         path.radiance +=
             clampContribution(path.throughput * emission * weight, path.scatterings, path.scale);
@@ -574,9 +683,21 @@ bool pathVertex(SurfaceHit hit, Material material, int lightIndex, vec3 directio
     if (!scattered) {
         return false;  // Absorbed.
     }
-    if (scatter.lobe == kLobeDiffuse && nextEvent) {
+    // The lights for the lobe sampled: diffuse, or glossy reflection (not near mirrors:
+    // their lights are better found by sampling the lobe).
+    bool glossy = scatter.lobe == kLobeSpecular && material.roughness >= kGlossyLightRoughness;
+    // The density of the direction sampled, for MIS at the next vertex (before the
+    // shadow ray: what it needs is not kept across it).
+    float misPdf = max(0.0, dot(scatter.direction, hit.normal)) / kPi;
+    if (glossy) {
+        evaluateReflection(material, wo, hit, scatter.direction, lobes, misPdf);
+    }
+    if (nextEvent && (scatter.lobe == kLobeDiffuse || glossy)) {
+        // The reflection's, when the microfacet picked reflection: weighted up by that
+        // chance.
+        vec3 weight = glossy ? vec3(1.0 / scatter.probability) : scatter.weight;
         path.radiance += clampContribution(
-            path.throughput * scatter.weight * sampleDirectLight(hit, rng),
+            path.throughput * weight * sampleLobeLight(material, wo, hit, glossy, lobes, rng),
             path.scatterings + 1u, path.scale);
     }
     path.throughput *= scatter.weight;
@@ -584,14 +705,14 @@ bool pathVertex(SurfaceHit hit, Material material, int lightIndex, vec3 directio
     if (!scatter.passThrough) {
         ++path.scatterings;
     }
-    if (scatter.lobe == kLobeDiffuse) {
-        path.fromDiffuse = true;
-        path.diffusePosition = hit.position;
-        path.diffuseNormal = hit.normal;
-        path.diffuseInstance = hit.instanceIndex;
-        path.diffusePdf = max(0.0, dot(scatter.direction, hit.normal)) / kPi;
+    if (scatter.lobe == kLobeDiffuse || glossy) {
+        path.mis = true;
+        path.misPosition = hit.position;
+        path.misNormal = hit.normal;
+        path.misInstance = hit.instanceIndex;
+        path.misPdf = misPdf;
     } else if (!scatter.passThrough) {
-        path.fromDiffuse = false;
+        path.mis = false;
     }
 
     if (bounce >= kRussianRouletteStart) {
@@ -623,6 +744,45 @@ void continuePath(vec3 origin, vec3 direction, uint bounce, uint end, inout Path
         Instance instance = instances[hit.instanceIndex];
         if (!pathVertex(hit, materials[instance.materialIndex], instance.lightIndex, direction,
                         bounce, 0u, path, rng, origin, direction)) {
+            return;
+        }
+    }
+}
+
+/**
+ * A path from a vertex already found (`hit`, reached along `direction`;
+ * `flags` for it): that vertex, then further ones, traced, until `end` (see
+ * continuePath). One call of pathVertex for all of them: shaders inline every
+ * call, and each copy of a vertex (light sampling, shadow rays) takes
+ * registers. `firstRadiance`: the path's radiance after the first vertex;
+ * `firstDirection`: the ray it continued with (0: none).
+ */
+void tracePathFrom(SurfaceHit hit, vec3 direction, uint bounce, uint end, uint flags,
+                   inout PathState path, inout uint rng, out vec3 firstRadiance,
+                   out vec3 firstDirection)
+{
+    firstRadiance = path.radiance;
+    firstDirection = vec3(0.0);
+    Instance instance = instances[hit.instanceIndex];
+    vec3 origin = vec3(0.0);
+    for (bool first = true; bounce < end; ++bounce) {
+        if (!first) {
+            if (!traceClosestHit(origin, direction, instanceMask(), hit)) {
+                path.radiance +=
+                    clampContribution(path.throughput * skyColor(), path.scatterings, path.scale);
+                return;
+            }
+            instance = instances[hit.instanceIndex];
+            flags = 0u;
+        }
+        bool more = pathVertex(hit, materials[instance.materialIndex], instance.lightIndex,
+                               direction, bounce, flags, path, rng, origin, direction);
+        if (first) {
+            firstRadiance = path.radiance;
+            firstDirection = direction;
+            first = false;
+        }
+        if (!more) {
             return;
         }
     }
@@ -669,7 +829,7 @@ vec3 shadePreview(vec3 origin, vec3 direction)
             irradiance += light.emission * (cosine * light.radius * light.radius / distance2) *
                           shadowTransmittance(
                               offsetOrigin(hit.position, hit.geometricNormal, toLight), toLight,
-                              light.instanceIndex, kFar);
+                              sqrt(distance2) - light.radius);
         }
 
         float transmitted = isThinTransmissive(material)

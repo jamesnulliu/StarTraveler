@@ -8,6 +8,9 @@ from starcore import primitives
 
 FLOOR_RAY = sc.Ray((3.0, 0.5, 0.0), tuple(np.array([-3.0, -0.5, 0.0]) / np.hypot(3.0, 0.5)))
 EXPECTED_FLOOR = 0.5 * 10.0 / 25.0  # albedo * radiance * (r / d)^2
+# Converged, the floor is 4.4 % darker at this low angle: its dielectric coat reflects
+# some of the light away (test_material.cpp measures it).
+CONVERGED_FLOOR = EXPECTED_FLOOR * 0.956
 
 
 def light_scene(pane: sc.Material | None = None) -> sc.Scene:
@@ -40,7 +43,7 @@ def mean_radiance(scene: sc.Scene, settings: sc.PathTracerSettings, samples: int
 def test_sphere_light_matches_analytic_irradiance(nee):
     settings = sc.PathTracerSettings(max_bounces=2, next_event_estimation=nee)
     radiance = mean_radiance(light_scene(), settings, 4000 if nee else 40000)
-    assert radiance[0] == pytest.approx(EXPECTED_FLOOR, rel=0.04 if nee else 0.08)
+    assert radiance[0] == pytest.approx(CONVERGED_FLOOR, rel=0.04 if nee else 0.08)
     assert sc.build_render_scene(light_scene()).light_count == 1
 
 

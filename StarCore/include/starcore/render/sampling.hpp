@@ -77,6 +77,24 @@ struct Frame
     return 0.5F * (-1.0F + std::sqrt(1.0F + alpha * alpha * tan2));
 }
 
+/** @brief GGX distribution of microfacet normals D(h), h in the local frame. */
+[[nodiscard]] inline auto ggxDistribution(Vec3 h, float alpha) -> float
+{
+    const float a2 = alpha * alpha;
+    const float d = h.z * h.z * (a2 - 1.0F) + 1.0F;
+    return a2 / (kPi * d * d);
+}
+
+/** @brief Density of sampleGgxVisibleNormal: G1(wo) max(0, wo.h) D(h) / wo.z. */
+[[nodiscard]] inline auto ggxVisibleNormalPdf(Vec3 wo, Vec3 h, float alpha) -> float
+{
+    const float cosine = glm::dot(wo, h);
+    if (cosine <= 0.0F || h.z <= 0.0F) {
+        return 0.0F;
+    }
+    return cosine * ggxDistribution(h, alpha) / ((1.0F + smithLambda(wo, alpha)) * wo.z);
+}
+
 /** @brief Weight G2 / G1(wo) of a VNDF-sampled GGX direction (height-correlated Smith). */
 [[nodiscard]] inline auto smithWeight(Vec3 wo, Vec3 wi, float alpha) -> float
 {

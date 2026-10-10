@@ -37,6 +37,10 @@ constexpr VkBufferUsageFlags kBuildInputUsage =
     kMeshUsage | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
 constexpr VkBufferUsageFlags kScratchUsage =
     VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+// Opaque unless an instance is not (see-through panes), and each candidate reported once:
+// shadow rays multiply the transmittance of every pane they pass.
+constexpr VkGeometryFlagsKHR kGeometryFlags =
+    VK_GEOMETRY_OPAQUE_BIT_KHR | VK_GEOMETRY_NO_DUPLICATE_ANY_HIT_INVOCATION_BIT_KHR;
 constexpr VkPipelineStageFlags kShaderStages = VK_PIPELINE_STAGE_VERTEX_SHADER_BIT |
                                                VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT |
                                                VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
@@ -204,7 +208,7 @@ void GpuScene::buildSphereBlas()
     VkAccelerationStructureGeometryKHR geometry{};
     geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
     geometry.geometryType = VK_GEOMETRY_TYPE_AABBS_KHR;
-    geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+    geometry.flags = kGeometryFlags;
     geometry.geometry.aabbs.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_AABBS_DATA_KHR;
     geometry.geometry.aabbs.data.deviceAddress = m_sphereAabb.deviceAddress();
     geometry.geometry.aabbs.stride = sizeof(VkAabbPositionsKHR);
@@ -330,7 +334,7 @@ void GpuScene::buildMeshes(const std::vector<MeshHandle>& meshes)
         VkAccelerationStructureGeometryKHR& geometry = geometries[i];
         geometry.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR;
         geometry.geometryType = VK_GEOMETRY_TYPE_TRIANGLES_KHR;
-        geometry.flags = VK_GEOMETRY_OPAQUE_BIT_KHR;
+        geometry.flags = kGeometryFlags;
         auto& triangles = geometry.geometry.triangles;
         triangles.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_TRIANGLES_DATA_KHR;
         triangles.vertexFormat = VK_FORMAT_R32G32B32_SFLOAT;
@@ -522,8 +526,14 @@ void GpuScene::update(const RenderScene& scene, VkCommandBuffer commandBuffer,
                 tlasInstance.instanceCustomIndex = i;
                 tlasInstance.mask = instance.mask & 0xFFU;
                 tlasInstance.instanceShaderBindingTableRecordOffset = 0;
+                // See-through panes are not opaque: shadow rays pass them (path.glsl).
+                const RenderMaterial& material = scene.materials[instance.materialIndex];
+                const bool seeThrough = (material.flags & kMaterialThinWalled) != 0U &&
+                                        material.transmission > 0.0F;
                 tlasInstance.flags = static_cast<std::uint32_t>(
-                    VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR);
+                    VK_GEOMETRY_INSTANCE_TRIANGLE_FACING_CULL_DISABLE_BIT_KHR |
+                    (seeThrough ? VK_GEOMETRY_INSTANCE_FORCE_NO_OPAQUE_BIT_KHR
+                                : VK_GEOMETRY_INSTANCE_FORCE_OPAQUE_BIT_KHR));
                 tlasInstance.accelerationStructureReference = blas;
             }
         }

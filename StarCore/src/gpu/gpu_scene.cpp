@@ -18,9 +18,11 @@ namespace
 {
 
 static_assert(sizeof(RenderMaterial) == 64, "std430 layout of Material in scene.glsl");
-static_assert(sizeof(RenderLight) == 32 && offsetof(RenderLight, radius) == 12 &&
-                  offsetof(RenderLight, emission) == 16 &&
-                  offsetof(RenderLight, instanceIndex) == 28,
+static_assert(offsetof(LightRecord, radius) == 12 && offsetof(LightRecord, emission) == 16 &&
+                  offsetof(LightRecord, instanceIndex) == 28 &&
+                  offsetof(LightRecord, triangleCdf) == 32 &&
+                  offsetof(LightRecord, triangleCount) == 40 &&
+                  offsetof(LightRecord, objectToWorld) == 48,
               "std430 layout of Light in scene.glsl");
 
 // Meshes not referenced by this many consecutive mesh syncs lose their buffers.
@@ -451,9 +453,36 @@ void GpuScene::update(const RenderScene& scene, VkCommandBuffer commandBuffer,
             retire(std::move(m_lights), VK_NULL_HANDLE);
         }
         m_lightCapacity = std::max({lightCount, 2 * m_lightCapacity, kMinLightCapacity});
-        m_lights = Buffer(*m_context, sizeof(RenderLight) * m_lightCapacity,
+        m_lights = Buffer(*m_context, sizeof(LightRecord) * m_lightCapacity,
                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
                           MemoryUsage::DeviceLocal);
+    }
+    const std::size_t triangleCount = scene.lightTriangleCdf.size();
+    if (!m_lightTriangleCdf.isValid() || triangleCount > m_lightTriangleCapacity) {
+        if (m_lightTriangleCdf.isValid()) {
+            retire(std::move(m_lightTriangleCdf), VK_NULL_HANDLE);
+        }
+        m_lightTriangleCapacity =
+            std::max({triangleCount, 2 * m_lightTriangleCapacity, std::size_t{256}});
+        m_lightTriangleCdf = Buffer(*m_context, sizeof(float) * m_lightTriangleCapacity, kMeshUsage,
+                                    MemoryUsage::DeviceLocal);
+    }
+    // The lights as the shaders sample them.
+    std::vector<LightRecord> lightRecords;
+    if (uploadLights) {
+        const VkDeviceAddress cdf = m_lightTriangleCdf.deviceAddress();
+        for (const RenderLight& light : scene.lights) {
+            LightRecord& record = lightRecords.emplace_back();
+            record.center = light.center;
+            record.radius = light.radius;
+            record.emission = light.emission;
+            record.instanceIndex = light.instanceIndex;
+            record.triangleCdf =
+                light.triangleCount > 0 ? cdf + sizeof(float) * light.firstTriangle : 0;
+            record.triangleCount = light.triangleCount;
+            record.area = light.area;
+            toRows(scene.instances[light.instanceIndex].objectToWorld, record.objectToWorld);
+        }
     }
 
     // Staging: the changed instances' records, materials, transforms and TLAS
@@ -503,12 +532,15 @@ void GpuScene::update(const RenderScene& scene, VkCommandBuffer commandBuffer,
     const auto materialBytes = bytesOf(materials);
     const auto transformBytes = bytesOf(transforms);
     const auto tlasInstanceBytes = bytesOf(tlasInstances);
-    const auto lightBytes = uploadLights ? bytesOf(scene.lights) : std::span<const std::byte>();
+    const auto lightBytes = bytesOf(lightRecords);
+    const auto cdfBytes =
+        uploadLights ? bytesOf(scene.lightTriangleCdf) : std::span<const std::byte>();
     const VkDeviceSize materialOffset = alignUp(recordBytes.size(), 256);
     const VkDeviceSize transformOffset = materialOffset + alignUp(materialBytes.size(), 256);
     const VkDeviceSize tlasInstanceOffset = transformOffset + alignUp(transformBytes.size(), 256);
     const VkDeviceSize lightOffset = tlasInstanceOffset + alignUp(tlasInstanceBytes.size(), 256);
-    const VkDeviceSize stagingSize = lightOffset + lightBytes.size();
+    const VkDeviceSize cdfOffset = lightOffset + alignUp(lightBytes.size(), 256);
+    const VkDeviceSize stagingSize = cdfOffset + cdfBytes.size();
     if (stagingSize > 0) {
         Buffer& staging = m_staging[frameSlot];
         if (!staging.isValid() || staging.size() < stagingSize) {
@@ -521,6 +553,7 @@ void GpuScene::update(const RenderScene& scene, VkCommandBuffer commandBuffer,
         staging.write(transformBytes, transformOffset);
         staging.write(tlasInstanceBytes, tlasInstanceOffset);
         staging.write(lightBytes, lightOffset);
+        staging.write(cdfBytes, cdfOffset);
 
         // One copy command per buffer, one region per run.
         std::vector<VkBufferCopy> regions;
@@ -548,6 +581,11 @@ void GpuScene::update(const RenderScene& scene, VkCommandBuffer commandBuffer,
         if (!lightBytes.empty()) {
             const VkBufferCopy region{lightOffset, 0, lightBytes.size()};
             vkCmdCopyBuffer(commandBuffer, staging.handle(), m_lights.handle(), 1, &region);
+        }
+        if (!cdfBytes.empty()) {
+            const VkBufferCopy region{cdfOffset, 0, cdfBytes.size()};
+            vkCmdCopyBuffer(commandBuffer, staging.handle(), m_lightTriangleCdf.handle(), 1,
+                            &region);
         }
     }
     m_lightCount = lightCount;

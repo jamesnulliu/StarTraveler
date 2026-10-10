@@ -56,16 +56,23 @@ struct RenderMaterial
 static_assert(sizeof(RenderMaterial) == 64, "std430-compatible layout");
 
 /**
- * @brief An emissive sphere sampled directly by the path tracer (next event
- *        estimation). Other emitters (meshes, ellipsoids) are only found by
- *        BSDF sampling.
+ * @brief An emitter sampled directly by the path tracer (next event
+ *        estimation): an emissive sphere, or an emissive mesh, whose triangles
+ *        are sampled by their area (both sides emit). Emissive spheres scaled
+ *        unevenly (ellipsoids) are only found by BSDF sampling.
  */
 struct RenderLight
 {
+    // A sphere's; a mesh's bounding sphere (how much it may light a point).
     Vec3 center{0.0F};
     float radius = 0.0F;
     Vec3 emission{0.0F};
     std::uint32_t instanceIndex = 0;
+    // Meshes: the cumulative distribution of their triangles by object-space
+    // area, at RenderScene::lightTriangleCdf[firstTriangle]; 0 triangles: a sphere.
+    std::uint32_t firstTriangle = 0;
+    std::uint32_t triangleCount = 0;
+    float area = 0.0F;  // In world space (as the transform scales it, roughly).
 
     auto operator==(const RenderLight&) const -> bool = default;
 };
@@ -152,6 +159,9 @@ struct RenderScene
     std::vector<RenderInstance> instances;
     std::vector<RenderMaterial> materials;  // materials[i] is instances[i]'s.
     std::vector<RenderLight> lights;
+    // The mesh lights' triangle distributions (RenderLight::firstTriangle):
+    // per triangle, the fraction of its mesh's area up to and including it.
+    std::vector<float> lightTriangleCdf;
     // Per instance: index into `lights`, or -1.
     std::vector<std::int32_t> lightOfInstance;
     Vec3 skyColor{0.0F};
@@ -253,6 +263,7 @@ struct SurfaceHit
     // The ray hit the side the face/outward normal points to.
     bool frontFace = true;
     std::uint32_t instanceIndex = 0;
+    std::uint32_t primitive = 0;  // The triangle of a mesh (0 for spheres).
 };
 
 /**

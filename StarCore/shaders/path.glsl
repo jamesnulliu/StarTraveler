@@ -56,16 +56,26 @@ vec3 thinTransmittance(Material m, float cosTheta)
     return m.albedo.rgb * ((1.0 - m.metallic) * m.transmission * (1.0 - reflectance));
 }
 
-/** Light from `lightInstance` arriving along the ray: attenuated by thin panes, 0 if blocked. */
-vec3 shadowTransmittance(vec3 origin, vec3 direction, uint lightInstance)
+// Shadow rays to a point of a mesh light stop this fraction of the way short of it.
+const float kShadowShortening = 1e-3;
+
+/**
+ * Light from `lightInstance` arriving along the ray: attenuated by thin panes,
+ * 0 if blocked. `distance`: to the point of a mesh light (anything before it
+ * blocks it, the mesh too); kFar for a sphere light, which the ray must hit.
+ */
+vec3 shadowTransmittance(vec3 origin, vec3 direction, uint lightInstance, float distance)
 {
+    bool toPoint = distance < kFar;
+    // Short of the point: not its own triangle.
+    float remaining = toPoint ? distance * (1.0 - kShadowShortening) : kFar;
     vec3 transmittance = vec3(1.0);
     for (int layer = 0; layer < kMaxThinLayers; ++layer) {
         SurfaceHit hit;
-        if (!traceClosestHit(origin, direction, instanceMask(), hit)) {
-            return vec3(0.0);
+        if (!traceClosestHit(origin, direction, instanceMask(), remaining, hit)) {
+            return toPoint ? transmittance : vec3(0.0);
         }
-        if (hit.instanceIndex == lightInstance) {
+        if (!toPoint && hit.instanceIndex == lightInstance) {
             return transmittance;
         }
         Material material = materialOf(hit.instanceIndex);
@@ -77,48 +87,222 @@ vec3 shadowTransmittance(vec3 origin, vec3 direction, uint lightInstance)
             return vec3(0.0);
         }
         origin = offsetOrigin(hit.position, hit.geometricNormal, direction);
+        remaining -= hit.t;
     }
     return vec3(0.0);
 }
 
-/** Solid-angle pdf of sampling light `index` from `position` (0 from inside it). */
-float directLightPdf(uint index, vec3 position)
+/** How bright a light is (luminance of its emission), to pick it by. */
+float lightBrightness(vec3 emission)
 {
-    Light light = lights[index];
-    vec3 toCenter = light.center - position;
-    float distance2 = dot(toCenter, toCenter);
-    if (distance2 <= light.radius * light.radius) {
+    return 0.2126 * emission.r + 0.7152 * emission.g + 0.0722 * emission.b;
+}
+
+/**
+ * How much light `index` may light a surface point, roughly: its brightness
+ * times the solid angle it covers. 0 if it cannot: below the surface's
+ * horizon, around the point (a sphere), or the surface itself. (Reads only
+ * the fields it needs: it runs for every light.)
+ */
+float lightWeight(uint index, vec3 position, vec3 normal, uint surfaceInstance)
+{
+    if (lights[index].instanceIndex == surfaceInstance) {
         return 0.0;
     }
-    return conePdf(coneOneMinusCos(light.radius, distance2)) / float(lightCount());
+    vec3 toCenter = lights[index].center - position;
+    float radius = lights[index].radius;
+    if (dot(toCenter, normal) < -radius) {
+        return 0.0;
+    }
+    float distance2 = dot(toCenter, toCenter);
+    float brightness = lightBrightness(lights[index].emission);
+    if (lights[index].triangleCount == 0u) {
+        if (distance2 <= radius * radius) {
+            return 0.0;
+        }
+        return brightness * kTwoPi * coneOneMinusCos(radius, distance2);
+    }
+    // A mesh: its area over the squared distance, at most a hemisphere.
+    return brightness * min(lights[index].area / max(distance2, 1e-12), kTwoPi);
+}
+
+/** Sum of the lights' weights at a surface point. */
+float totalLightWeight(vec3 position, vec3 normal, uint surfaceInstance)
+{
+    float total = 0.0;
+    for (uint i = 0u; i < lightCount(); ++i) {
+        total += lightWeight(i, position, normal, surfaceInstance);
+    }
+    return total;
+}
+
+/**
+ * Pick a light for a surface point by the lights' weights, `u` in [0, 1);
+ * false if none may light it. `probability`: of the pick. One pass (weighted
+ * reservoir sampling, `u` rescaled at each light).
+ */
+bool pickLight(vec3 position, vec3 normal, uint surfaceInstance, float u, out uint picked,
+               out float probability)
+{
+    picked = 0u;
+    probability = 0.0;
+    float total = 0.0;
+    float weight = 0.0;
+    for (uint i = 0u; i < lightCount(); ++i) {
+        float w = lightWeight(i, position, normal, surfaceInstance);
+        if (w <= 0.0) {
+            continue;
+        }
+        total += w;
+        float keep = w / total;
+        if (u < keep) {
+            picked = i;
+            weight = w;
+            u /= keep;
+        } else {
+            u = (u - keep) / (1.0 - keep);
+        }
+    }
+    if (total <= 0.0) {
+        return false;
+    }
+    probability = weight / total;
+    return true;
+}
+
+/** Vertex `corner` of triangle `triangle` of a mesh light, in world space. */
+vec3 lightVertex(Light light, Instance instance, uvec3 indices, int corner)
+{
+    return transformPoint(light.objectToWorld, loadVec3(instance.positions, indices[corner]));
+}
+
+/**
+ * Solid-angle pdf, from `position`, of sampling `point` on triangle `triangle`
+ * of a mesh light (picked by area, the point uniformly).
+ */
+float meshLightPdf(Light light, uint triangle, vec3 position, vec3 point)
+{
+    Instance instance = instances[light.instanceIndex];
+    uvec3 indices = triangleIndices(instance, triangle);
+    vec3 v0 = lightVertex(light, instance, indices, 0);
+    vec3 normal = cross(lightVertex(light, instance, indices, 1) - v0,
+                        lightVertex(light, instance, indices, 2) - v0);
+    float doubleArea = length(normal);
+    vec3 toPoint = point - position;
+    float distance2 = dot(toPoint, toPoint);
+    if (doubleArea <= 0.0 || distance2 <= 0.0) {
+        return 0.0;
+    }
+    float cosine = abs(dot(toPoint, normal)) / (doubleArea * sqrt(distance2));
+    if (cosine <= 0.0) {
+        return 0.0;
+    }
+    FloatArray cdf = FloatArray(light.triangleCdf);
+    float picked = cdf.values[triangle] - (triangle > 0u ? cdf.values[triangle - 1u] : 0.0);
+    return picked * (2.0 / doubleArea) * distance2 / cosine;
+}
+
+/**
+ * A direction to a light from `position`: to a point of it (meshes, at
+ * `distance`; spheres: kFar), and its solid-angle pdf. False if none.
+ */
+bool sampleLight(Light light, vec3 position, inout uint rng, out vec3 direction,
+                 out float distance, out float pdf)
+{
+    direction = vec3(0.0);
+    distance = kFar;
+    pdf = 0.0;
+    if (light.triangleCount == 0u) {
+        vec3 toCenter = light.center - position;
+        float distance2 = dot(toCenter, toCenter);
+        float u1 = nextFloat(rng);
+        float u2 = nextFloat(rng);
+        if (distance2 <= light.radius * light.radius) {
+            return false;
+        }
+        float oneMinusCos = coneOneMinusCos(light.radius, distance2);
+        direction = sampleCone(toCenter / sqrt(distance2), oneMinusCos, u1, u2);
+        pdf = conePdf(oneMinusCos);
+        return true;
+    }
+    // The first triangle whose cumulative area exceeds u.
+    float u = nextFloat(rng);
+    FloatArray cdf = FloatArray(light.triangleCdf);
+    uint low = 0u;
+    uint high = light.triangleCount - 1u;
+    while (low < high) {
+        uint middle = (low + high) / 2u;
+        if (u < cdf.values[middle]) {
+            high = middle;
+        } else {
+            low = middle + 1u;
+        }
+    }
+    float u1 = nextFloat(rng);
+    float u2 = nextFloat(rng);
+    Instance instance = instances[light.instanceIndex];
+    uvec3 indices = triangleIndices(instance, low);
+    float s = sqrt(u1);
+    vec3 point = lightVertex(light, instance, indices, 0) * (1.0 - s) +
+                 lightVertex(light, instance, indices, 1) * (s * (1.0 - u2)) +
+                 lightVertex(light, instance, indices, 2) * (s * u2);
+    vec3 toPoint = point - position;
+    distance = length(toPoint);
+    pdf = meshLightPdf(light, low, position, point);
+    if (distance <= 0.0 || pdf <= 0.0) {
+        return false;
+    }
+    direction = toPoint / distance;
+    return true;
+}
+
+/**
+ * Solid-angle pdf of next event estimation at a surface point (picking light
+ * `index` and its point `lightHit`), for MIS against BSDF sampling.
+ */
+float directLightPdf(uint index, vec3 position, vec3 normal, uint surfaceInstance,
+                     SurfaceHit lightHit)
+{
+    float weight = lightWeight(index, position, normal, surfaceInstance);
+    if (weight <= 0.0) {
+        return 0.0;
+    }
+    Light light = lights[index];
+    float probability = weight / totalLightWeight(position, normal, surfaceInstance);
+    if (light.triangleCount == 0u) {
+        vec3 toCenter = light.center - position;
+        return probability * conePdf(coneOneMinusCos(light.radius, dot(toCenter, toCenter)));
+    }
+    return probability * meshLightPdf(light, lightHit.primitive, position, lightHit.position);
 }
 
 /** Next event estimation for the diffuse lobe (its weight applied by the caller). */
 vec3 sampleDirectLight(SurfaceHit hit, inout uint rng)
 {
-    uint count = lightCount();
-    uint index = min(count - 1u, uint(nextFloat(rng) * float(count)));
-    Light light = lights[index];
-    vec3 toCenter = light.center - hit.position;
-    float distance2 = dot(toCenter, toCenter);
-    float u1 = nextFloat(rng);
-    float u2 = nextFloat(rng);
-    if (distance2 <= light.radius * light.radius) {
+    uint index;
+    float probability;
+    if (!pickLight(hit.position, hit.normal, hit.instanceIndex, nextFloat(rng), index,
+                   probability)) {
         return vec3(0.0);
     }
-    float oneMinusCos = coneOneMinusCos(light.radius, distance2);
-    vec3 direction = sampleCone(toCenter / sqrt(distance2), oneMinusCos, u1, u2);
+    Light light = lights[index];
+    vec3 direction;
+    float distance;
+    float pdf;
+    if (!sampleLight(light, hit.position, rng, direction, distance, pdf)) {
+        return vec3(0.0);
+    }
     float cosine = dot(direction, hit.normal);
     if (cosine <= 0.0 || dot(direction, hit.geometricNormal) <= 0.0) {
         return vec3(0.0);
     }
     vec3 transmittance = shadowTransmittance(
         offsetOrigin(hit.position, hit.geometricNormal, direction), direction,
-        light.instanceIndex);
+        light.instanceIndex, distance);
     if (maxComponent(transmittance) <= 0.0) {
         return vec3(0.0);
     }
-    float lightPdf = conePdf(oneMinusCos) / float(count);
+    float lightPdf = probability * pdf;
     float bsdfPdf = cosine / kPi;
     return light.emission * transmittance * (cosine / kPi) *
            (powerHeuristic(lightPdf, bsdfPdf) / lightPdf);
@@ -320,6 +504,8 @@ struct PathState
     // Last diffuse vertex, to MIS-weight lights found by BSDF sampling.
     bool fromDiffuse;
     vec3 diffusePosition;
+    vec3 diffuseNormal;
+    uint diffuseInstance;
     float diffusePdf;
     float scale;
 };
@@ -332,6 +518,8 @@ PathState newPath()
     path.scatterings = 0u;
     path.fromDiffuse = false;
     path.diffusePosition = vec3(0.0);
+    path.diffuseNormal = vec3(0.0);
+    path.diffuseInstance = 0u;
     path.diffusePdf = 0.0;
     path.scale = 1.0;
     return path;
@@ -371,7 +559,8 @@ bool pathVertex(SurfaceHit hit, Material material, int lightIndex, vec3 directio
         float weight = 1.0;
         if (nextEvent && path.fromDiffuse && lightIndex >= 0) {
             weight = powerHeuristic(path.diffusePdf,
-                                    directLightPdf(uint(lightIndex), path.diffusePosition));
+                                    directLightPdf(uint(lightIndex), path.diffusePosition,
+                                                   path.diffuseNormal, path.diffuseInstance, hit));
         }
         path.radiance +=
             clampContribution(path.throughput * emission * weight, path.scatterings, path.scale);
@@ -398,6 +587,8 @@ bool pathVertex(SurfaceHit hit, Material material, int lightIndex, vec3 directio
     if (scatter.lobe == kLobeDiffuse) {
         path.fromDiffuse = true;
         path.diffusePosition = hit.position;
+        path.diffuseNormal = hit.normal;
+        path.diffuseInstance = hit.instanceIndex;
         path.diffusePdf = max(0.0, dot(scatter.direction, hit.normal)) / kPi;
     } else if (!scatter.passThrough) {
         path.fromDiffuse = false;
@@ -462,6 +653,9 @@ vec3 shadePreview(vec3 origin, vec3 direction)
                           vec3(kPreviewHeadlight * max(0.0, -dot(hit.normal, direction)));
         for (uint i = 0u; i < lightCount(); ++i) {
             Light light = lights[i];
+            if (light.triangleCount > 0u) {
+                continue;  // Meshes: their own emission only.
+            }
             vec3 toCenter = light.center - hit.position;
             float distance2 = dot(toCenter, toCenter);
             if (distance2 <= light.radius * light.radius) {
@@ -475,7 +669,7 @@ vec3 shadePreview(vec3 origin, vec3 direction)
             irradiance += light.emission * (cosine * light.radius * light.radius / distance2) *
                           shadowTransmittance(
                               offsetOrigin(hit.position, hit.geometricNormal, toLight), toLight,
-                              light.instanceIndex);
+                              light.instanceIndex, kFar);
         }
 
         float transmitted = isThinTransmissive(material)

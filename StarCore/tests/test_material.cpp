@@ -215,6 +215,72 @@ TEST_CASE("Sphere lights: NEE and BSDF sampling agree with the analytic result",
     REQUIRE(clamped > kExpectedFloor * 0.95F);
 }
 
+TEST_CASE("Mesh lights light as the sphere they approximate, by NEE or BSDF sampling",
+          "[render][material][light]")
+{
+    // The sphere light of lightTestScene as a closed mesh: both sides of its triangles
+    // emit, but its far side is behind its near side (points sampled there are not seen).
+    // It lights the floor as the sphere does (within the mesh's 0.1 % smaller outline;
+    // the floor's coat makes both a little darker than kExpectedFloor at this angle).
+    PathTracerSettings settings;
+    settings.maxBounces = 2;  // Direct light only.
+    Scene sphereScene;
+    lightTestScene(sphereScene);
+    const float expected = meanRadiance(buildRenderScene(sphereScene), kFloorRay, settings, 40000).r;
+    REQUIRE_THAT(expected, WithinRel(kExpectedFloor, 0.06F));
+
+    Scene scene;
+    scene.environment().skyColor = Vec3(0.0F);
+    Entity floor = scene.createEntity("Floor");
+    floor.add<MeshComponent>(MeshComponent{.mesh = primitives::plane(Vec2(200.0F)).build()});
+    floor.add<MaterialComponent>(MaterialComponent{.albedo = Vec3(0.5F)});
+    Entity light = scene.createEntity("Light");
+    light.get<TransformComponent>().translation = {0.0F, 5.0F, 0.0F};
+    light.add<MeshComponent>(MeshComponent{.mesh = primitives::sphere(1.0F, 96, 48).build()});
+    light.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(0.0F), .emissionColor = Vec3(1.0F), .emissionPower = 10.0F});
+    const RenderScene renderScene = buildRenderScene(scene);
+    REQUIRE(renderScene.lights.size() == 1);
+    REQUIRE(renderScene.lights[0].triangleCount > 0);
+    REQUIRE(renderScene.lightTriangleCdf.size() == renderScene.lights[0].triangleCount);
+    REQUIRE(renderScene.lightTriangleCdf.back() == 1.0F);
+
+    const float withNee = meanRadiance(renderScene, kFloorRay, settings, 40000).r;
+    settings.nextEventEstimation = false;
+    const float bsdfOnly = meanRadiance(renderScene, kFloorRay, settings, 200000).r;
+    INFO("NEE " << withNee << ", BSDF sampling " << bsdfOnly << ", the sphere " << expected);
+    CHECK_THAT(withNee, WithinRel(expected, 0.02F));
+    CHECK_THAT(bsdfOnly, WithinRel(expected, 0.03F));
+}
+
+TEST_CASE("Lights are picked by how much they may light a point", "[render][material][light]")
+{
+    // A small light beside the floor point besides the one above it: each is sampled in
+    // proportion to its brightness times the solid angle it covers, and the estimate
+    // agrees with BSDF sampling; a light below the floor is never picked.
+    Scene scene;
+    lightTestScene(scene);
+    for (const auto& [position, power] : {std::pair{Vec3(0.0F, 0.6F, 0.8F), 20.0F},
+                                          std::pair{Vec3(0.0F, -3.0F, 0.0F), 50.0F}}) {
+        Entity light = scene.createEntity("Light");
+        light.get<TransformComponent>().translation = position;
+        light.add<SphereComponent>(0.3F);
+        light.add<MaterialComponent>(MaterialComponent{
+            .albedo = Vec3(0.0F), .emissionColor = Vec3(1.0F), .emissionPower = power});
+    }
+    const RenderScene renderScene = buildRenderScene(scene);
+    REQUIRE(renderScene.lights.size() == 3);
+
+    PathTracerSettings settings;
+    settings.maxBounces = 2;
+    const float withNee = meanRadiance(renderScene, kFloorRay, settings, 8000).r;
+    settings.nextEventEstimation = false;
+    const float bsdfOnly = meanRadiance(renderScene, kFloorRay, settings, 200000).r;
+    INFO("NEE " << withNee << ", BSDF sampling " << bsdfOnly);
+    REQUIRE(withNee > kExpectedFloor * 2.0F);  // The small light adds to the other.
+    REQUIRE_THAT(withNee, WithinRel(bsdfOnly, 0.05F));
+}
+
 TEST_CASE("Thin glass lets light through without double counting", "[render][material][light]")
 {
     Scene scene;

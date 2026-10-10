@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <atomic>
+#include <cmath>
 #include <cstddef>
 #include <unordered_map>
 
@@ -259,7 +260,10 @@ void RenderSceneBuilder::syncInstance(Update& update, std::uint64_t key, Geometr
     scene.instanceVersions[index] = update.stampNow();
     update.changed = true;
     update.contentChanged = update.contentChanged || content;
-    update.lightsChanged = update.lightsChanged || kind == GeometryKind::Sphere;
+    // Lights follow emissive instances (meshes that stop emitting change content).
+    update.lightsChanged = update.lightsChanged || kind == GeometryKind::Sphere || content ||
+                           std::max({material.emission.r, material.emission.g,
+                                     material.emission.b}) > 0.0F;
 }
 
 void RenderSceneBuilder::removeInstance(Update& update, std::uint32_t index)
@@ -295,29 +299,62 @@ void RenderSceneBuilder::removeInstance(Update& update, std::uint32_t index)
 void RenderSceneBuilder::syncLights(Update& update)
 {
     RenderScene& scene = m_scene;
-    // Emissive, (nearly) uniformly scaled spheres are sampled as lights.
+    // Emissive meshes and (nearly) uniformly scaled emissive spheres are sampled as lights.
     std::vector<RenderLight> lights;
+    std::vector<float> cdf;
     for (std::uint32_t i = 0; i < scene.instances.size(); ++i) {
         const RenderInstance& instance = scene.instances[i];
-        if (instance.geometryIndex != kSphereGeometry) {
+        const Vec3 emission(scene.materials[i].emission);
+        if (std::max({emission.r, emission.g, emission.b}) <= 0.0F) {
             continue;
         }
-        const Vec3 emission(scene.materials[i].emission);
         const Mat4& m = instance.objectToWorld;
-        const Vec3 axes{glm::length(Vec3(m[0])), glm::length(Vec3(m[1])), glm::length(Vec3(m[2]))};
-        const float radius = std::max({axes.x, axes.y, axes.z});
-        const bool uniform = radius > 0.0F && std::min({axes.x, axes.y, axes.z}) > 0.999F * radius;
-        if (uniform && std::max({emission.r, emission.g, emission.b}) > 0.0F) {
-            lights.push_back(RenderLight{
-                .center = Vec3(m[3]),
-                .radius = radius,
-                .emission = emission,
-                .instanceIndex = i,
-            });
+        if (instance.geometryIndex == kSphereGeometry) {
+            const Vec3 axes{glm::length(Vec3(m[0])), glm::length(Vec3(m[1])),
+                            glm::length(Vec3(m[2]))};
+            const float radius = std::max({axes.x, axes.y, axes.z});
+            if (radius > 0.0F && std::min({axes.x, axes.y, axes.z}) > 0.999F * radius) {
+                lights.push_back(RenderLight{
+                    .center = Vec3(m[3]),
+                    .radius = radius,
+                    .emission = emission,
+                    .instanceIndex = i,
+                });
+            }
+            continue;
         }
+        const MeshData& mesh = *scene.geometries[instance.geometryIndex].mesh;
+        const auto first = static_cast<std::uint32_t>(cdf.size());
+        float total = 0.0F;
+        for (std::size_t t = 0; t < mesh.triangleCount(); ++t) {
+            const Vec3& v0 = mesh.vertex(t, 0);
+            total += 0.5F * glm::length(glm::cross(mesh.vertex(t, 1) - v0, mesh.vertex(t, 2) - v0));
+            cdf.push_back(total);
+        }
+        if (total <= 0.0F) {
+            cdf.resize(first);
+            continue;
+        }
+        for (std::size_t t = first; t < cdf.size(); ++t) {
+            cdf[t] /= total;
+        }
+        cdf.back() = 1.0F;
+        const Vec3 extent = instance.worldBounds.max - instance.worldBounds.min;
+        // Areas scale by the transform's determinant to the power 2/3 (exactly, if uniformly).
+        const float scale = std::pow(std::abs(glm::determinant(Mat3(m))), 2.0F / 3.0F);
+        lights.push_back(RenderLight{
+            .center = 0.5F * (instance.worldBounds.min + instance.worldBounds.max),
+            .radius = 0.5F * glm::length(extent),
+            .emission = emission,
+            .instanceIndex = i,
+            .firstTriangle = first,
+            .triangleCount = static_cast<std::uint32_t>(mesh.triangleCount()),
+            .area = total * scale,
+        });
     }
-    if (lights != scene.lights) {
+    if (lights != scene.lights || cdf != scene.lightTriangleCdf) {
         scene.lights = std::move(lights);
+        scene.lightTriangleCdf = std::move(cdf);
         scene.lightsVersion = update.stampNow();
         update.changed = true;
     }
@@ -457,6 +494,7 @@ auto traceClosestHit(const RenderScene& scene, const Ray& ray, float tMin, float
     hit.t = best.t;
     hit.position = ray.at(best.t);
     hit.instanceIndex = best.instance;
+    hit.primitive = best.triangle == kNone ? 0 : best.triangle;
     hit.frontFace = glm::dot(ray.direction, geometric) < 0.0F;
     if (!hit.frontFace) {
         geometric = -geometric;

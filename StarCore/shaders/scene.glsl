@@ -44,13 +44,20 @@ struct Material
     uint padding2;
 };
 
-/** RenderLight (32 bytes): an emissive sphere sampled by next event estimation. */
+/**
+ * gpu::LightRecord (96 bytes): an emitter sampled by next event estimation, a
+ * sphere or a mesh (RenderLight).
+ */
 struct Light
 {
-    vec3 center;
+    vec3 center;  // A mesh's bounding sphere.
     float radius;
     vec3 emission;
     uint instanceIndex;
+    uvec2 triangleCdf;  // Meshes: buffer address of their triangle distribution.
+    uint triangleCount;  // 0: a sphere.
+    float area;          // World space, roughly.
+    vec4 objectToWorld[3];  // Rows.
 };
 
 #ifndef STARCORE_NO_RAY_QUERY
@@ -88,7 +95,19 @@ struct SurfaceHit
     vec3 geometricNormal;
     bool frontFace;
     uint instanceIndex;
+    uint primitive;  // The triangle of a mesh (0 for spheres).
 };
+
+vec3 transformPoint(vec4 rows[3], vec3 p)
+{
+    vec4 h = vec4(p, 1.0);
+    return vec3(dot(rows[0], h), dot(rows[1], h), dot(rows[2], h));
+}
+
+vec3 transformVector(vec4 rows[3], vec3 v)
+{
+    return vec3(dot(rows[0].xyz, v), dot(rows[1].xyz, v), dot(rows[2].xyz, v));
+}
 
 // Thin surfaces transmitting at least this much do not take the primary id.
 const float kSeeThrough = 0.5;
@@ -180,7 +199,8 @@ void objectNormals(Instance instance, uint triangle, vec2 barycentrics, vec3 poi
  * transform with the inverse transpose: n * W2O = transpose(W2O) n.
  */
 SurfaceHit makeSurfaceHit(vec3 origin, vec3 direction, float t, uint instanceIndex,
-                          vec3 objectGeometric, vec3 objectShading, mat3 worldToObject)
+                          uint primitive, vec3 objectGeometric, vec3 objectShading,
+                          mat3 worldToObject)
 {
     vec3 geometric = normalize(objectGeometric * worldToObject);
     vec3 shading = objectShading * worldToObject;
@@ -191,6 +211,7 @@ SurfaceHit makeSurfaceHit(vec3 origin, vec3 direction, float t, uint instanceInd
     hit.t = t;
     hit.position = origin + direction * t;
     hit.instanceIndex = instanceIndex;
+    hit.primitive = primitive;
     hit.frontFace = dot(direction, geometric) < 0.0;
     if (!hit.frontFace) {
         geometric = -geometric;
@@ -220,6 +241,7 @@ bool traceClosestHit(vec3 origin, vec3 direction, uint mask, float tMax, out Sur
     hit.geometricNormal = vec3(0.0, 0.0, 1.0);
     hit.frontFace = true;
     hit.instanceIndex = 0u;
+    hit.primitive = 0u;
 
     rayQueryEXT query;
     rayQueryInitializeEXT(query, tlas, gl_RayFlagsOpaqueEXT, mask & 0xFFu, origin, 0.0, direction,
@@ -245,16 +267,19 @@ bool traceClosestHit(vec3 origin, vec3 direction, uint mask, float tMax, out Sur
 
     float t = rayQueryGetIntersectionTEXT(query, true);
     uint instanceIndex = uint(rayQueryGetIntersectionInstanceCustomIndexEXT(query, true));
+    Instance instance = instances[instanceIndex];
+    // Spheres are one AABB: primitive 0.
+    uint primitive = instance.kind == kGeometrySphere
+                         ? 0u
+                         : uint(rayQueryGetIntersectionPrimitiveIndexEXT(query, true));
     vec3 objectGeometric;
     vec3 objectShading;
-    objectNormals(instances[instanceIndex],
-                  uint(rayQueryGetIntersectionPrimitiveIndexEXT(query, true)),
-                  rayQueryGetIntersectionBarycentricsEXT(query, true),
+    objectNormals(instance, primitive, rayQueryGetIntersectionBarycentricsEXT(query, true),
                   rayQueryGetIntersectionObjectRayOriginEXT(query, true) +
                       t * rayQueryGetIntersectionObjectRayDirectionEXT(query, true),
                   objectGeometric, objectShading);
-    hit = makeSurfaceHit(origin, direction, t, instanceIndex, objectGeometric, objectShading,
-                         mat3(rayQueryGetIntersectionWorldToObjectEXT(query, true)));
+    hit = makeSurfaceHit(origin, direction, t, instanceIndex, primitive, objectGeometric,
+                         objectShading, mat3(rayQueryGetIntersectionWorldToObjectEXT(query, true)));
     return true;
 }
 

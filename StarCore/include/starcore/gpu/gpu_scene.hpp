@@ -54,6 +54,24 @@ struct InstanceTransformRecord
 static_assert(sizeof(InstanceTransformRecord) == 96,
               "std430 layout of InstanceTransform in hybrid.glsl");
 
+/**
+ * @brief A light as the shaders sample it (`Light` in scene.glsl): a
+ *        RenderLight with its instance's transform and the address of its
+ *        triangle distribution.
+ */
+struct LightRecord
+{
+    Vec3 center{0.0F};
+    float radius = 0.0F;
+    Vec3 emission{0.0F};
+    std::uint32_t instanceIndex = 0;
+    std::uint64_t triangleCdf = 0;  // Buffer device address (0: a sphere).
+    std::uint32_t triangleCount = 0;
+    float area = 0.0F;
+    Vec4 objectToWorld[3];  // Rows.
+};
+static_assert(sizeof(LightRecord) == 96, "std430 layout of Light in scene.glsl");
+
 /** @brief An acceleration structure and the buffer holding it. */
 struct AccelerationStructure
 {
@@ -185,8 +203,10 @@ private:
     vulkan::Buffer m_transforms;
     vulkan::Buffer m_previousTransforms;
     vulkan::Buffer m_tlasInstances;  // VkAccelerationStructureInstanceKHR[]
-    vulkan::Buffer m_lights;
+    vulkan::Buffer m_lights;  // LightRecord[]
     std::uint32_t m_lightCapacity = 0;
+    vulkan::Buffer m_lightTriangleCdf;  // RenderScene::lightTriangleCdf.
+    std::size_t m_lightTriangleCapacity = 0;
     std::uint32_t m_lightCount = 0;
 
     AccelerationStructure m_tlas;

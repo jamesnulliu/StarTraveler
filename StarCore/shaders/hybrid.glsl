@@ -48,17 +48,6 @@ layout(set = 0, binding = 2, std430) readonly buffer Transforms
     InstanceTransform transforms[];
 };
 
-vec3 transformPoint(vec4 rows[3], vec3 p)
-{
-    vec4 h = vec4(p, 1.0);
-    return vec3(dot(rows[0], h), dot(rows[1], h), dot(rows[2], h));
-}
-
-vec3 transformVector(vec4 rows[3], vec3 v)
-{
-    return vec3(dot(rows[0].xyz, v), dot(rows[1].xyz, v), dot(rows[2].xyz, v));
-}
-
 mat3 linearPart(vec4 rows[3])
 {
     return transpose(mat3(rows[0].xyz, rows[1].xyz, rows[2].xyz));
@@ -172,8 +161,9 @@ bool reconstructHit(uint instanceIndex, uint primitive, vec3 origin, vec3 direct
     vec3 objectShading;
     objectNormals(instance, primitive, barycentrics, objectPoint, objectGeometric,
                   objectShading);
-    hit = makeSurfaceHit(origin, direction, t, instanceIndex, objectGeometric, objectShading,
-                         linearPart(transforms[instanceIndex].worldToObject));
+    hit = makeSurfaceHit(origin, direction, t, instanceIndex,
+                         instance.kind == kGeometrySphere ? 0u : primitive, objectGeometric,
+                         objectShading, linearPart(transforms[instanceIndex].worldToObject));
     return true;
 }
 

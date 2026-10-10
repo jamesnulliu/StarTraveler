@@ -1,5 +1,7 @@
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <cmath>
 #include <optional>
 
 #include <glm/geometric.hpp>
@@ -21,6 +23,8 @@ constexpr std::uint32_t kRussianRouletteStart = 3;
 constexpr int kMaxThinLayers = 8;
 // Thin surfaces transmitting at least this much do not take the primary id.
 constexpr float kSeeThrough = 0.5F;
+// Shadow rays to a point of a mesh light stop this fraction of the way short of it.
+constexpr float kShadowShortening = 1e-3F;
 
 auto maxComponent(Vec3 v) -> float
 {
@@ -78,18 +82,23 @@ auto materialOf(const RenderScene& scene, const SurfaceHit& hit) -> const Render
 /**
  * @brief Fraction of light from `lightInstance` arriving along `ray`: 1 when
  *        unoccluded, attenuated by thin-walled transmissive surfaces, 0 when
- *        blocked by anything else (or when the ray misses the light).
+ *        blocked by anything else. `distance`: to the point of a mesh light
+ *        (anything before it blocks it, the mesh too); infinite for a sphere
+ *        light, which the ray must hit.
  */
 auto shadowTransmittance(const RenderScene& scene, Ray ray, std::uint32_t lightInstance,
-                         std::uint32_t mask) -> Vec3
+                         float distance, std::uint32_t mask) -> Vec3
 {
+    const bool toPoint = distance < kInfinity;
+    // Short of the point: not its own triangle.
+    float remaining = toPoint ? distance * (1.0F - kShadowShortening) : kInfinity;
     Vec3 transmittance{1.0F};
     for (int layer = 0; layer < kMaxThinLayers; ++layer) {
-        const auto hit = traceClosestHit(scene, ray, 0.0F, kInfinity, mask);
+        const auto hit = traceClosestHit(scene, ray, 0.0F, remaining, mask);
         if (!hit) {
-            return Vec3(0.0F);
+            return toPoint ? transmittance : Vec3(0.0F);
         }
-        if (hit->instanceIndex == lightInstance) {
+        if (!toPoint && hit->instanceIndex == lightInstance) {
             return transmittance;
         }
         const RenderMaterial& material = materialOf(scene, *hit);
@@ -102,55 +111,226 @@ auto shadowTransmittance(const RenderScene& scene, Ray ray, std::uint32_t lightI
             return Vec3(0.0F);
         }
         ray.origin = offsetOrigin(hit->position, hit->geometricNormal, ray.direction);
+        remaining -= hit->t;
     }
     return Vec3(0.0F);
 }
 
-/** @brief Solid-angle pdf of sampling light `index` from `position` (0 from inside it). */
-auto directLightPdf(const RenderScene& scene, std::size_t index, Vec3 position) -> float
+/** @brief How bright a light is (luminance of its emission), to pick it by. */
+auto lightBrightness(Vec3 emission) -> float
 {
-    const RenderLight& light = scene.lights[index];
-    const Vec3 toCenter = light.center - position;
-    const float distance2 = glm::dot(toCenter, toCenter);
-    if (distance2 <= light.radius * light.radius) {
+    return 0.2126F * emission.r + 0.7152F * emission.g + 0.0722F * emission.b;
+}
+
+/**
+ * @brief How much a light may light a surface point, roughly: its brightness
+ *        times the solid angle it covers. 0 if it cannot: below the surface's
+ *        horizon, around the point (a sphere), or the surface itself.
+ */
+auto lightWeight(const RenderLight& light, Vec3 position, Vec3 normal,
+                 std::uint32_t surfaceInstance) -> float
+{
+    if (light.instanceIndex == surfaceInstance) {
         return 0.0F;
     }
-    return conePdf(coneOneMinusCos(light.radius, distance2)) /
-           static_cast<float>(scene.lights.size());
+    const Vec3 toCenter = light.center - position;
+    if (glm::dot(toCenter, normal) < -light.radius) {
+        return 0.0F;
+    }
+    const float distance2 = glm::dot(toCenter, toCenter);
+    const float brightness = lightBrightness(light.emission);
+    if (light.triangleCount == 0) {
+        if (distance2 <= light.radius * light.radius) {
+            return 0.0F;
+        }
+        return brightness * kTwoPi * coneOneMinusCos(light.radius, distance2);
+    }
+    // A mesh: its area over the squared distance, at most a hemisphere.
+    return brightness * std::min(light.area / std::max(distance2, 1e-12F), kTwoPi);
+}
+
+/** @brief Sum of the lights' weights at a surface point. */
+auto totalLightWeight(const RenderScene& scene, Vec3 position, Vec3 normal,
+                      std::uint32_t surfaceInstance) -> float
+{
+    float total = 0.0F;
+    for (const RenderLight& light : scene.lights) {
+        total += lightWeight(light, position, normal, surfaceInstance);
+    }
+    return total;
+}
+
+/**
+ * @brief Pick a light for a surface point by the lights' weights, `u` in
+ *        [0, 1); nullopt if none may light it. `probability`: of the pick.
+ *        One pass (weighted reservoir sampling, `u` rescaled at each light).
+ */
+auto pickLight(const RenderScene& scene, Vec3 position, Vec3 normal,
+               std::uint32_t surfaceInstance, float u, float& probability)
+    -> std::optional<std::size_t>
+{
+    float total = 0.0F;
+    float weight = 0.0F;
+    std::optional<std::size_t> picked;
+    for (std::size_t i = 0; i < scene.lights.size(); ++i) {
+        const float w = lightWeight(scene.lights[i], position, normal, surfaceInstance);
+        if (w <= 0.0F) {
+            continue;
+        }
+        total += w;
+        const float keep = w / total;
+        if (u < keep) {
+            picked = i;
+            weight = w;
+            u /= keep;
+        } else {
+            u = (u - keep) / (1.0F - keep);
+        }
+    }
+    probability = total > 0.0F ? weight / total : 0.0F;
+    return picked;
+}
+
+/** @brief Triangle `triangle` of a mesh light, in world space. */
+auto lightTriangle(const RenderScene& scene, const RenderLight& light, std::uint32_t triangle)
+    -> std::array<Vec3, 3>
+{
+    const RenderInstance& instance = scene.instances[light.instanceIndex];
+    const MeshData& mesh = *scene.geometries[instance.geometryIndex].mesh;
+    std::array<Vec3, 3> vertices;
+    for (std::size_t k = 0; k < 3; ++k) {
+        vertices[k] = Vec3(instance.objectToWorld * Vec4(mesh.vertex(triangle, k), 1.0F));
+    }
+    return vertices;
+}
+
+/**
+ * @brief Solid-angle pdf, from `position`, of sampling `point` on triangle
+ *        `triangle` of a mesh light (picked by area, the point uniformly).
+ */
+auto meshLightPdf(const RenderScene& scene, const RenderLight& light, std::uint32_t triangle,
+                  Vec3 position, Vec3 point) -> float
+{
+    const std::array<Vec3, 3> v = lightTriangle(scene, light, triangle);
+    const Vec3 normal = glm::cross(v[1] - v[0], v[2] - v[0]);
+    const float doubleArea = glm::length(normal);
+    const Vec3 toPoint = point - position;
+    const float distance2 = glm::dot(toPoint, toPoint);
+    if (doubleArea <= 0.0F || distance2 <= 0.0F) {
+        return 0.0F;
+    }
+    const float cosine = std::abs(glm::dot(toPoint, normal)) / (doubleArea * std::sqrt(distance2));
+    if (cosine <= 0.0F) {
+        return 0.0F;
+    }
+    const float* cdf = &scene.lightTriangleCdf[light.firstTriangle];
+    const float picked = cdf[triangle] - (triangle > 0 ? cdf[triangle - 1] : 0.0F);
+    return picked * (2.0F / doubleArea) * distance2 / cosine;
+}
+
+/** @brief A direction to a light: to a point of it (meshes), with its solid-angle pdf. */
+struct LightSample
+{
+    Vec3 direction{0.0F};
+    float distance = kInfinity;  // To the point (meshes); spheres: infinite.
+    float pdf = 0.0F;
+};
+
+auto sampleLight(const RenderScene& scene, const RenderLight& light, Vec3 position, Rng& rng)
+    -> std::optional<LightSample>
+{
+    if (light.triangleCount == 0) {
+        const Vec3 toCenter = light.center - position;
+        const float distance2 = glm::dot(toCenter, toCenter);
+        const float u1 = rng.nextFloat();
+        const float u2 = rng.nextFloat();
+        if (distance2 <= light.radius * light.radius) {
+            return std::nullopt;
+        }
+        const float oneMinusCos = coneOneMinusCos(light.radius, distance2);
+        return LightSample{
+            .direction = sampleCone(toCenter / std::sqrt(distance2), oneMinusCos, u1, u2),
+            .pdf = conePdf(oneMinusCos)};
+    }
+    // The first triangle whose cumulative area exceeds u.
+    const float u = rng.nextFloat();
+    const float* cdf = &scene.lightTriangleCdf[light.firstTriangle];
+    std::uint32_t low = 0;
+    std::uint32_t high = light.triangleCount - 1;
+    while (low < high) {
+        const std::uint32_t middle = (low + high) / 2;
+        if (u < cdf[middle]) {
+            high = middle;
+        } else {
+            low = middle + 1;
+        }
+    }
+    const float u1 = rng.nextFloat();
+    const float u2 = rng.nextFloat();
+    const std::array<Vec3, 3> v = lightTriangle(scene, light, low);
+    const float s = std::sqrt(u1);
+    const Vec3 point = v[0] * (1.0F - s) + v[1] * (s * (1.0F - u2)) + v[2] * (s * u2);
+    const Vec3 toPoint = point - position;
+    const float distance = glm::length(toPoint);
+    const float pdf = meshLightPdf(scene, light, low, position, point);
+    if (distance <= 0.0F || pdf <= 0.0F) {
+        return std::nullopt;
+    }
+    return LightSample{.direction = toPoint / distance, .distance = distance, .pdf = pdf};
+}
+
+/**
+ * @brief Solid-angle pdf of next event estimation at a surface point (picking
+ *        light `index` and its point `lightHit`), for MIS against BSDF sampling.
+ */
+auto directLightPdf(const RenderScene& scene, std::size_t index, Vec3 position, Vec3 normal,
+                    std::uint32_t surfaceInstance, const SurfaceHit& lightHit) -> float
+{
+    const RenderLight& light = scene.lights[index];
+    const float weight = lightWeight(light, position, normal, surfaceInstance);
+    if (weight <= 0.0F) {
+        return 0.0F;
+    }
+    const float probability = weight / totalLightWeight(scene, position, normal, surfaceInstance);
+    if (light.triangleCount == 0) {
+        const Vec3 toCenter = light.center - position;
+        return probability *
+               conePdf(coneOneMinusCos(light.radius, glm::dot(toCenter, toCenter)));
+    }
+    return probability * meshLightPdf(scene, light, lightHit.primitive, position, lightHit.position);
 }
 
 /**
  * @brief Next event estimation for the diffuse lobe: radiance of one sampled
- *        sphere light times cos / pi, MIS-weighted against cosine sampling
- *        (the albedo is applied by the caller).
+ *        light times cos / pi, MIS-weighted against cosine sampling (the
+ *        albedo is applied by the caller).
  */
 auto sampleDirectLight(const RenderScene& scene, const PathTracerSettings& settings,
                        const SurfaceHit& hit, Rng& rng) -> Vec3
 {
-    const std::size_t count = scene.lights.size();
-    const std::size_t index =
-        std::min(count - 1, static_cast<std::size_t>(rng.nextFloat() * static_cast<float>(count)));
-    const RenderLight& light = scene.lights[index];
-    const Vec3 toCenter = light.center - hit.position;
-    const float distance2 = glm::dot(toCenter, toCenter);
-    const float u1 = rng.nextFloat();
-    const float u2 = rng.nextFloat();
-    if (distance2 <= light.radius * light.radius) {
+    float probability = 0.0F;
+    const auto index =
+        pickLight(scene, hit.position, hit.normal, hit.instanceIndex, rng.nextFloat(), probability);
+    if (!index) {
         return Vec3(0.0F);
     }
-    const float oneMinusCos = coneOneMinusCos(light.radius, distance2);
-    const Vec3 direction = sampleCone(toCenter / std::sqrt(distance2), oneMinusCos, u1, u2);
+    const RenderLight& light = scene.lights[*index];
+    const auto sample = sampleLight(scene, light, hit.position, rng);
+    if (!sample) {
+        return Vec3(0.0F);
+    }
+    const Vec3 direction = sample->direction;
     const float cosine = glm::dot(direction, hit.normal);
     if (cosine <= 0.0F || glm::dot(direction, hit.geometricNormal) <= 0.0F) {
         return Vec3(0.0F);
     }
     const Vec3 transmittance = shadowTransmittance(
         scene, Ray{offsetOrigin(hit.position, hit.geometricNormal, direction), direction},
-        light.instanceIndex, settings.instanceMask);
+        light.instanceIndex, sample->distance, settings.instanceMask);
     if (maxComponent(transmittance) <= 0.0F) {
         return Vec3(0.0F);
     }
-    const float lightPdf = conePdf(oneMinusCos) / static_cast<float>(count);
+    const float lightPdf = probability * sample->pdf;
     const float bsdfPdf = cosine / kPi;
     return light.emission * transmittance * (cosine / kPi) *
            (powerHeuristic(lightPdf, bsdfPdf) / lightPdf);
@@ -279,6 +459,8 @@ auto tracePath(const RenderScene& scene, Ray ray, const PathTracerSettings& sett
     // Last diffuse vertex, to MIS-weight lights found by BSDF sampling.
     bool fromDiffuse = false;
     Vec3 diffusePosition{0.0F};
+    Vec3 diffuseNormal{0.0F};
+    std::uint32_t diffuseInstance = 0;
     float diffusePdf = 0.0F;
 
     for (std::uint32_t bounce = 0; bounce < settings.maxBounces; ++bounce) {
@@ -297,8 +479,9 @@ auto tracePath(const RenderScene& scene, Ray ray, const PathTracerSettings& sett
                 if (const std::int32_t light = scene.lightOfInstance[hit->instanceIndex];
                     light >= 0) {
                     weight = powerHeuristic(
-                        diffusePdf,
-                        directLightPdf(scene, static_cast<std::size_t>(light), diffusePosition));
+                        diffusePdf, directLightPdf(scene, static_cast<std::size_t>(light),
+                                                   diffusePosition, diffuseNormal,
+                                                   diffuseInstance, *hit));
                 }
             }
             add(throughput * emission * weight, scatterings);
@@ -320,6 +503,8 @@ auto tracePath(const RenderScene& scene, Ray ray, const PathTracerSettings& sett
         if (scatter->lobe == Lobe::Diffuse) {
             fromDiffuse = true;
             diffusePosition = hit->position;
+            diffuseNormal = hit->normal;
+            diffuseInstance = hit->instanceIndex;
             diffusePdf = std::max(0.0F, glm::dot(scatter->direction, hit->normal)) / kPi;
         } else if (!scatter->passThrough) {
             fromDiffuse = false;
@@ -361,6 +546,9 @@ auto shadePreview(const RenderScene& scene, Ray ray, const PathTracerSettings& s
         Vec3 irradiance = scene.skyColor + Vec3(kAmbient) +
                           Vec3(kHeadlight * std::max(0.0F, -glm::dot(hit->normal, ray.direction)));
         for (const RenderLight& light : scene.lights) {
+            if (light.triangleCount > 0) {
+                continue;  // Meshes: their own emission only.
+            }
             const Vec3 toCenter = light.center - hit->position;
             const float distance2 = glm::dot(toCenter, toCenter);
             if (distance2 <= light.radius * light.radius) {
@@ -376,7 +564,7 @@ auto shadePreview(const RenderScene& scene, Ray ray, const PathTracerSettings& s
                               scene,
                               Ray{offsetOrigin(hit->position, hit->geometricNormal, direction),
                                   direction},
-                              light.instanceIndex, settings.instanceMask);
+                              light.instanceIndex, kInfinity, settings.instanceMask);
         }
 
         const float transmitted = isThinTransmissive(material)

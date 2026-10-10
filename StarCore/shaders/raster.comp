@@ -38,6 +38,9 @@ vec3 irradianceAt(SurfaceHit hit, vec3 direction)
     uint count = frameData.options.z;
     for (uint i = 0u; i < count; ++i) {
         Light light = lights[i];
+        if (light.triangleCount > 0u) {
+            continue;  // Meshes: their own emission only.
+        }
         vec3 toCenter = light.center - hit.position;
         float distance2 = dot(toCenter, toCenter);
         if (distance2 <= light.radius * light.radius) {

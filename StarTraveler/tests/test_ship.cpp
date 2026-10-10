@@ -1,5 +1,6 @@
 // The player's ship: spawning the cockpit model, flight, collisions, portals.
 
+#include <algorithm>
 #include <filesystem>
 
 #include <catch2/catch_test_macros.hpp>
@@ -87,9 +88,11 @@ TEST_CASE("The ship spawns as a transient entity tree with its cockpit", "[gamep
     REQUIRE(deserializeScene(serializeScene(scene), saved).has_value());
     REQUIRE(saved.entityCount() == 1);
 
-    // The cabin light is a directly sampled light; the cockpit is ray traced.
+    // The cabin light and the glowing meshes (screens, buttons, light strips, engine
+    // glow) are directly sampled lights; the cockpit is ray traced.
     const RenderScene renderScene = buildRenderScene(scene);
-    REQUIRE(renderScene.lights.size() == 1);
+    REQUIRE(std::ranges::count(renderScene.lights, 0U, &RenderLight::triangleCount) == 1);
+    REQUIRE(renderScene.lights.size() == 9);
     REQUIRE(renderScene.triangleCount() > 1000);
 
     REQUIRE_FALSE(ships.spawn(scene, assets, "missing.glb", Vec3(0.0F), -90.0F).has_value());

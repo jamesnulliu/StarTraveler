@@ -339,7 +339,7 @@ TEST_CASE("GPU: path tracing converges to the CPU image", "[gpu]")
 {
     const GpuTest gpu;
     TestScene test;
-    const RenderScene renderScene = buildRenderScene(test.scene);
+    RenderScene renderScene = buildRenderScene(test.scene);
     constexpr std::uint32_t kWidth = 64;
     constexpr std::uint32_t kHeight = 48;
     constexpr std::uint32_t kBlock = 8;
@@ -347,6 +347,7 @@ TEST_CASE("GPU: path tracing converges to the CPU image", "[gpu]")
 
     auto compare = [&](const PathTracerSettings& settings, std::uint32_t frames,
                        float blockTolerance, float meanTolerance) {
+        renderScene.updateTlas();
         CpuPathTracer cpu;
         cpu.resize(kWidth, kHeight);
         auto tracer = gpu.makeRenderer(kWidth, kHeight);
@@ -394,6 +395,24 @@ TEST_CASE("GPU: path tracing converges to the CPU image", "[gpu]")
     SECTION("preview (deterministic apart from the jitter)")
     {
         compare(PathTracerSettings{.mode = RenderMode::Preview}, 16, 3.0F, 0.6F);
+    }
+    SECTION("glowing meshes sampled as lights")
+    {
+        // A glowing panel over the scene and a small glowing box beside the cube.
+        Entity panel = test.scene.createEntity("Panel");
+        panel.get<TransformComponent>().translation = {0.0F, 2.5F, 0.5F};
+        panel.get<TransformComponent>().rotation = Quat(Vec3(0.5F * kPi, 0.0F, 0.0F));
+        panel.add<MeshComponent>(MeshComponent{.mesh = primitives::quad(Vec2(2.0F, 1.0F)).build()});
+        panel.add<MaterialComponent>(MaterialComponent{
+            .albedo = Vec3(0.0F), .emissionColor = {1.0F, 0.6F, 0.3F}, .emissionPower = 6.0F});
+        Entity box = test.scene.createEntity("Box");
+        box.get<TransformComponent>().translation = {1.0F, -1.2F, 0.8F};
+        box.add<MeshComponent>(MeshComponent{.mesh = primitives::box(Vec3(0.2F)).build()});
+        box.add<MaterialComponent>(MaterialComponent{
+            .albedo = Vec3(0.5F), .emissionColor = {0.3F, 0.6F, 1.0F}, .emissionPower = 4.0F});
+        renderScene = buildRenderScene(test.scene);
+        REQUIRE(renderScene.lights.size() == 4);
+        compare(PathTracerSettings{.samplesPerPixel = 4, .seed = 7}, 64, 12.0F, 2.0F);
     }
 }
 
@@ -692,8 +711,10 @@ TEST_CASE("GPU hybrid: samples are reused while moving and filtered", "[gpu][hyb
     const float filtered = render(true, false);
     INFO("mean error: reprojected " << reused << ", one frame " << fresh << ", filtered "
                                     << filtered);
-    CHECK(reused < 0.5F * fresh);
-    CHECK(filtered < 0.6F * fresh);
+    // 0.50 and 0.57 (lights picked by how much they may light a point; picked
+    // uniformly, one frame was noisier: 0.39 and 0.51).
+    CHECK(reused < 0.6F * fresh);
+    CHECK(filtered < 0.7F * fresh);
 }
 
 TEST_CASE("GPU hybrid: more samples per frame make the history smoother while moving",

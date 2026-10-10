@@ -227,7 +227,7 @@ void main()
     vec3 currentEmission = isPrimary() ? imageLoad(frameEmission, pixel).rgb : vec3(0.0);
     bool reset = (frameData.history.y & kHistoryReset) != 0u;
     bool still = (frameData.history.y & kHistoryStatic) != 0u;
-    uint cap = frameData.history.x;  // 0: still.
+    uint cap = frameData.history.x;  // Frames; 0: still.
     float sharpness = !isPrimary() && current.z != 0u ? reflectionSharpness(guideRoughness(current))
                                                       : 0.0;
 
@@ -304,8 +304,10 @@ void main()
         // Shorter history where the filter may not blur the lighting: what smooth
         // surfaces let through is a sharp image moving unlike them. (Reflections keep
         // all of it: they are reprojected from where their image was.)
+        // The cap counts frames: more samples per frame make the history smoother.
         float strength = isPrimary() && current.z != 0u ? guideStrength(current, pass.layer) : 1.0;
-        previousSamples = min(previousSamples, float(cap) * mix(0.25, 1.0, strength));
+        previousSamples =
+            min(previousSamples, float(cap * frameSamples()) * mix(0.25, 1.0, strength));
     }
     float samples = previousSamples + float(frameSamples());
     float weight = float(frameSamples()) / samples;

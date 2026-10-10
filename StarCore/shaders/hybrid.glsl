@@ -23,7 +23,7 @@ layout(set = 0, binding = 1, std140) uniform FrameUniforms
     vec4 previousJitter;  // xy: the sample position of the previous frame
     uvec4 frame;     // random stream index, seed, samples per pixel, max bounces
     uvec4 options;   // flags, instance mask, light count, tone mapper
-    uvec4 history;   // cap (samples while things move; 0 = none), kHistory* bits, view, -
+    uvec4 history;   // cap (frames while things move; 0 = none), kHistory* bits, view, -
     vec4 denoiser;   // color sigma, normal power, depth sigma, -
 }
 frameData;

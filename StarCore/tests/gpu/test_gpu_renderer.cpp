@@ -696,6 +696,47 @@ TEST_CASE("GPU hybrid: samples are reused while moving and filtered", "[gpu][hyb
     CHECK(filtered < 0.6F * fresh);
 }
 
+TEST_CASE("GPU hybrid: more samples per frame make the history smoother while moving",
+          "[gpu][hybrid]")
+{
+    // The history cap counts frames: frames of more samples leave less noise (a cap of
+    // samples would only make the history shorter). Of the primary surfaces' lighting
+    // (the reflection layers trace one path per pixel and frame).
+    const GpuTest gpu;
+    TestScene test;
+    const RenderScene renderScene = buildRenderScene(test.scene);
+    constexpr std::uint32_t kWidth = 96;
+    constexpr std::uint32_t kHeight = 72;
+    constexpr int kFrames = 24;  // Past the cap.
+    auto cameraAt = [&](int frame) {
+        Camera camera = makeCamera(kWidth, kHeight);
+        camera.setPosition(camera.position() + Vec3(0.01F * static_cast<float>(frame), 0.0F, 0.0F));
+        return camera;
+    };
+    GpuRenderOptions options = hybridOptions(false);  // The history's own noise.
+    options.denoiser.historyFrames = 8;
+    options.view = HybridView::Lighting;
+
+    auto render = [&](std::uint32_t samples, std::uint32_t seed) {
+        auto hybrid = gpu.makeRenderer(kWidth, kHeight);
+        const PathTracerSettings settings{
+            .samplesPerPixel = samples, .seed = seed, .fireflyClamp = 8.0F};
+        for (int i = 0; i < kFrames; ++i) {
+            hybrid->render(renderScene, cameraAt(i), settings, options);
+        }
+        REQUIRE(hybrid->accumulatedFrames() == kFrames);  // Reprojected, not restarted.
+        return hybrid->readImage();
+    };
+    // Two runs of other random numbers differ by their noise only.
+    auto noise = [&](std::uint32_t samples) {
+        return meanDifference(render(samples, 1), render(samples, 2));
+    };
+    const float one = noise(1);
+    const float four = noise(4);
+    INFO("noise: 1 sample per frame " << one << ", 4 samples " << four);
+    CHECK(four < 0.8F * one);  // 0.7 (with a cap of 8 samples: 0.96)
+}
+
 TEST_CASE("GPU hybrid: reflections leave no trail while moving", "[gpu][hybrid]")
 {
     // A mirror floor and a window pane reflecting bright balls, the camera
@@ -881,7 +922,7 @@ TEST_CASE("GPU hybrid: what moves with the camera keeps its history", "[gpu][hyb
     RenderSceneBuilder builder;
     constexpr std::uint32_t kWidth = 96;
     constexpr std::uint32_t kHeight = 72;
-    constexpr int kFrames = 40;  // 2 samples each: past the history cap of 64.
+    constexpr int kFrames = 40;  // Past the history cap.
     auto at = [&](float x) {
         deck.get<TransformComponent>().translation = {x, -1.0F, 5.5F};
         lamp.get<TransformComponent>().translation = {x, 1.5F, 5.5F};
@@ -893,6 +934,7 @@ TEST_CASE("GPU hybrid: what moves with the camera keeps its history", "[gpu][hyb
     };
     const PathTracerSettings settings{.samplesPerPixel = 2, .fireflyClamp = 8.0F};
     GpuRenderOptions options = hybridOptions();
+    options.denoiser.historyFrames = 32;
     options.view = HybridView::History;
 
     auto hybrid = gpu.makeRenderer(kWidth, kHeight);

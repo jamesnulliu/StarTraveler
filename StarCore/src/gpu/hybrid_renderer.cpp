@@ -286,7 +286,7 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
     uniforms.options[1] = settings.instanceMask & kAllInstances;
     uniforms.options[2] = scene.lightCount();
     uniforms.options[3] = static_cast<std::uint32_t>(settings.toneMapper);
-    uniforms.history[0] = frame.still ? 0U : std::max(1U, denoiser.historySamples);
+    uniforms.history[0] = frame.still ? 0U : std::max(1U, denoiser.historyFrames);
     uniforms.history[1] = (frame.reset ? kHistoryReset : 0U) | (frame.still ? kHistoryStill : 0U);
     uniforms.history[2] = static_cast<std::uint32_t>(frame.options.view);
     uniforms.denoiser = Vec4(denoiser.colorSigma, denoiser.normalPower, denoiser.depthSigma, 0.0F);

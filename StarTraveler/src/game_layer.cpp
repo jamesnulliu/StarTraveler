@@ -867,12 +867,12 @@ void GameLayer::drawRenderPanel()
             ImGui::Checkbox("Reuse samples", &denoiser.temporal);
             ImGui::SameLine();
             ImGui::Checkbox("Denoise", &denoiser.spatial);
-            int history = static_cast<int>(denoiser.historySamples);
-            if (ImGui::SliderInt("History (samples)", &history, 1, 256)) {
-                denoiser.historySamples = static_cast<std::uint32_t>(history);
+            int history = static_cast<int>(denoiser.historyFrames);
+            if (ImGui::SliderInt("History (frames)", &history, 1, 256)) {
+                denoiser.historyFrames = static_cast<std::uint32_t>(history);
             }
             if (ImGui::IsItemHovered()) {
-                ImGui::SetTooltip("Samples per pixel kept while moving: more is smoother, "
+                ImGui::SetTooltip("Frames of samples kept while moving: more is smoother, "
                                   "fewer follows changing light faster");
             }
             int iterations = static_cast<int>(denoiser.iterations);

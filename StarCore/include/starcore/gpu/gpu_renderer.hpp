@@ -86,9 +86,10 @@ struct DenoiserSettings
     // Edge-aware a-trous filter of the lighting; it fades out as samples
     // accumulate, so a still image converges to the unfiltered mean.
     bool spatial = true;
-    // Samples per pixel kept while the camera or objects move: more is
-    // smoother, fewer follows changing light faster.
-    std::uint32_t historySamples = 64;
+    // Frames of samples kept while the camera or objects move: more is
+    // smoother, fewer follows changing light faster. Frames, not samples:
+    // more samples per frame make it smoother, not shorter.
+    std::uint32_t historyFrames = 64;
     std::uint32_t iterations = 5;  // Filter radius: 2^iterations pixels.
     float colorSigma = 4.0F;       // Luminance tolerance, in standard deviations.
     float normalPower = 128.0F;

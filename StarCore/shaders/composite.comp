@@ -73,7 +73,9 @@ void main()
         radiance = vec3(abs(imageLoad(primaryMotion, pixel).xy) / 8.0, 0.0);
         break;
     case kViewHistory: {  // Raw.
-        float cap = float(max(frameData.history.x, 64u));
+        // The cap in samples (still: 64 frames).
+        uint frames = frameData.history.x != 0u ? frameData.history.x : 64u;
+        float cap = float(frames * max(1u, frameData.frame.z));
         radiance = vec3(imageLoad(primaryHistory, pixel).a / cap);
         break;
     }

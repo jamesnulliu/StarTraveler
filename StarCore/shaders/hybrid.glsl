@@ -406,13 +406,14 @@ const int kGradientStratum = 3;
 // passing changes each point by a little every frame), so at most about
 // 1/(2 gain) of it. No change drops nothing, whatever the gain.
 const float kGradientGain = 16.0;
-// Of the reflections, half, and at most half of the history per frame: what a
+// Of the reflections, at most three quarters of the history per frame: what a
 // cockpit's canopy reflects drifts all over it, a little every frame, as the
-// ship flies past the lights (the second vertex of their paths), and a single
-// frame of them is one noisy path per pixel. A sunlit patch sweeping over the
-// canopy as the ship turns is gone within a few frames all the same.
-const float kReflectionGradientGain = 8.0;
-const float kReflectionMaxChange = 0.5;
+// ship flies past the lights (the second vertex of their paths), and their
+// gradients are noisy; the quarter kept keeps that noise down. (Half of it lagged:
+// as the ship turns, the sun swinging around, the light on all of the cockpit
+// changes by a few percent per frame, and its reflection in the canopy kept a
+// glow of where the sun had been.)
+const float kReflectionMaxChange = 0.75;
 
 /**
  * How much of a layer's light changed (0-1) by a (filtered) gradient on
@@ -420,12 +421,12 @@ const float kReflectionMaxChange = 0.5;
  * luminance; or what the gradient's samples found, if more): a change of a
  * dim light is a little of a well lit surface's lighting.
  */
-float gradientChange(vec4 gradient, uint key, float lighting, float gain)
+float gradientChange(vec4 gradient, uint key, float lighting)
 {
     if (gradient.z <= 0.0 || floatBitsToUint(gradient.w) != key) {
         return 0.0;
     }
-    return clamp(gain * gradient.x / max(max(gradient.y, lighting), 1e-6), 0.0, 1.0);
+    return clamp(kGradientGain * gradient.x / max(max(gradient.y, lighting), 1e-6), 0.0, 1.0);
 }
 
 // Reflection guides (two uints per reflecting layer): what the mirror

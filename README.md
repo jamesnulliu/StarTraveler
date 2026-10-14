@@ -172,9 +172,11 @@ the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
     patch a canopy reflects as the ship turns.
     At half trace resolution (the game's) paths start from one pixel of each
     2x2 per frame, each in turn; the others borrow their neighbors' samples on
-    the same surface only until they have their own (just uncovered), so a
-    still image still converges, and the cockpit flies at 6.1 instead of 10.7
-    ms per frame (932x856, an RTX 4060 laptop GPU), about 50% noisier.
+    the same surface: only those until they have their own (just uncovered),
+    and while things move as much as one frame of their own (the more of them,
+    the less history the gradients left), not into their history, so a still
+    image still converges, and the cockpit flies at 6.1 instead of 10.7 ms per
+    frame (932x856, an RTX 4060 laptop GPU), about 50% noisier.
     Rasterized first hits are where textures will be sampled.
   - *Raster*: the same visibility buffer lit like the preview (sky, ambient,
     headlight, sphere lights), the nearest window pane blended over: no rays,

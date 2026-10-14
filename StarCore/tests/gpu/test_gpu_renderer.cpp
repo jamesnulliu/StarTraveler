@@ -931,6 +931,64 @@ TEST_CASE("GPU hybrid: reflected light that moves leaves no trail", "[gpu][hybri
     CHECK(trail < 10);
 }
 
+TEST_CASE("GPU hybrid: reflected light that keeps changing does not lag", "[gpu][hybrid]")
+{
+    // A big light far away swinging around (the sun as a ship turns): a wall behind
+    // the camera, which a window pane in front reflects, gets dimmer by a few percent
+    // every frame as its light falls ever more obliquely. Nothing moves on screen: the
+    // reflection keeps a glow of the light it had unless its history follows the
+    // gradients (in TraceResolution::Half, whose pixels wait for samples of their own
+    // up to three frames, most of all).
+    const GpuTest gpu;
+    const TraceResolution resolution = GENERATE(TraceResolution::Full, TraceResolution::Half);
+    INFO("trace resolution " << enumToString(resolution));
+    Scene scene;
+    scene.environment().skyColor = Vec3(0.0F);
+    Entity pane = scene.createEntity("Pane");
+    pane.get<TransformComponent>().translation = {0.0F, 1.0F, 5.0F};
+    pane.add<MeshComponent>(MeshComponent{.mesh = primitives::quad(Vec2(8.0F, 6.0F)).build()});
+    pane.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(1.0F), .roughness = 0.0F, .transmission = 1.0F, .thinWalled = true});
+    Entity wall = scene.createEntity("Wall");
+    wall.get<TransformComponent>().translation = {0.0F, 1.0F, 13.0F};
+    wall.get<TransformComponent>().rotation = Quat(Vec3(0.0F, kPi, 0.0F));
+    wall.add<MeshComponent>(MeshComponent{.mesh = primitives::quad(Vec2(16.0F, 10.0F)).build()});
+    wall.add<MaterialComponent>(MaterialComponent{.albedo = Vec3(0.8F)});
+    Entity light = scene.createEntity("Light");
+    light.add<SphereComponent>(4.0F);
+    light.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(1.0F), .emissionColor = Vec3(1.0F), .emissionPower = 100.0F});
+    RenderSceneBuilder builder;
+    constexpr std::uint32_t kWidth = 128;
+    constexpr std::uint32_t kHeight = 96;
+    constexpr int kFrames = 30;
+    auto lightAt = [&](int frame) {
+        const float angle = glm::radians(45.0F + 1.4F * static_cast<float>(frame));
+        light.get<TransformComponent>().translation = {40.0F * std::sin(angle), 1.0F,
+                                                       13.0F - 40.0F * std::cos(angle)};
+        scene.markDirty();
+        return &builder.update(scene);
+    };
+    Camera camera = makeCamera(kWidth, kHeight);
+    camera.setPosition({0.0F, 1.0F, 9.0F});
+    const PathTracerSettings settings{.samplesPerPixel = 2, .fireflyClamp = 8.0F};
+    auto hybrid = gpu.makeRenderer(kWidth, kHeight);
+    for (int i = 0; i < kFrames; ++i) {
+        hybrid->render(*lightAt(i), camera, settings, hybridOptions(true, resolution));
+    }
+    REQUIRE(hybrid->accumulatedFrames() == kFrames);  // Reprojected, not restarted.
+    auto reference = gpu.makeRenderer(kWidth, kHeight);
+    for (int i = 0; i < 64; ++i) {
+        reference->render(builder.update(scene), camera,
+                          PathTracerSettings{.samplesPerPixel = 8, .fireflyClamp = 8.0F});
+    }
+    // (Half the history at most dropped per frame, and pixels not traced showing
+    // theirs: 1.19 and 1.39 times as bright.)
+    const double bright = meanLinear(hybrid->readImage()) / meanLinear(reference->readImage());
+    INFO("the reflection " << bright << " times as bright as it should be");
+    CHECK(bright == Catch::Approx(1.0).epsilon(0.05));
+}
+
 TEST_CASE("GPU hybrid: moving shadows leave no trail", "[gpu][hybrid]")
 {
     // A ball moving under a light, seen from above: its shadow sweeps a floor that

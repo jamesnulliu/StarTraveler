@@ -14,8 +14,10 @@
 //
 // TraceResolution::Half: a pixel not traced this frame accumulates nothing (its
 // own samples only), and borrows from the traced pixels around it on the same
-// surface (borrow): their reflections' motion and guides, and, until it has
-// samples of its own (new, just uncovered), their samples as the filter's input.
+// surface (borrow): their reflections' motion and guides, and their samples as
+// the filter's input: only those until it has samples of its own (new, just
+// uncovered), else as one frame of its own (they show the more, the less of its
+// history the gradients left).
 //
 // Reflections (the glass and specular layers) are reprojected from where
 // their image was, which moves unlike the surface (hybrid_trace.comp,
@@ -288,12 +290,13 @@ bool sawSurface(uvec4 current, vec3 point, vec3 normal, ivec2 offset, ivec2 tap,
  * (mostly), else the nearest. With `average`, the samples of all of them,
  * nearer weighing more, into `lent` (the primary layer's divided by their
  * albedo). Where none saw it (a silhouette, a sliver): the traced pixel most
- * like it, on the same instance first. (-1, -1): none (no surface, or only sky
- * around).
+ * like it, on the same instance first (onSurface false). (-1, -1): none (no
+ * surface, or only sky around).
  */
-ivec2 borrow(ivec2 pixel, uvec4 current, bool average, out vec4 lent)
+ivec2 borrow(ivec2 pixel, uvec4 current, bool average, out vec4 lent, out bool onSurface)
 {
     lent = vec4(0.0);
+    onSurface = false;
     if (current.z == 0u) {
         return ivec2(-1);
     }
@@ -303,6 +306,7 @@ ivec2 borrow(ivec2 pixel, uvec4 current, bool average, out vec4 lent)
         ivec2 tap = currentlyTraced(pixel);
         if (inside(tap) && sawSurface(current, point, normal, tap - pixel, tap,
                                       imageLoad(guide, tap))) {
+            onSurface = true;
             return tap;
         }
     }
@@ -345,6 +349,7 @@ ivec2 borrow(ivec2 pixel, uvec4 current, bool average, out vec4 lent)
     }
     if (weights > 0.0) {
         lent /= weights;
+        onSurface = true;
         return lender;
     }
     if (fallback.x >= 0 && average) {
@@ -378,7 +383,8 @@ void main()
     uvec2 reflection = uvec2(0u);
     if (!isPrimary() && current.z != 0u) {
         vec4 unused;
-        ivec2 from = traced ? pixel : borrow(pixel, current, false, unused);
+        bool unusedOnSurface;
+        ivec2 from = traced ? pixel : borrow(pixel, current, false, unused, unusedOnSurface);
         if (from.x >= 0) {
             vec4 reflected = imageLoad(reflectionMotion, from);
             reflectedMotion = pass.layer == kLayerSpecular ? reflected.xy : reflected.zw;
@@ -439,12 +445,8 @@ void main()
                 // all of it where a shadow moved on, or a highlight, or the sunlit patch
                 // of a cockpit its canopy reflects.
                 vec4 gradient = imageLoad(gradients, pixel / kGradientStratum);
-                float lighting = luminance(history.color.rgb);
-                history.color.a *=
-                    1.0 - (isPrimary() ? gradientChange(gradient, current.z, lighting, kGradientGain)
-                                       : min(kReflectionMaxChange,
-                                             gradientChange(gradient, current.z, lighting,
-                                                            kReflectionGradientGain)));
+                float change = gradientChange(gradient, current.z, luminance(history.color.rgb));
+                history.color.a *= 1.0 - (isPrimary() ? change : min(change, kReflectionMaxChange));
                 if (sharpness > 0.0 && pass.layer == kLayerSpecular) {
                     clampToFrame(pixel, current.z, kReflectionDeviations / sharpness, history);
                 }
@@ -495,7 +497,8 @@ void main()
         // neighbors', as uncertain as one frame of theirs.
         vec4 lent = vec4(0.0);
         if (kBorrowing) {  // (Else every pixel has samples.)
-            borrow(pixel, current, true, lent);
+            bool unusedOnSurface;
+            borrow(pixel, current, true, lent, unusedOnSurface);
         }
         float spread = current.z != 0u ? spatialVariance(pixel, current.z) : 0.0;
         imageStore(filterInput, pixel, vec4(lent.rgb, spread / float(frameSamples())));
@@ -506,5 +509,22 @@ void main()
     if (previousSamples < 4.0 * float(frameSamples()) && current.z != 0u) {
         variance = max(variance, spatialVariance(pixel, current.z));
     }
-    imageStore(filterInput, pixel, vec4(demodulated(mean, meanAlbedo), variance / samples));
+    // A pixel not traced this frame (TraceResolution::Half) waits up to three frames
+    // for samples of its own, showing its history: where the gradients cut that short
+    // (the light changed), mostly light it no longer has. While things move, the samples
+    // of its neighbors on the same surface (borrow) count as a frame of its own for the
+    // filter (not for the history: its own samples only), so the less of its history is
+    // left, the more of them it shows. Its variance stays the history's: the filter
+    // averages those neighbors again.
+    vec3 filterValue = demodulated(mean, meanAlbedo);
+    if (kBorrowing && !traced && cap > 0u) {
+        vec4 lent;
+        bool onSurface;
+        borrow(pixel, current, true, lent, onSurface);
+        if (onSurface) {
+            float lentSamples = float(frameSamples());
+            filterValue += (lent.rgb - filterValue) * (lentSamples / (samples + lentSamples));
+        }
+    }
+    imageStore(filterInput, pixel, vec4(filterValue, variance / samples));
 }

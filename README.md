@@ -159,11 +159,17 @@ the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
     layer of their own: paths are split there into what is seen through them
     and what they reflect, each with its own depth, normals and motion
     vectors, so a cockpit canopy neither smears the world outside nor its own
-    reflections. Samples are reprojected across frames (motion vectors from
-    each instance's previous transform, checked against the previous frame's
-    surfaces) and the lighting, divided by the albedo, goes through SVGF's
-    edge-avoiding a-trous filter, which fades out as samples accumulate: a
-    still image converges to the path tracer's (also checked by the tests).
+    reflections. Each sample per pixel is a path of every layer. Samples are
+    reprojected across frames (motion vectors from each instance's previous
+    transform, checked against the previous frame's surfaces; sharp
+    reflections move with their reflected image) and the lighting, divided by
+    the albedo, goes through SVGF's edge-avoiding a-trous filter, which fades
+    out as samples accumulate: a still image converges to the path tracer's
+    (also checked by the tests). Where the light changed, the history is
+    dropped (A-SVGF's temporal gradients: each frame re-traces some of the
+    previous frame's samples with their random numbers), so neither a moving
+    shadow nor a highlight sliding along a glossy tube trails, nor the sunlit
+    patch a canopy reflects as the ship turns.
     At half trace resolution (the game's) paths start from one pixel of each
     2x2 per frame, each in turn; the others borrow their neighbors' samples on
     the same surface only until they have their own (just uncovered), so a
@@ -188,9 +194,9 @@ the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
   filters), motion blur (McGuire et al.'s reconstruction filter over the
   motion vectors and depths) and a vignette, and tone maps. With every effect
   off the image is exactly the tone-mapped one, as the CPU's.
-  `starcore-render scene.yaml --gpu` (or `--hybrid`, with `--move`, `--view`,
-  `--half`, or `--raster`, `--no-shadows`; `--bloom`, `--motion-blur`,
-  `--vignette`) renders offscreen.
+  `starcore-render scene.yaml --gpu` (or `--hybrid`, with `--move`,
+  `--turn-entity`, `--view`, `--half`, or `--raster`, `--no-shadows`;
+  `--bloom`, `--motion-blur`, `--vignette`) renders offscreen.
 - **Particles**: a CPU particle system (emitter components spreading their
   particles along the path they moved, bursts), drawn by the GPU renderer.
 - **2D raster**: Bresenham/midpoint/DDA lines, midpoint ellipses, Bezier and

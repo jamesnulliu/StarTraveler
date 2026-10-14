@@ -755,32 +755,47 @@ void continuePath(vec3 origin, vec3 direction, uint bounce, uint end, inout Path
  * continuePath). One call of pathVertex for all of them: shaders inline every
  * call, and each copy of a vertex (light sampling, shadow rays) takes
  * registers. `firstRadiance`: the path's radiance after the first vertex;
- * `firstDirection`: the ray it continued with (0: none).
+ * `firstDirection`: the ray it continued with (0: none); `secondRadiance`:
+ * the radiance after the second vertex (or the sky it found instead).
+ *
+ * Each vertex after the first draws its random numbers from a stream of its
+ * own, seeded from the path's: the hybrid pipeline's temporal gradients
+ * re-trace a path's first vertices with the numbers of the previous frame,
+ * and the second's must not depend on how many the first one's light sample
+ * took (a sphere's and a mesh's take different counts).
  */
 void tracePathFrom(SurfaceHit hit, vec3 direction, uint bounce, uint end, uint flags,
                    inout PathState path, inout uint rng, out vec3 firstRadiance,
-                   out vec3 firstDirection)
+                   out vec3 firstDirection, out vec3 secondRadiance)
 {
     firstRadiance = path.radiance;
     firstDirection = vec3(0.0);
+    secondRadiance = path.radiance;
     Instance instance = instances[hit.instanceIndex];
     vec3 origin = vec3(0.0);
-    for (bool first = true; bounce < end; ++bounce) {
-        if (!first) {
+    uint stream = rng;
+    for (uint vertex = 0u; bounce < end; ++bounce, ++vertex) {
+        if (vertex > 0u) {
             if (!traceClosestHit(origin, direction, instanceMask(), hit)) {
                 path.radiance +=
                     clampContribution(path.throughput * skyColor(), path.scatterings, path.scale);
+                if (vertex < 2u) {
+                    secondRadiance = path.radiance;
+                }
                 return;
             }
             instance = instances[hit.instanceIndex];
             flags = 0u;
+            rng = pcgHash(stream + vertex * 0x9E3779B9u);
         }
         bool more = pathVertex(hit, materials[instance.materialIndex], instance.lightIndex,
                                direction, bounce, flags, path, rng, origin, direction);
-        if (first) {
+        if (vertex == 0u) {
             firstRadiance = path.radiance;
             firstDirection = direction;
-            first = false;
+        }
+        if (vertex < 2u) {
+            secondRadiance = path.radiance;
         }
         if (!more) {
             return;

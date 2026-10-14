@@ -7,11 +7,14 @@
 //       --move 0 0 -0.05   (the hybrid pipeline, the camera moving every frame)
 //   starcore-render assets/scenes/legacy_demo.yaml -o renders/demo.png -f 30 --hybrid
 //       --move-entity "Red Sun" 0.05 0 0   (an entity moving every frame)
+//   starcore-render scene.yaml -o renders/turn.png -f 2108 --gpu --turn-entity Ship 1
+//       --still 2048   (a ship turning with the camera, then the reference at its end pose)
 //   starcore-render assets/scenes/legacy_demo.yaml -o renders/demo.png -f 16 --raster
 
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
+#include <format>
 #include <optional>
 #include <string>
 #include <vector>
@@ -48,6 +51,12 @@ struct GpuOptions
     starcore::Vec3 move{0.0F};  // Camera translation per frame.
     starcore::Entity movedEntity;
     starcore::Vec3 entityMove{0.0F};  // Its translation per frame.
+    // Turned about its origin (yaw, degrees per frame), the camera with it (a pilot steering).
+    starcore::Entity turnedEntity;
+    float entityTurn = 0.0F;
+    std::uint32_t still = 0;  // The last frames: nothing moves.
+    std::filesystem::path dumpPath;  // Every dumpEvery frames: the image (name_frame.png).
+    std::uint32_t dumpEvery = 0;
     bool validation = false;
     // Effects (EffectSettings).
     bool bloom = false;
@@ -106,12 +115,40 @@ auto renderOnGpu([[maybe_unused]] starcore::Scene& scene,
     (*tracer)->waitIdle();
     const auto start = std::chrono::steady_clock::now();
     for (std::uint32_t i = 1; i < frames; ++i) {
-        camera.setPosition(camera.position() + gpuOptions.move);
-        if (gpuOptions.movedEntity) {
-            gpuOptions.movedEntity.patch<starcore::TransformComponent>(
-                [&](starcore::TransformComponent& t) { t.translation += gpuOptions.entityMove; });
+        if (i + gpuOptions.still < frames) {
+            camera.setPosition(camera.position() + gpuOptions.move);
+            if (gpuOptions.movedEntity) {
+                gpuOptions.movedEntity.patch<starcore::TransformComponent>(
+                    [&](starcore::TransformComponent& t) {
+                        t.translation += gpuOptions.entityMove;
+                    });
+            }
+            if (gpuOptions.turnedEntity) {
+                // Yaw as the game's ships (ShipSystem::orientation): about world +Y,
+                // negative angles for a positive yaw.
+                const starcore::Quat turn = glm::angleAxis(glm::radians(-gpuOptions.entityTurn),
+                                                           starcore::Vec3(0.0F, 1.0F, 0.0F));
+                starcore::Vec3 pivot(0.0F);
+                gpuOptions.turnedEntity.patch<starcore::TransformComponent>(
+                    [&](starcore::TransformComponent& t) {
+                        pivot = t.translation;
+                        t.rotation = turn * t.rotation;
+                    });
+                camera.setPosition(pivot + turn * (camera.position() - pivot));
+                camera.setRotation(camera.yaw() + gpuOptions.entityTurn, camera.pitch());
+            }
         }
         (*tracer)->render(builder.update(scene), camera, settings, options);
+        if (gpuOptions.dumpEvery > 0 && (i + 1) % gpuOptions.dumpEvery == 0) {
+            starcore::ColorImage frame = (*tracer)->readImage();
+            starcore::renderOverlay(scene, camera, frame);
+            const std::filesystem::path path =
+                gpuOptions.dumpPath.parent_path() /
+                std::format("{}_{:04}.png", gpuOptions.dumpPath.stem().string(), i + 1);
+            if (auto written = starcore::writePng(frame, path); !written) {
+                SC_ERROR("{}", written.error());
+            }
+        }
     }
     starcore::ColorImage image = (*tracer)->readImage();
     const std::chrono::duration<double, std::milli> elapsed =
@@ -147,6 +184,7 @@ auto main(int argc, char** argv) -> int
     bool noShadows = false;
     std::vector<float> move;
     std::vector<std::string> moveEntity;
+    std::vector<std::string> turnEntity;
     starcore::PathTracerSettings settings;
     std::vector<float> cameraPosition{0.0F, 0.0F, 10.0F};
     std::vector<float> cameraLookAt;
@@ -183,6 +221,14 @@ auto main(int argc, char** argv) -> int
     app.add_option("--move-entity", moveEntity,
                    "GPU: translation per frame of an entity (by name): name x y z")
         ->expected(4);
+    app.add_option("--turn-entity", turnEntity,
+                   "GPU: yaw per frame (degrees) of an entity (by name) about its origin, the "
+                   "camera turning with it: name degrees")
+        ->expected(2);
+    app.add_option("--still", gpuOptions.still,
+                   "GPU: of the frames, the last this many still (references at the end pose)");
+    app.add_option("--dump-every", gpuOptions.dumpEvery,
+                   "GPU: also write every this many frames' image (output_frame.png)");
     app.add_flag("--validation", gpuOptions.validation, "GPU: Vulkan validation layers");
     app.add_flag("--bloom", gpuOptions.bloom, "GPU: glow around bright light");
     app.add_flag("--motion-blur", gpuOptions.motionBlur,
@@ -214,6 +260,15 @@ auto main(int argc, char** argv) -> int
         gpuOptions.entityMove = {std::stof(moveEntity[1]), std::stof(moveEntity[2]),
                                  std::stof(moveEntity[3])};
     }
+    if (turnEntity.size() == 2) {
+        gpuOptions.turnedEntity = scene.findEntityByName(turnEntity[0]);
+        if (!gpuOptions.turnedEntity) {
+            SC_ERROR("No entity named \"{}\"", turnEntity[0]);
+            return EXIT_FAILURE;
+        }
+        gpuOptions.entityTurn = std::stof(turnEntity[1]);
+    }
+    gpuOptions.dumpPath = outputPath;
 
     starcore::Camera camera;
     camera.setViewport(width, height);

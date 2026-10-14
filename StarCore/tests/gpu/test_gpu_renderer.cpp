@@ -734,8 +734,7 @@ TEST_CASE("GPU hybrid: more samples per frame make the history smoother while mo
           "[gpu][hybrid]")
 {
     // The history cap counts frames: frames of more samples leave less noise (a cap of
-    // samples would only make the history shorter). Of the primary surfaces' lighting
-    // (the reflection layers trace one path per pixel and frame).
+    // samples would only make the history shorter). Of the primary surfaces' lighting.
     const GpuTest gpu;
     TestScene test;
     const RenderScene renderScene = buildRenderScene(test.scene);
@@ -848,6 +847,88 @@ TEST_CASE("GPU hybrid: reflections leave no trail while moving", "[gpu][hybrid]"
     INFO(trail << " pixels of trails, " << lit << " lit");
     REQUIRE(lit > 200);  // Both balls and their reflections.
     CHECK(trail == 0);
+}
+
+TEST_CASE("GPU hybrid: reflected light that moves leaves no trail", "[gpu][hybrid]")
+{
+    // A light sweeping past a wall behind the camera, which a window pane in front
+    // reflects (a canopy reflecting the sunlit patch of a cockpit as the ship turns),
+    // and past a glossy metal ball seen through the pane (a highlight sliding along
+    // it). Nothing moves on screen and the reflections' guides see the same surfaces:
+    // only the temporal gradients of the reflections tell that their light moved on.
+    const GpuTest gpu;
+    const TraceResolution resolution = GENERATE(TraceResolution::Full, TraceResolution::Half);
+    INFO("trace resolution " << enumToString(resolution));
+    Scene scene;
+    scene.environment().skyColor = Vec3(0.0F);
+    Entity pane = scene.createEntity("Pane");
+    pane.get<TransformComponent>().translation = {0.0F, 1.0F, 5.0F};
+    pane.add<MeshComponent>(MeshComponent{.mesh = primitives::quad(Vec2(8.0F, 6.0F)).build()});
+    pane.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(1.0F), .roughness = 0.0F, .transmission = 1.0F, .thinWalled = true});
+    Entity wall = scene.createEntity("Wall");
+    wall.get<TransformComponent>().translation = {0.0F, 1.0F, 13.0F};
+    wall.get<TransformComponent>().rotation = Quat(Vec3(0.0F, kPi, 0.0F));
+    wall.add<MeshComponent>(MeshComponent{.mesh = primitives::quad(Vec2(16.0F, 10.0F)).build()});
+    wall.add<MaterialComponent>(MaterialComponent{.albedo = Vec3(0.8F)});
+    Entity ball = scene.createEntity("Ball");
+    ball.get<TransformComponent>().translation = {0.0F, 1.0F, 2.0F};
+    ball.add<SphereComponent>(1.0F);
+    ball.add<MaterialComponent>(
+        MaterialComponent{.albedo = Vec3(0.9F), .roughness = 0.3F, .metallic = 1.0F});
+    Entity light = scene.createEntity("Light");
+    light.add<SphereComponent>(0.15F);
+    light.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(1.0F), .emissionColor = Vec3(1.0F), .emissionPower = 400.0F});
+    RenderSceneBuilder builder;
+    constexpr std::uint32_t kWidth = 128;
+    constexpr std::uint32_t kHeight = 96;
+    constexpr int kFrames = 24;
+    auto lightAt = [&](int frame) {
+        light.get<TransformComponent>().translation = {
+            -2.5F + 5.0F * static_cast<float>(frame) / (kFrames - 1), 1.0F, 12.0F};
+        scene.markDirty();
+        return &builder.update(scene);
+    };
+    Camera camera = makeCamera(kWidth, kHeight);
+    camera.setPosition({0.0F, 1.0F, 9.0F});
+    const PathTracerSettings settings{.samplesPerPixel = 2, .fireflyClamp = 8.0F};
+
+    auto hybrid = gpu.makeRenderer(kWidth, kHeight);
+    for (int i = 0; i < kFrames; ++i) {
+        hybrid->render(*lightAt(i), camera, settings, hybridOptions(true, resolution));
+    }
+    REQUIRE(hybrid->accumulatedFrames() == kFrames);  // Reprojected, not restarted.
+    auto reference = gpu.makeRenderer(kWidth, kHeight);
+    for (int i = 0; i < 64; ++i) {
+        reference->render(builder.update(scene), camera,
+                          PathTracerSettings{.samplesPerPixel = 8, .fireflyClamp = 8.0F});
+    }
+    const ColorImage image = hybrid->readImage();
+    const ColorImage expected = reference->readImage();
+
+    // A trail: bright pixels with nothing bright near them in the reference.
+    auto brightness = [](const ColorImage& from, std::uint32_t x, std::uint32_t y) {
+        const std::uint32_t pixel = from.at(x, y);
+        return std::max({channel(pixel, 0), channel(pixel, 1), channel(pixel, 2)});
+    };
+    std::uint32_t trail = 0;
+    std::uint32_t lit = 0;
+    for (std::uint32_t y = 2; y + 2 < kHeight; ++y) {
+        for (std::uint32_t x = 2; x + 2 < kWidth; ++x) {
+            int nearby = 0;
+            for (std::uint32_t v = y - 2; v <= y + 2; ++v) {
+                for (std::uint32_t u = x - 2; u <= x + 2; ++u) {
+                    nearby = std::max(nearby, brightness(expected, u, v));
+                }
+            }
+            lit += brightness(expected, x, y) > 64 ? 1 : 0;
+            trail += brightness(image, x, y) > 64 && nearby < 32 ? 1 : 0;
+        }
+    }
+    INFO(trail << " pixels of trails, " << lit << " lit");
+    REQUIRE(lit > 100);  // The reflected patch and the highlight.
+    CHECK(trail < 10);
 }
 
 TEST_CASE("GPU hybrid: moving shadows leave no trail", "[gpu][hybrid]")

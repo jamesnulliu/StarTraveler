@@ -6,9 +6,9 @@
 // The history holds means weighted by sample count (rgb, a = samples). While
 // nothing moves the count is unbounded: the means converge like the reference
 // accumulation. While things move it is capped (fewer samples for what smooth
-// surfaces let through), and the lighting's keeps less where the temporal
-// gradients say it changed, like where a shadow moved on (A-SVGF, Schied et
-// al., HPG 2018). The primary layer also keeps the means of its albedo and
+// surfaces let through), and keeps less where the temporal gradients say the
+// light changed, like where a shadow moved on (A-SVGF, Schied et al., HPG
+// 2018; of reflections, what they reflect). The primary layer also keeps the means of its albedo and
 // emission: the lighting is divided by the albedo only after accumulating, so
 // edges anti-aliased by the jitter stay exact.
 //
@@ -72,8 +72,8 @@ layout(set = 0, binding = 21, rgba32f) uniform readonly image2D reflectionMotion
 // the pixels traced (TraceResolution::Half: the others borrow).
 layout(set = 0, binding = 22, rgba32ui) uniform readonly uimage2D previousReflectionGuide;
 layout(set = 0, binding = 23, rgba32ui) uniform readonly uimage2D reflectionGuide;
-// The primary lighting's temporal gradients, filtered (hybrid.glsl, one per
-// stratum): how much of it changed since the previous frame.
+// The layer's temporal gradients, filtered (hybrid.glsl, one per stratum): how
+// much of its light changed since the previous frame.
 layout(set = 0, binding = 24, rgba32f) uniform readonly image2D gradients;
 
 // While moving, the history of the primary surfaces' sharp reflections is
@@ -164,10 +164,10 @@ History loadHistory(ivec2 tap)
     return h;
 }
 
-/** Paths per pixel this frame (hybrid_trace.comp traces one per pane). */
+/** Paths per traced pixel this frame (hybrid_trace.comp: as many of each layer). */
 uint frameSamples()
 {
-    return isPrimary() ? max(1u, frameData.frame.z) : 1u;
+    return max(1u, frameData.frame.z);
 }
 
 /** This frame's lighting divided by the albedo, per channel. */
@@ -401,7 +401,10 @@ void main()
         // The history of a reflection is where its image was (on the same surface), if
         // that showed the same reflected (sharp reflections only: the mirror direction
         // says little about glossy ones).
-        vec2 moved = isPrimary() ? currentMotion.xy : reflectedMotion;
+        // A glossy reflection is a blurred image, its motion a guess (of a curved surface,
+        // a poor one): it follows the surface, and its gradients tell what changed.
+        vec2 moved = isPrimary() ? currentMotion.xy
+                                 : mix(currentMotion.xy, reflectedMotion, sharpness);
         bool checkReflection = !isPrimary() && !still && sharpness > 0.5;
         // Bilinear taps around the pixel center, moved.
         vec2 position = vec2(pixel) + 0.5 + moved - 0.5;
@@ -431,15 +434,20 @@ void main()
             history.emission /= total;
 
             history.moments /= total;
-            if (cap > 0u && current.z != 0u && isPrimary()) {
-                // Of the lighting that changed, the history keeps that much less
-                // (A-SVGF): all of it where a shadow moved on.
+            if (cap > 0u && current.z != 0u) {
+                // Of the light that changed, the history keeps that much less (A-SVGF):
+                // all of it where a shadow moved on, or a highlight, or the sunlit patch
+                // of a cockpit its canopy reflects.
+                vec4 gradient = imageLoad(gradients, pixel / kGradientStratum);
+                float lighting = luminance(history.color.rgb);
                 history.color.a *=
-                    1.0 - gradientChange(imageLoad(gradients, pixel / kGradientStratum),
-                                         current.z, luminance(history.color.rgb));
-            } else if (cap > 0u && current.z != 0u && sharpness > 0.0 &&
-                       pass.layer == kLayerSpecular) {
-                clampToFrame(pixel, current.z, kReflectionDeviations / sharpness, history);
+                    1.0 - (isPrimary() ? gradientChange(gradient, current.z, lighting, kGradientGain)
+                                       : min(kReflectionMaxChange,
+                                             gradientChange(gradient, current.z, lighting,
+                                                            kReflectionGradientGain)));
+                if (sharpness > 0.0 && pass.layer == kLayerSpecular) {
+                    clampToFrame(pixel, current.z, kReflectionDeviations / sharpness, history);
+                }
             }
         } else {
             history.color = vec4(0.0);

@@ -566,7 +566,7 @@ auto hybridOptions(bool spatial = true, TraceResolution resolution = TraceResolu
 TEST_CASE("GPU hybrid: emissive sphere, sky and white furnace", "[gpu][hybrid]")
 {
     const GpuTest gpu;
-    // Pixels not traced (half resolution) fill in what their neighbors found.
+    // Pixels not traced (half resolution) borrow what their neighbors found.
     const TraceResolution resolution = GENERATE(TraceResolution::Full, TraceResolution::Half);
     INFO("trace resolution " << enumToString(resolution));
     for (const Vec3 sky : {Vec3(0.0F), Vec3(0.0F, 0.0F, 1.0F)}) {

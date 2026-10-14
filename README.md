@@ -166,9 +166,9 @@ the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
     At half trace resolution paths start from one pixel of each 2x2 per
     frame, each in turn; the others borrow their neighbors' samples on the
     same surface only until they have their own (just uncovered), so a still
-    image still converges, and the cockpit flies at 6.7 instead of 10.4 ms per
-    frame, about 50% noisier. Rasterized first hits are where textures will be
-    sampled.
+    image still converges, and the cockpit flies at 6.1 instead of 10.7 ms per
+    frame (932x856, an RTX 4060 laptop GPU), about 50% noisier.
+    Rasterized first hits are where textures will be sampled.
   - *Raster*: the same visibility buffer lit like the preview (sky, ambient,
     headlight, sphere lights), the nearest window pane blended over: no rays,
     so it also runs on GPUs without ray tracing hardware; jittered frames are

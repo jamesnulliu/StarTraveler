@@ -13,7 +13,6 @@ namespace
 
 #include "shaders/atrous.comp.spv.h"
 #include "shaders/composite.comp.spv.h"
-#include "shaders/fill.comp.spv.h"
 #include "shaders/gradient.comp.spv.h"
 #include "shaders/hybrid_trace.comp.spv.h"
 #include "shaders/temporal.comp.spv.h"
@@ -36,9 +35,6 @@ constexpr VkDescriptorType kAtrousBindings[] = {kBuffer, kUniform, kBuffer, kIma
                                                 kBuffer, kBuffer,  kImage,  kImage, kImage};
 constexpr VkDescriptorType kGradientBindings[] = {kBuffer, kUniform, kBuffer, kImage,
                                                   kBuffer, kBuffer,  kBuffer, kImage};
-constexpr VkDescriptorType kFillBindings[] = {kBuffer, kUniform, kBuffer, kImage, kBuffer,
-                                              kBuffer, kBuffer,  kImage,  kImage, kImage,
-                                              kImage,  kImage,   kImage,  kImage};
 
 /** @brief Stages of hybrid_trace.comp (specialization constant 0, a pipeline each). */
 enum class TraceStage : std::uint32_t
@@ -66,6 +62,16 @@ enum class Layer : std::uint32_t
 constexpr Layer kLayers[] = {Layer::Primary, Layer::Glass, Layer::Specular};
 // Spatial filter iterations of the reflections at most (radius 8 pixels).
 constexpr std::uint32_t kReflectionIterations = 3;
+
+// temporal.comp's specialization constant: no pixels borrow (every one traced), some do.
+constexpr std::uint32_t kBorrowing[] = {0, 1};
+
+// atrous.comp's specialization constant: taps read from the images, tiled.
+constexpr std::uint32_t kTiled[] = {0, 1};
+// A-trous steps (pixels) up to this are tiled (the first iteration must be: its variance
+// is blurred over the tile). Longer ones read the taps from the images: faster (an RTX
+// 4060 laptop GPU) than tiles of pixels that far apart, even of 2x2 pixels each.
+constexpr std::uint32_t kTiledSteps = 2;
 
 /** @brief Push constants of atrous.comp. */
 struct AtrousPass
@@ -180,9 +186,14 @@ HybridRenderer::HybridRenderer(vulkan::Context& context)
                                       std::span(&kStageConstants[2], 1)),
               vulkan::ComputePipeline(context, hybrid_trace_comp_spv, kTraceBindings, 0,
                                       std::span(&kStageConstants[3], 1))},
-      m_fill(context, fill_comp_spv, kFillBindings),
-      m_temporal(context, temporal_comp_spv, kTemporalBindings, sizeof(std::uint32_t)),
-      m_atrous(context, atrous_comp_spv, kAtrousBindings, sizeof(AtrousPass)),
+      m_temporal{vulkan::ComputePipeline(context, temporal_comp_spv, kTemporalBindings,
+                                         sizeof(std::uint32_t), std::span(&kBorrowing[0], 1)),
+                 vulkan::ComputePipeline(context, temporal_comp_spv, kTemporalBindings,
+                                         sizeof(std::uint32_t), std::span(&kBorrowing[1], 1))},
+      m_atrous{vulkan::ComputePipeline(context, atrous_comp_spv, kAtrousBindings,
+                                       sizeof(AtrousPass), std::span(&kTiled[0], 1)),
+               vulkan::ComputePipeline(context, atrous_comp_spv, kAtrousBindings,
+                                       sizeof(AtrousPass), std::span(&kTiled[1], 1))},
       m_gradient(context, gradient_comp_spv, kGradientBindings, sizeof(std::int32_t)),
       m_composite(context, composite_comp_spv, kCompositeBindings)
 {
@@ -387,24 +398,6 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
     }
     computeBarrier(commandBuffer);
 
-    // The pixels not traced get their neighbors' samples.
-    if (stride > 1) {
-        vulkan::DescriptorWrites writes;
-        writes.uniformBuffer(1, uniformBuffer.handle())
-            .storageImage(3, images.primaryGuide[current].view())
-            .storageImage(7, images.glassGuide[current].view())
-            .storageImage(8, images.frameAlbedo.view())
-            .storageImage(9, images.noisyPrimary.view())
-            .storageImage(10, images.noisyGlass.view())
-            .storageImage(11, images.noisySpecular.view())
-            .storageImage(12, images.reflectionMotion.view())
-            .storageImage(13, images.reflectionGuide[current].view());
-        m_fill.bind(commandBuffer);
-        m_fill.pushDescriptors(commandBuffer, writes.writes());
-        vkCmdDispatch(commandBuffer, groupsX, groupsY, 1);
-        computeBarrier(commandBuffer);
-    }
-
     // Index of the filtered gradients.
     std::uint32_t gradients = 0;
     if (moving) {
@@ -427,7 +420,9 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
     }
 
     // 3. Temporal ---------------------------------------------------------------------------------
-    m_temporal.bind(commandBuffer);
+    // Pixels not traced (stride > 1) borrow.
+    const vulkan::ComputePipeline& temporal = m_temporal[stride > 1 ? 1 : 0];
+    temporal.bind(commandBuffer);
     for (const Layer layer : kLayers) {
         const Images::LayerImages layerImages = images.layer(layer);
         // Only the primary layer has albedo, emission and gradients: their images are bound,
@@ -454,8 +449,8 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
             .storageImage(22, images.reflectionGuide[previous].view())
             .storageImage(23, images.reflectionGuide[current].view())
             .storageImage(24, images.gradients[gradients].view());
-        m_temporal.pushDescriptors(commandBuffer, writes.writes());
-        m_temporal.pushConstants(commandBuffer, &layer, sizeof(layer));
+        temporal.pushDescriptors(commandBuffer, writes.writes());
+        temporal.pushConstants(commandBuffer, &layer, sizeof(layer));
         vkCmdDispatch(commandBuffer, groupsX, groupsY, 1);
         computeBarrier(commandBuffer);
     }
@@ -464,10 +459,16 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
     // Index of each layer's latest filter image.
     std::array<std::uint32_t, std::size(kLayers)> filtered{};
     const std::uint32_t iterations = denoiser.spatial ? denoiser.iterations : 0;
-    if (iterations > 0) {
-        m_atrous.bind(commandBuffer);
-    }
+    // Tiled: per axis, `step` interleaved grids of the pixels `step` apart, 8 of each per
+    // workgroup.
+    auto atrousGroups = [](std::uint32_t size, std::int32_t step) {
+        const auto grids = static_cast<std::uint32_t>(step);
+        return grids * (((size + grids - 1) / grids + kWorkgroupSize - 1) / kWorkgroupSize);
+    };
     for (std::uint32_t i = 0; i < iterations; ++i) {
+        const bool tiled = (1U << i) <= kTiledSteps;
+        const vulkan::ComputePipeline& atrous = m_atrous[tiled ? 1 : 0];
+        atrous.bind(commandBuffer);
         for (const Layer layer : kLayers) {
             if (layer != Layer::Primary && i >= kReflectionIterations) {
                 continue;
@@ -483,9 +484,14 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
                 .storageImage(7, (*layerImages.filter)[latest].view())
                 .storageImage(8, (*layerImages.filter)[1 - latest].view())
                 .storageImage(9, layerImages.filterGuide->view());
-            m_atrous.pushDescriptors(commandBuffer, writes.writes());
-            m_atrous.pushConstants(commandBuffer, &pass, sizeof(pass));
-            vkCmdDispatch(commandBuffer, groupsX, groupsY, 1);
+            atrous.pushDescriptors(commandBuffer, writes.writes());
+            atrous.pushConstants(commandBuffer, &pass, sizeof(pass));
+            if (tiled) {
+                vkCmdDispatch(commandBuffer, atrousGroups(width, pass.step),
+                              atrousGroups(height, pass.step), 1);
+            } else {
+                vkCmdDispatch(commandBuffer, groupsX, groupsY, 1);
+            }
             latest = 1 - latest;
         }
         computeBarrier(commandBuffer);

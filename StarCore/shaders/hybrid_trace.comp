@@ -22,7 +22,7 @@
 // ones (from a cockpit's canopy back into the cockpit); and, while things
 // move, the temporal gradients of the primary lighting (traceGradient). Paths
 // are traced from every pixel, or from one of each 2x2 in turn (traceStride,
-// TraceResolution::Half); fill.comp then fills in the others.
+// TraceResolution::Half; the others borrow, temporal.comp).
 // Reflections do not move with the surfaces reflecting them: their motion
 // vectors follow the reflected image (virtualMotion) of what their sample
 // reflected.

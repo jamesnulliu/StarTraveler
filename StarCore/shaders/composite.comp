@@ -51,8 +51,12 @@ void main()
 
     switch (frameData.history.z) {
     case kViewNoisy:
-        radiance = imageLoad(noisyPrimary, pixel).rgb + imageLoad(frameEmission, pixel).rgb +
-                   imageLoad(noisySpecular, pixel).rgb + imageLoad(noisyGlass, pixel).rgb;
+        // This frame's samples (TraceResolution::Half: of the pixels traced, the others black).
+        radiance = imageLoad(frameEmission, pixel).rgb;
+        if (tracedThisFrame(pixel)) {
+            radiance += imageLoad(noisyPrimary, pixel).rgb + imageLoad(noisySpecular, pixel).rgb +
+                        imageLoad(noisyGlass, pixel).rgb;
+        }
         break;
     case kViewAlbedo:  // Raw.
         radiance = surfaceAlbedo;

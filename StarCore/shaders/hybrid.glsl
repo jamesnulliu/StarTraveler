@@ -61,10 +61,16 @@ ivec2 previousTraceOffset()
     return traceOffset(frameData.history.w >> 16);
 }
 
-/** Whether a pixel's paths were traced this frame (the others are filled in, fill.comp). */
+// The stride is a power of two: blocks are masks (not divisions, slow on GPUs).
+ivec2 blockOf(ivec2 pixel)
+{
+    return pixel & ~int(traceStride() - 1u);
+}
+
+/** Whether a pixel's paths were traced this frame (the others borrow, temporal.comp). */
 bool tracedThisFrame(ivec2 pixel)
 {
-    return all(equal(pixel % int(traceStride()), currentTraceOffset()));
+    return all(equal(pixel - blockOf(pixel), currentTraceOffset()));
 }
 
 /** The pixel a thread of a dispatch over blocks traces this frame. */
@@ -73,11 +79,16 @@ ivec2 tracedPixel(ivec2 block)
     return block * int(traceStride()) + currentTraceOffset();
 }
 
-/** The pixel of a block that was traced in the previous frame. */
+/** The pixel of a pixel's block traced this frame. */
+ivec2 currentlyTraced(ivec2 pixel)
+{
+    return blockOf(pixel) + currentTraceOffset();
+}
+
+/** The pixel of a pixel's block that was traced in the previous frame. */
 ivec2 previouslyTraced(ivec2 pixel)
 {
-    int stride = int(traceStride());
-    return pixel / stride * stride + previousTraceOffset();
+    return blockOf(pixel) + previousTraceOffset();
 }
 
 /** Of a frame's samples per pixel, how many a pixel gets on average. */

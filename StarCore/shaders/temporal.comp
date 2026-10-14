@@ -5,13 +5,17 @@
 //
 // The history holds means weighted by sample count (rgb, a = samples). While
 // nothing moves the count is unbounded: the means converge like the reference
-// accumulation (of each pixel's own samples: a pixel not traced, of
-// TraceResolution::Half, has its neighbors' only until it has some). While things move it is capped (fewer samples for what smooth
+// accumulation. While things move it is capped (fewer samples for what smooth
 // surfaces let through), and the lighting's keeps less where the temporal
 // gradients say it changed, like where a shadow moved on (A-SVGF, Schied et
 // al., HPG 2018). The primary layer also keeps the means of its albedo and
 // emission: the lighting is divided by the albedo only after accumulating, so
 // edges anti-aliased by the jitter stay exact.
+//
+// TraceResolution::Half: a pixel not traced this frame accumulates nothing (its
+// own samples only), and borrows from the traced pixels around it on the same
+// surface (borrow): their reflections' motion and guides, and, until it has
+// samples of its own (new, just uncovered), their samples as the filter's input.
 //
 // Reflections (the glass and specular layers) are reprojected from where
 // their image was, which moves unlike the surface (hybrid_trace.comp,
@@ -31,6 +35,12 @@
 #include "hybrid.glsl"
 
 layout(local_size_x = 8, local_size_y = 8) in;
+
+// Specialization constant 0: some pixels are not traced every frame
+// (TraceResolution::Half) and borrow; compiled out of the pipeline for Full
+// (the registers it takes would slow it down).
+layout(constant_id = 0) const uint kBorrowingConstant = 1u;
+const bool kBorrowing = kBorrowingConstant != 0u;
 
 layout(push_constant) uniform Pass
 {
@@ -58,7 +68,8 @@ layout(set = 0, binding = 19, rg32f) uniform writeonly image2D moments;
 layout(set = 0, binding = 20, rgba16f) uniform writeonly image2D filterInput;
 // Of the reflected images: xy of the specular layer, zw of the glass layer.
 layout(set = 0, binding = 21, rgba32f) uniform readonly image2D reflectionMotion;
-// What was / is reflected (hybrid.glsl, encodeReflection), as reflectionMotion.
+// What was / is reflected (hybrid.glsl, encodeReflection), as reflectionMotion; of
+// the pixels traced (TraceResolution::Half: the others borrow).
 layout(set = 0, binding = 22, rgba32ui) uniform readonly uimage2D previousReflectionGuide;
 layout(set = 0, binding = 23, rgba32ui) uniform readonly uimage2D reflectionGuide;
 // The primary lighting's temporal gradients, filtered (hybrid.glsl, one per
@@ -128,6 +139,17 @@ uvec2 reflectionOf(uvec4 guide)
     return pass.layer == kLayerSpecular ? guide.xy : guide.zw;
 }
 
+/**
+ * What a previous frame's pixel reflected: of the pixel traced in its 2x2
+ * block then (TraceResolution::Half: one it borrowed from, or near it).
+ */
+uvec2 previousReflection(ivec2 tap)
+{
+    ivec2 traced = kBorrowing ? previouslyTraced(tap) : tap;
+    return reflectionOf(imageLoad(previousReflectionGuide,
+                                  all(lessThan(vec2(traced), viewportSize())) ? traced : tap));
+}
+
 History loadHistory(ivec2 tap)
 {
     History h;
@@ -154,7 +176,21 @@ vec3 demodulated(vec3 radiance, vec3 surfaceAlbedo)
     return isPrimary() ? radiance / demodulationAlbedo(surfaceAlbedo) : radiance;
 }
 
-/** Per-sample variance of the luminance, from this frame's neighbors on the same surface. */
+bool inside(ivec2 pixel)
+{
+    return all(greaterThanEqual(pixel, ivec2(0))) && all(lessThan(vec2(pixel), viewportSize()));
+}
+
+/** Whether a pixel near this one has samples of this frame on surface `key`. */
+bool sampledOn(ivec2 tap, uint key)
+{
+    return inside(tap) && (!kBorrowing || tracedThisFrame(tap)) && imageLoad(guide, tap).z == key;
+}
+
+/**
+ * Per-sample variance of the luminance, from this frame's samples around the
+ * pixel (5x5, of the pixels traced) on the same surface.
+ */
 float spatialVariance(ivec2 pixel, uint key)
 {
     float sum = 0.0;
@@ -163,9 +199,7 @@ float spatialVariance(ivec2 pixel, uint key)
     for (int dy = -2; dy <= 2; ++dy) {
         for (int dx = -2; dx <= 2; ++dx) {
             ivec2 tap = pixel + ivec2(dx, dy);
-            if (any(lessThan(tap, ivec2(0))) ||
-                any(greaterThanEqual(vec2(tap), viewportSize())) ||
-                imageLoad(guide, tap).z != key) {
+            if (!sampledOn(tap, key)) {
                 continue;
             }
             vec3 frameAlbedoTap = isPrimary() ? imageLoad(frameAlbedo, tap).rgb : vec3(1.0);
@@ -175,6 +209,9 @@ float spatialVariance(ivec2 pixel, uint key)
             count += 1.0;
         }
     }
+    if (count <= 0.0) {
+        return 0.0;
+    }
     float mean = sum / count;
     // Neighbors hold means of frameSamples() samples: scale to one sample's variance.
     return max(0.0, squares / count - mean * mean) * float(frameSamples());
@@ -182,9 +219,9 @@ float spatialVariance(ivec2 pixel, uint key)
 
 /**
  * Clamp a reflection's history to `deviations` standard deviations around the
- * mean of this frame's samples on the same surface around the pixel (5x5,
- * one each): reflections the guides missed vanish at once where those agree.
- * Its moments move with it (the same variance).
+ * mean of this frame's samples on the same surface around the pixel (5x5, of
+ * the pixels traced): reflections the guides missed vanish at once where those
+ * agree. Its moments move with it (the same variance).
  */
 void clampToFrame(ivec2 pixel, uint key, float deviations, inout History history)
 {
@@ -194,9 +231,7 @@ void clampToFrame(ivec2 pixel, uint key, float deviations, inout History history
     for (int dy = -2; dy <= 2; ++dy) {
         for (int dx = -2; dx <= 2; ++dx) {
             ivec2 tap = pixel + ivec2(dx, dy);
-            if (any(lessThan(tap, ivec2(0))) ||
-                any(greaterThanEqual(vec2(tap), viewportSize())) ||
-                imageLoad(guide, tap).z != key) {
+            if (!sampledOn(tap, key)) {
                 continue;
             }
             vec3 value = imageLoad(noisy, tap).rgb;
@@ -204,6 +239,9 @@ void clampToFrame(ivec2 pixel, uint key, float deviations, inout History history
             squares += value * value;
             count += 1.0;
         }
+    }
+    if (count <= 0.0) {
+        return;
     }
     vec3 mean = sum / count;
     vec3 range = deviations * sqrt(max(squares / count - mean * mean, vec3(0.0)));
@@ -215,6 +253,106 @@ void clampToFrame(ivec2 pixel, uint key, float deviations, inout History history
     history.color.rgb = clamped;
 }
 
+/** Where a pixel's sample saw its surface (the guide's view depth along its ray). */
+vec3 guidePoint(ivec2 pixel, uvec4 surface)
+{
+    vec3 direction = cameraDirection(vec2(pixel) + frameData.viewport.zw);
+    return frameData.cameraPosition.xyz +
+           direction * (guideDepth(surface) / dot(direction, frameData.cameraForward.xyz));
+}
+
+/** A traced pixel's samples as lent: the primary layer's divided by its albedo. */
+vec4 lentSamples(ivec2 tap)
+{
+    vec4 value = imageLoad(noisy, tap);
+    vec3 tapAlbedo = isPrimary() ? imageLoad(frameAlbedo, tap).rgb : vec3(1.0);
+    return vec4(demodulated(value.rgb, tapAlbedo), value.a);
+}
+
+/**
+ * Whether a traced pixel (offset from the pixel, on surface `current` at
+ * `point`) saw the same surface: the same instance, a similar normal, on its
+ * tangent plane.
+ */
+bool sawSurface(uvec4 current, vec3 point, vec3 normal, ivec2 offset, ivec2 tap, uvec4 tapGuide)
+{
+    float tolerance = 0.01 * guideDepth(current) * length(vec2(offset));
+    return tapGuide.z == current.z && dot(guideNormal(tapGuide), normal) >= 0.8 &&
+           abs(dot(normal, guidePoint(tap, tapGuide) - point)) <= tolerance;
+}
+
+/**
+ * A pixel not traced this frame (TraceResolution::Half, on surface `current`)
+ * borrows from a traced pixel around it (3x3, two to four) that saw the same
+ * surface: its reflections, and the pixel traced in its 2x2 block if it did
+ * (mostly), else the nearest. With `average`, the samples of all of them,
+ * nearer weighing more, into `lent` (the primary layer's divided by their
+ * albedo). Where none saw it (a silhouette, a sliver): the traced pixel most
+ * like it, on the same instance first. (-1, -1): none (no surface, or only sky
+ * around).
+ */
+ivec2 borrow(ivec2 pixel, uvec4 current, bool average, out vec4 lent)
+{
+    lent = vec4(0.0);
+    if (current.z == 0u) {
+        return ivec2(-1);
+    }
+    vec3 point = guidePoint(pixel, current);
+    vec3 normal = guideNormal(current);
+    if (!average) {
+        ivec2 tap = currentlyTraced(pixel);
+        if (inside(tap) && sawSurface(current, point, normal, tap - pixel, tap,
+                                      imageLoad(guide, tap))) {
+            return tap;
+        }
+    }
+    float weights = 0.0;
+    float nearest = 0.0;
+    ivec2 lender = ivec2(-1);
+    float best = -1e9;
+    ivec2 fallback = ivec2(-1);
+    for (int dy = -1; dy <= 1; ++dy) {
+        for (int dx = -1; dx <= 1; ++dx) {
+            ivec2 offset = ivec2(dx, dy);
+            ivec2 tap = pixel + offset;
+            if (!inside(tap) || !tracedThisFrame(tap)) {
+                continue;
+            }
+            uvec4 tapGuide = imageLoad(guide, tap);
+            if (tapGuide.z == 0u) {
+                continue;  // Sky: nothing to lend.
+            }
+            float distance = length(vec2(offset));
+            float score = (tapGuide.z == current.z ? 4.0 : 0.0) +
+                          dot(guideNormal(tapGuide), normal) - 0.1 * distance;
+            if (score > best) {
+                best = score;
+                fallback = tap;
+            }
+            if (!sawSurface(current, point, normal, offset, tap, tapGuide)) {
+                continue;
+            }
+            float w = 1.0 - distance / 2.0;
+            if (average) {
+                lent += w * lentSamples(tap);
+            }
+            weights += w;
+            if (w > nearest) {
+                nearest = w;
+                lender = tap;
+            }
+        }
+    }
+    if (weights > 0.0) {
+        lent /= weights;
+        return lender;
+    }
+    if (fallback.x >= 0 && average) {
+        lent = lentSamples(fallback);
+    }
+    return fallback;
+}
+
 void main()
 {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
@@ -223,7 +361,9 @@ void main()
     }
     uvec4 current = imageLoad(guide, pixel);
     vec4 currentMotion = imageLoad(motion, pixel);
-    vec4 frameNoisy = imageLoad(noisy, pixel);
+    // This frame's samples (none of a pixel not traced, TraceResolution::Half).
+    bool traced = !kBorrowing || tracedThisFrame(pixel);
+    vec4 frameNoisy = traced ? imageLoad(noisy, pixel) : vec4(0.0);
     vec3 currentAlbedo = isPrimary() ? imageLoad(frameAlbedo, pixel).rgb : vec3(0.0);
     vec3 currentEmission = isPrimary() ? imageLoad(frameEmission, pixel).rgb : vec3(0.0);
     bool reset = (frameData.history.y & kHistoryReset) != 0u;
@@ -231,6 +371,20 @@ void main()
     uint cap = frameData.history.x;  // Frames; 0: still.
     float sharpness = !isPrimary() && current.z != 0u ? reflectionSharpness(guideRoughness(current))
                                                       : 0.0;
+
+    // What a reflection layer reflects: the motion of its image and its guide (of a
+    // pixel not traced, its lender's).
+    vec2 reflectedMotion = vec2(0.0);
+    uvec2 reflection = uvec2(0u);
+    if (!isPrimary() && current.z != 0u) {
+        vec4 unused;
+        ivec2 from = traced ? pixel : borrow(pixel, current, false, unused);
+        if (from.x >= 0) {
+            vec4 reflected = imageLoad(reflectionMotion, from);
+            reflectedMotion = pass.layer == kLayerSpecular ? reflected.xy : reflected.zw;
+            reflection = reflectionOf(imageLoad(reflectionGuide, from));
+        }
+    }
 
     // Bilinear reprojection over the taps that saw the same surface.
     History history;
@@ -247,15 +401,8 @@ void main()
         // The history of a reflection is where its image was (on the same surface), if
         // that showed the same reflected (sharp reflections only: the mirror direction
         // says little about glossy ones).
-        vec2 moved = currentMotion.xy;
-        uvec2 reflection = uvec2(0u);
-        bool checkReflection = false;
-        if (!isPrimary()) {
-            vec4 reflected = imageLoad(reflectionMotion, pixel);
-            moved = pass.layer == kLayerSpecular ? reflected.xy : reflected.zw;
-            reflection = reflectionOf(imageLoad(reflectionGuide, pixel));
-            checkReflection = !still && sharpness > 0.5;
-        }
+        vec2 moved = isPrimary() ? currentMotion.xy : reflectedMotion;
+        bool checkReflection = !isPrimary() && !still && sharpness > 0.5;
         // Bilinear taps around the pixel center, moved.
         vec2 position = vec2(pixel) + 0.5 + moved - 0.5;
         ivec2 base = ivec2(floor(position));
@@ -267,9 +414,7 @@ void main()
         for (int i = 0; i < 4; ++i) {
             ivec2 tap = base + offsets[i];
             if (weights[i] <= 0.0 || !sameSurface(current, previousPoint, normal, tap, still) ||
-                (checkReflection &&
-                 !sameReflection(reflection,
-                                 reflectionOf(imageLoad(previousReflectionGuide, tap))))) {
+                (checkReflection && !sameReflection(reflection, previousReflection(tap)))) {
                 continue;
             }
             History h = loadHistory(tap);
@@ -314,7 +459,7 @@ void main()
         previousSamples = min(previousSamples, float(cap * frameSamples()) * traceRate() *
                                                    mix(0.25, 1.0, strength));
     }
-    float frameWeight = tracedThisFrame(pixel) ? float(frameSamples()) : 0.0;
+    float frameWeight = traced ? float(frameSamples()) : 0.0;
     float samples = previousSamples + frameWeight;
     float weight = samples > 0.0 ? frameWeight / samples : 0.0;
     vec3 frameLighting = demodulated(frameNoisy.rgb, currentAlbedo);
@@ -339,9 +484,13 @@ void main()
     // Filter input: the lighting and the variance of its mean.
     if (samples <= 0.0) {
         // No sample of its own yet (not traced since it came into view): its
-        // neighbors' (fill.comp), as uncertain as one frame of theirs.
+        // neighbors', as uncertain as one frame of theirs.
+        vec4 lent = vec4(0.0);
+        if (kBorrowing) {  // (Else every pixel has samples.)
+            borrow(pixel, current, true, lent);
+        }
         float spread = current.z != 0u ? spatialVariance(pixel, current.z) : 0.0;
-        imageStore(filterInput, pixel, vec4(frameLighting, spread / float(frameSamples())));
+        imageStore(filterInput, pixel, vec4(lent.rgb, spread / float(frameSamples())));
         return;
     }
     float variance = max(0.0, meanMoments.y - meanMoments.x * meanMoments.x);

@@ -7,7 +7,13 @@
 // tangent plane, and luminance differences beyond what the variance of the
 // mean explains. As samples accumulate that variance goes to 0, and with it
 // the blur: a still image converges to the unfiltered mean.
+//
+// Short steps are tiled (kTiled): a workgroup filters 8x8 pixels `step` apart
+// (one of step x step interleaved grids), so the taps of all of them are a
+// 12x12 tile of that grid, read once into shared memory, not 25 times. Long
+// steps read the taps from the images: the tile's pixels would be scattered.
 
+#extension GL_EXT_control_flow_attributes : require
 #extension GL_GOOGLE_include_directive : require
 
 #define STARCORE_NO_RAY_QUERY
@@ -15,10 +21,15 @@
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
+// Specialization constant 0: tiled (a pipeline each: the other's registers and
+// shared memory would cost it workgroups running at once).
+layout(constant_id = 0) const int kTiledConstant = 1;
+const bool kTiled = kTiledConstant != 0;
+
 layout(push_constant) uniform Pass
 {
     int step;
-    uint firstIteration;  // Blur the variance (later iterations get it filtered).
+    uint firstIteration;  // Blur the variance (later iterations get it filtered; tiled).
     uint layer;           // kLayer*: which filter strength of the guide.
 }
 pass;
@@ -29,25 +40,57 @@ layout(set = 0, binding = 7, rgba16f) uniform readonly image2D inputImage;
 layout(set = 0, binding = 8, rgba16f) uniform writeonly image2D outputImage;
 layout(set = 0, binding = 9, rg32ui) uniform readonly uimage2D filterGuide;
 
+const int kGroup = 8;  // Pixels per side of a workgroup (the local size).
+const int kApron = 2;  // Taps beyond them, each side.
+const int kTile = kGroup + 2 * kApron;
+// Untiled: one entry (shared memory is allocated whether used or not).
+const int kTileSize = kTiledConstant * (kTile * kTile - 1) + 1;
+
+// The tile: the filter guides (decoded: the taps' weights cost more than the
+// shared memory; 0 key: no surface, or outside the image) and the input.
+shared uint tileKey[kTileSize];
+shared vec4 tileGeometry[kTileSize];  // xyz: normal, w: view depth
+shared vec4 tileValue[kTileSize];
+
 bool inside(ivec2 pixel)
 {
     return all(greaterThanEqual(pixel, ivec2(0))) && all(lessThan(vec2(pixel), viewportSize()));
 }
 
-/** Variance blurred over the 3x3 neighbors on the same surface (steadier edge stopping). */
-float blurredVariance(ivec2 pixel, uint key)
+/** A tap: its filter guide's instance key (0: none, or outside the image), normal and depth. */
+struct Tap
+{
+    uint key;
+    vec4 geometry;  // xyz: normal, w: view depth
+};
+
+Tap imageTap(ivec2 pixel)
+{
+    Tap tap;
+    tap.key = 0u;
+    tap.geometry = vec4(0.0);
+    if (inside(pixel)) {
+        uvec2 tapGuide = imageLoad(filterGuide, pixel).xy;
+        tap.key = filterKey(tapGuide);
+        tap.geometry = vec4(filterNormal(tapGuide), uintBitsToFloat(tapGuide.x));
+    }
+    return tap;
+}
+
+/** Variance blurred over the 3x3 neighbors on the same surface (steadier edge stopping; step 1). */
+float blurredVariance(int center, uint key)
 {
     const float kernel[2] = float[](0.25, 0.125);
     float sum = 0.0;
     float weights = 0.0;
     for (int dy = -1; dy <= 1; ++dy) {
         for (int dx = -1; dx <= 1; ++dx) {
-            ivec2 tap = pixel + ivec2(dx, dy);
-            if (!inside(tap) || filterKey(imageLoad(filterGuide, tap).xy) != key) {
+            int tap = center + dy * kTile + dx;
+            if (tileKey[tap] != key) {
                 continue;
             }
             float w = kernel[abs(dx)] * kernel[abs(dy)];
-            sum += w * imageLoad(inputImage, tap).a;
+            sum += w * tileValue[tap].a;
             weights += w;
         }
     }
@@ -56,13 +99,32 @@ float blurredVariance(ivec2 pixel, uint key)
 
 void main()
 {
+    int step = pass.step;
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    int centerTap = 0;
+    if (kTiled) {
+        // The workgroup's grid (pixels `step` apart, from `phase`) and its 8x8 of it.
+        ivec2 group = ivec2(gl_WorkGroupID.xy);
+        ivec2 phase = group % step;
+        ivec2 origin = group / step * kGroup - kApron;  // The tile's first, in grid cells.
+        for (uint i = gl_LocalInvocationIndex; i < uint(kTile * kTile); i += uint(kGroup * kGroup)) {
+            ivec2 tapPixel = (origin + ivec2(i % uint(kTile), i / uint(kTile))) * step + phase;
+            Tap tap = imageTap(tapPixel);
+            tileKey[i] = tap.key;
+            tileGeometry[i] = tap.geometry;
+            tileValue[i] = inside(tapPixel) ? imageLoad(inputImage, tapPixel) : vec4(0.0);
+        }
+        barrier();
+        ivec2 cell = ivec2(gl_LocalInvocationID.xy);
+        pixel = (origin + kApron + cell) * step + phase;
+        centerTap = (cell.y + kApron) * kTile + cell.x + kApron;
+    }
     if (!inside(pixel)) {
         return;
     }
-    vec4 center = imageLoad(inputImage, pixel);
-    uvec2 centerGuide = imageLoad(filterGuide, pixel).xy;
-    uint key = filterKey(centerGuide);
+    Tap centerGuide = kTiled ? Tap(tileKey[centerTap], tileGeometry[centerTap]) : imageTap(pixel);
+    vec4 center = kTiled ? tileValue[centerTap] : imageLoad(inputImage, pixel);
+    uint key = centerGuide.key;
     float strength = key != 0u ? guideStrength(imageLoad(guide, pixel), pass.layer) : 0.0;
     if (strength <= 0.0) {
         imageStore(outputImage, pixel, center);
@@ -72,8 +134,8 @@ void main()
     float colorSigma = frameData.denoiser.x;
     float normalPower = frameData.denoiser.y;
     float depthSigma = frameData.denoiser.z;
-    vec3 normal = filterNormal(centerGuide);
-    float depth = uintBitsToFloat(centerGuide.x);
+    vec3 normal = centerGuide.geometry.xyz;
+    float depth = centerGuide.geometry.w;
 
     // On the center's tangent plane, the view depth through pixel offset
     // (dx, dy) is planeDepth / (c + a dx + b dy): the camera ray (forward +
@@ -91,35 +153,42 @@ void main()
     float pixelSize = depth * 2.0 * length(frameData.cameraUp.xyz) / size.y;
     float depthScale = depthSigma * pixelSize / max(abs(c) / length(ray), 0.05);
 
-    float variance = pass.firstIteration != 0u ? blurredVariance(pixel, key) : center.a;
+    float variance =
+        kTiled && pass.firstIteration != 0u ? blurredVariance(centerTap, key) : center.a;
     float centerLuminance = luminance(center.rgb);
     float luminanceTolerance = colorSigma * sqrt(max(0.0, variance)) + 1e-10;
 
+    // A tap's weight is kernel * strength * normal^normalPower * exp(-depth error /
+    // (depthScale * distance) - luminance difference / tolerance), as one exp2 (the
+    // filter is bound by such functions): the divisions by what the taps share are
+    // factors here, the kernel and 1 / distance (pixels) constants of each tap.
+    const float kLog2e = 1.4426950408889634;
+    float depthFactor = kLog2e / (depthScale * float(step));
+    float luminanceFactor = kLog2e / luminanceTolerance;
     const float kernel[3] = float[](1.0, 2.0 / 3.0, 1.0 / 6.0);
     vec3 sum = center.rgb;
     float varianceSum = center.a;
     float weights = 1.0;
-    for (int dy = -2; dy <= 2; ++dy) {
-        for (int dx = -2; dx <= 2; ++dx) {
+    [[unroll]] for (int dy = -2; dy <= 2; ++dy) {
+        [[unroll]] for (int dx = -2; dx <= 2; ++dx) {
             if (dx == 0 && dy == 0) {
                 continue;
             }
-            vec2 offset = vec2(dx, dy) * float(pass.step);
-            ivec2 tap = pixel + ivec2(offset);
-            if (!inside(tap)) {
-                continue;
+            int index = centerTap + dy * kTile + dx;
+            ivec2 tapPixel = pixel + ivec2(dx, dy) * step;
+            Tap tap = kTiled ? Tap(tileKey[index], tileGeometry[index]) : imageTap(tapPixel);
+            float denominator = c + (a * float(dx) + b * float(dy)) * float(step);
+            if (tap.key != key || denominator * c <= 0.0) {
+                continue;  // Another surface (or outside the image), or behind the camera.
             }
-            uvec2 tapGuide = imageLoad(filterGuide, tap).xy;
-            float denominator = c + a * offset.x + b * offset.y;
-            if (filterKey(tapGuide) != key || denominator * c <= 0.0) {
-                continue;
-            }
-            vec4 value = imageLoad(inputImage, tap);
-            float depthError = abs(uintBitsToFloat(tapGuide.x) - planeDepth / denominator);
+            vec4 value = kTiled ? tileValue[index] : imageLoad(inputImage, tapPixel);
+            float depthError = abs(tap.geometry.w - planeDepth / denominator);
+            // log2 of 0 is -inf (a weight of 0); of 1e-30, normalPower 0 still weighs 1.
+            float normalTerm = normalPower * log2(max(dot(normal, tap.geometry.xyz), 1e-30));
             float w = kernel[abs(dx)] * kernel[abs(dy)] * strength *
-                      pow(max(0.0, dot(normal, filterNormal(tapGuide))), normalPower) *
-                      exp(-depthError / (depthScale * length(offset)) -
-                          abs(luminance(value.rgb) - centerLuminance) / luminanceTolerance);
+                      exp2(normalTerm -
+                           depthError * depthFactor * inversesqrt(float(dx * dx + dy * dy)) -
+                           abs(luminance(value.rgb) - centerLuminance) * luminanceFactor);
             sum += w * value.rgb;
             varianceSum += w * w * value.a;
             weights += w;

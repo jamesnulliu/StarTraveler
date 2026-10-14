@@ -8,9 +8,9 @@
 //      pixel, or one of each 2x2 in turn, TraceResolution) into three layers:
 //      the primary surfaces' lighting, what they reflect (specular) and what
 //      the panes reflect (glass); while things move, the temporal gradients of
-//      their direct light (filtered by gradient.comp); fill.comp gives the
-//      pixels not traced their neighbors' samples;
-//   3. temporal (temporal.comp, per layer): reproject and accumulate;
+//      their direct light (filtered by gradient.comp);
+//   3. temporal (temporal.comp, per layer): reproject and accumulate (the
+//      pixels not traced borrow from the traced ones around them);
 //   4. a-trous (atrous.comp): the SVGF spatial filter, a few iterations;
 //   5. composite (composite.comp): lighting x albedo + emission + specular +
 //      glass into GpuRenderer's radiance image.
@@ -73,9 +73,10 @@ private:
     vulkan::Context* m_context;
     // hybrid_trace.comp, a pipeline per stage (TraceStage).
     std::array<vulkan::ComputePipeline, 4> m_trace;
-    vulkan::ComputePipeline m_fill;
-    vulkan::ComputePipeline m_temporal;
-    vulkan::ComputePipeline m_atrous;
+    // temporal.comp: every pixel traced, and some borrowing (TraceResolution::Half).
+    std::array<vulkan::ComputePipeline, 2> m_temporal;
+    // atrous.comp: reading the taps from the images, and tiled.
+    std::array<vulkan::ComputePipeline, 2> m_atrous;
     vulkan::ComputePipeline m_gradient;
     vulkan::ComputePipeline m_composite;
     std::array<vulkan::Buffer, kFramesInFlight> m_uniforms;

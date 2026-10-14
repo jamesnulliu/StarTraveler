@@ -109,12 +109,13 @@ the extension into `StarCore/python/starcore` (`$env:PYTHONPATH = "StarCore/pyth
 The drawing tools (line, ellipse, arc, polygon, curve, group, seed fill) work
 in both views; shapes are placed `Draw depth` units in front of the camera.
 The viewport is rendered on the GPU in real time by the hybrid pipeline
-(rasterized first hits, path tracing, samples reused across frames and
-denoised; see below), with samples per frame following a GPU time budget (8 ms
-by default). The Render panel switches to plain path tracing (the reference,
-which restarts whenever anything moves), traces at half resolution (a third
-less GPU time, more noise while moving), tunes the denoiser and shows its
-intermediate images. With `--cpu`, or on GPUs without ray queries, the CPU path
+(rasterized first hits, paths from a quarter of the pixels per frame, samples
+reused across frames and denoised; see below), with samples per frame
+following a GPU time budget (8 ms by default; less for a higher frame rate).
+The Render panel switches to plain path tracing (the reference, which restarts
+whenever anything moves), traces every pixel every frame (Trace resolution
+Full: less noise while moving, almost twice the GPU time), tunes the denoiser
+and shows its intermediate images. With `--cpu`, or on GPUs without ray queries, the CPU path
 tracer shows a noise-free preview while moving and path traces when still.
 Turning "Ray tracing" off (or `--raster`) rasterizes on the GPU instead: direct
 light with soft shadows from shadow maps, no reflections or bounced light, no
@@ -163,11 +164,11 @@ the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
     surfaces) and the lighting, divided by the albedo, goes through SVGF's
     edge-avoiding a-trous filter, which fades out as samples accumulate: a
     still image converges to the path tracer's (also checked by the tests).
-    At half trace resolution paths start from one pixel of each 2x2 per
-    frame, each in turn; the others borrow their neighbors' samples on the
-    same surface only until they have their own (just uncovered), so a still
-    image still converges, and the cockpit flies at 6.1 instead of 10.7 ms per
-    frame (932x856, an RTX 4060 laptop GPU), about 50% noisier.
+    At half trace resolution (the game's) paths start from one pixel of each
+    2x2 per frame, each in turn; the others borrow their neighbors' samples on
+    the same surface only until they have their own (just uncovered), so a
+    still image still converges, and the cockpit flies at 6.1 instead of 10.7
+    ms per frame (932x856, an RTX 4060 laptop GPU), about 50% noisier.
     Rasterized first hits are where textures will be sampled.
   - *Raster*: the same visibility buffer lit like the preview (sky, ambient,
     headlight, sphere lights), the nearest window pane blended over: no rays,

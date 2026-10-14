@@ -15,11 +15,14 @@
 //     the primary surface with the pane's expected transmittance, the other
 //     lobes (reflections) are traced as their own path into this layer.
 //
-// Three stages, each a pipeline of its own (kStage): for everything but the reflected paths;
-// for those: one per pixel, frame and layer (their layers keep their own
+// Four stages, each a pipeline of its own (kStage): the surfaces every pixel
+// sees (guides, motion, albedo, emission); the primary layer's paths; the
+// reflected paths, one per pixel, frame and layer (their layers keep their own
 // history), a fixed cost outside the samples per pixel, often the expensive
 // ones (from a cockpit's canopy back into the cockpit); and, while things
-// move, for the temporal gradients of the primary lighting (traceGradient).
+// move, the temporal gradients of the primary lighting (traceGradient). Paths
+// are traced from every pixel, or from one of each 2x2 in turn (traceStride,
+// TraceResolution::Half); fill.comp then fills in the others.
 // Reflections do not move with the surfaces reflecting them: their motion
 // vectors follow the reflected image (virtualMotion) of what their sample
 // reflected.
@@ -32,9 +35,10 @@
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
-const uint kStageSamples = 0u;      // Primary layer and guides.
-const uint kStageReflections = 1u;  // Reflected paths.
+const uint kStageSamples = 0u;      // The traced pixels: the primary layer's paths.
+const uint kStageReflections = 1u;  // The traced pixels: the reflected paths.
 const uint kStageGradients = 2u;    // One invocation per gradient stratum.
+const uint kStageSurfaces = 3u;     // Every pixel: guides, motion, albedo, emission, ids.
 
 // A pipeline per stage: each holds only its stage's code (as one shader, all
 // stages would get the registers of the most demanding: many paths inlined).
@@ -269,7 +273,7 @@ vec2 virtualMotion(SurfaceHit surface, uint primitive, vec3 direction, vec3 samp
     return then.xy - projectCurrent(image).xy;
 }
 
-/** Second dispatch: the paths reflected by the primary surface and the pane in front of it. */
+/** The traced pixels: the paths reflected by the primary surface and the pane in front of it. */
 void traceReflections(ivec2 pixel, vec3 origin, vec3 direction)
 {
     bool hasPrimary;
@@ -379,8 +383,12 @@ vec4 gradientAt(ivec2 pixel)
     }
     ivec2 previous = ivec2(floor(vec2(pixel) + frameData.viewport.zw +
                                  motionOf(instanceIndex, objectPoint).xy));
-    if (any(lessThan(previous, ivec2(0))) ||
-        any(greaterThanEqual(vec2(previous), viewportSize()))) {
+    if (any(lessThan(previous, ivec2(0)))) {
+        return none;
+    }
+    // Of the pixels around, the one that had a path then.
+    previous = previouslyTraced(previous);
+    if (any(greaterThanEqual(vec2(previous), viewportSize()))) {
         return none;
     }
     float before = imageLoad(previousDirectLight, previous).x;
@@ -430,29 +438,29 @@ void traceGradient(ivec2 stratum)
     imageStore(gradients, stratum, gradient);
 }
 
-void main()
+/**
+ * What the primary surface is seen through (throughPanes), and its albedo and
+ * emission past it (the sky's emission if there is none).
+ */
+void primaryThroughPanes(bool hasPrimary, SurfaceHit primary, Material surface, bool hasPane,
+                         SurfaceHit pane, vec3 direction, out vec3 transmittance,
+                         out vec3 albedo, out vec3 emission, out uint bounces)
 {
-    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
-    if (kStage == kStageGradients) {
-        if (all(lessThan(pixel, imageSize(gradients)))) {
-            traceGradient(pixel);
-        }
-        return;
+    throughPanes(hasPane, pane, hasPrimary ? primary.t : kFar, direction, transmittance, emission,
+                 bounces);
+    albedo = vec3(0.0);
+    if (hasPrimary) {
+        albedo = transmittance * surface.albedo.rgb;
+        emission += transmittance * surface.emission.rgb;
+    } else {
+        emission += transmittance * skyColor();
     }
-    if (any(greaterThanEqual(vec2(pixel), viewportSize()))) {
-        return;
-    }
-    vec3 origin = frameData.cameraPosition.xyz;
-    vec3 direction = cameraDirection(vec2(pixel) + frameData.viewport.zw);
-    if (kStage == kStageReflections) {
-        traceReflections(pixel, origin, direction);
-        return;
-    }
-    uint flags = frameData.options.x;
-    uint samples = max(1u, frameData.frame.z);
-    uint rng = rngForPixel(uint(pixel.x), uint(pixel.y), frameData.frame.x, frameData.frame.y);
+}
 
-    // First hits -----------------------------------------------------------------------------------
+/** Every pixel: the ids, guides, motion, albedo and emission of what it sees. */
+void writeSurfaces(ivec2 pixel, vec3 origin, vec3 direction)
+{
+    uint flags = frameData.options.x;
     bool hasPrimary;
     SurfaceHit primary;
     vec3 primaryPoint;
@@ -461,7 +469,6 @@ void main()
     vec3 panePoint;
     firstHits(pixel, origin, direction, hasPrimary, primary, primaryPoint, hasPane, pane,
               panePoint);
-    float primaryT = hasPrimary ? primary.t : kFar;
     Material surface;
     if (hasPrimary) {
         surface = materialOf(primary.instanceIndex);
@@ -515,36 +522,57 @@ void main()
 
     if ((flags & kFlagPreview) != 0u) {
         // Deterministic: all of it is "emission" (no lighting to filter).
-        imageStore(noisyPrimary, pixel, vec4(0.0));
         imageStore(frameAlbedo, pixel, vec4(0.0));
         imageStore(frameEmission, pixel, vec4(shadePreview(origin, direction), 0.0));
+        return;
+    }
+    vec3 transmittance;
+    vec3 albedo;
+    vec3 emission;
+    uint bounces;
+    primaryThroughPanes(hasPrimary, primary, surface, hasPane, pane, direction, transmittance,
+                        albedo, emission, bounces);
+    imageStore(frameAlbedo, pixel, vec4(albedo, 0.0));
+    imageStore(frameEmission, pixel, vec4(emission, 0.0));
+}
+
+/** The traced pixels: the primary layer's paths. */
+void traceSamples(ivec2 pixel, vec3 origin, vec3 direction)
+{
+    if ((frameData.options.x & kFlagPreview) != 0u) {
+        imageStore(noisyPrimary, pixel, vec4(0.0));
         imageStore(hits, pixel, uvec4(0u));
         imageStore(directLight, pixel, vec4(-1.0));
         return;
     }
-
-    // What the primary surface is seen through ----------------------------------------------------
+    uint samples = max(1u, frameData.frame.z);
+    uint rng = rngForPixel(uint(pixel.x), uint(pixel.y), frameData.frame.x, frameData.frame.y);
+    bool hasPrimary;
+    SurfaceHit primary;
+    vec3 primaryPoint;
+    bool hasPane;
+    SurfaceHit pane;
+    vec3 panePoint;
+    firstHits(pixel, origin, direction, hasPrimary, primary, primaryPoint, hasPane, pane,
+              panePoint);
+    Material surface;
+    if (hasPrimary) {
+        surface = materialOf(primary.instanceIndex);
+    }
     vec3 transmittance;
+    vec3 albedo;
     vec3 emission;
     uint primaryBounce;
-    throughPanes(hasPane, pane, primaryT, direction, transmittance, emission, primaryBounce);
-
-    vec3 albedo = vec3(0.0);
-    if (hasPrimary) {
-        albedo = transmittance * surface.albedo.rgb;
-        emission += transmittance * surface.emission.rgb;
-    } else {
-        emission += transmittance * skyColor();
-    }
+    primaryThroughPanes(hasPrimary, primary, surface, hasPane, pane, direction, transmittance,
+                        albedo, emission, primaryBounce);
     vec3 demodulation = 1.0 / demodulationAlbedo(albedo);
 
-    // Paths ---------------------------------------------------------------------------------------
     vec3 sum = vec3(0.0);
     float squares = 0.0;
     // The first path's direct light, for the next frame's gradients (gradientAt).
     float firstLight = -1.0;
     if (hasPrimary && primaryBounce < maxBounces() && maxComponent(transmittance) > 0.0) {
-        // The reflection is the specular layer's (second dispatch).
+        // The reflection is the specular layer's (traceReflections).
         uint lobes = hasSpecularLayer(surface) ? kLobesDiffuse | kLobesTransmission : 0u;
         for (uint s = 0u; s < samples; ++s) {
             PathState path = newPath();
@@ -562,9 +590,33 @@ void main()
         }
     }
     imageStore(noisyPrimary, pixel, vec4(sum, squares) / float(samples));
-    imageStore(frameAlbedo, pixel, vec4(albedo, 0.0));
-    imageStore(frameEmission, pixel, vec4(emission, 0.0));
     uvec2 opaque = imageLoad(visibility, pixel).xy;
     imageStore(hits, pixel, uvec4(opaque.x | (min(primaryBounce, 255u) << 24), opaque.y, 0u, 0u));
     imageStore(directLight, pixel, vec4(firstLight));
+}
+
+void main()
+{
+    ivec2 thread = ivec2(gl_GlobalInvocationID.xy);
+    if (kStage == kStageGradients) {
+        if (all(lessThan(thread, imageSize(gradients)))) {
+            traceGradient(thread);
+        }
+        return;
+    }
+    // Surfaces: a thread per pixel; paths: per block of traceStride()^2 pixels,
+    // for the one traced this frame.
+    ivec2 pixel = kStage == kStageSurfaces ? thread : tracedPixel(thread);
+    if (any(greaterThanEqual(vec2(pixel), viewportSize()))) {
+        return;
+    }
+    vec3 origin = frameData.cameraPosition.xyz;
+    vec3 direction = cameraDirection(vec2(pixel) + frameData.viewport.zw);
+    if (kStage == kStageSurfaces) {
+        writeSurfaces(pixel, origin, direction);
+    } else if (kStage == kStageReflections) {
+        traceReflections(pixel, origin, direction);
+    } else {
+        traceSamples(pixel, origin, direction);
+    }
 }

@@ -112,7 +112,8 @@ The viewport is rendered on the GPU in real time by the hybrid pipeline
 (rasterized first hits, path tracing, samples reused across frames and
 denoised; see below), with samples per frame following a GPU time budget (8 ms
 by default). The Render panel switches to plain path tracing (the reference,
-which restarts whenever anything moves), tunes the denoiser and shows its
+which restarts whenever anything moves), traces at half resolution (a third
+less GPU time, more noise while moving), tunes the denoiser and shows its
 intermediate images. With `--cpu`, or on GPUs without ray queries, the CPU path
 tracer shows a noise-free preview while moving and path traces when still.
 Turning "Ray tracing" off (or `--raster`) rasterizes on the GPU instead: direct
@@ -162,7 +163,12 @@ the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
     surfaces) and the lighting, divided by the albedo, goes through SVGF's
     edge-avoiding a-trous filter, which fades out as samples accumulate: a
     still image converges to the path tracer's (also checked by the tests).
-    Rasterized first hits are where textures will be sampled.
+    At half trace resolution paths start from one pixel of each 2x2 per
+    frame, each in turn; the others borrow their neighbors' samples on the
+    same surface only until they have their own (just uncovered), so a still
+    image still converges, and the cockpit flies at 6.7 instead of 10.4 ms per
+    frame, about 50% noisier. Rasterized first hits are where textures will be
+    sampled.
   - *Raster*: the same visibility buffer lit like the preview (sky, ambient,
     headlight, sphere lights), the nearest window pane blended over: no rays,
     so it also runs on GPUs without ray tracing hardware; jittered frames are
@@ -182,8 +188,8 @@ the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
   motion vectors and depths) and a vignette, and tone maps. With every effect
   off the image is exactly the tone-mapped one, as the CPU's.
   `starcore-render scene.yaml --gpu` (or `--hybrid`, with `--move`, `--view`,
-  or `--raster`, `--no-shadows`; `--bloom`, `--motion-blur`, `--vignette`)
-  renders offscreen.
+  `--half`, or `--raster`, `--no-shadows`; `--bloom`, `--motion-blur`,
+  `--vignette`) renders offscreen.
 - **Particles**: a CPU particle system (emitter components spreading their
   particles along the path they moved, bursts), drawn by the GPU renderer.
 - **2D raster**: Bresenham/midpoint/DDA lines, midpoint ellipses, Bezier and

@@ -281,6 +281,7 @@ auto GpuRenderer::needsReset(const RenderScene& scene, const Camera& camera,
         // Only new content discards samples; motion reprojects them.
         if (estimatorSettings(settings) != estimatorSettings(m_lastSettings) ||
             !options.denoiser.temporal || !m_lastTemporal ||
+            options.traceResolution != m_lastTraceResolution ||
             scene.contentVersion != m_lastContentVersion) {
             return true;
         }
@@ -500,6 +501,7 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
     m_lastPipeline = pipeline;
     m_lastTemporal = options.denoiser.temporal;
     m_lastShadows = options.shadows;
+    m_lastTraceResolution = options.traceResolution;
     m_lastCamera = camera;
     ++m_frameNumber;
     ++m_frameIndex;

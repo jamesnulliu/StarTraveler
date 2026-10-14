@@ -1,0 +1,174 @@
+#version 460
+// Hybrid renderer, fill (TraceResolution::Half): the pixels not traced this
+// frame (hybrid.glsl, tracedThisFrame) get the samples of the traced pixels
+// around them that saw the same surface, weighted by distance -- the primary
+// layer's lighting carried over divided by the albedo, so surface detail stays
+// the pixel's own -- and the reflections' motion and guides of the nearest of
+// them. temporal.comp keeps lent samples out of the history: they stand in
+// for a pixel's lighting only until it has samples of its own (new, or just
+// uncovered).
+
+#extension GL_GOOGLE_include_directive : require
+
+#define STARCORE_NO_RAY_QUERY
+#include "hybrid.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// Bindings 0-2 and 4-6 are the scene's (hybrid.glsl, scene.glsl).
+layout(set = 0, binding = 3, rgba32ui) uniform readonly uimage2D primaryGuide;
+layout(set = 0, binding = 7, rgba32ui) uniform readonly uimage2D glassGuide;
+layout(set = 0, binding = 8, rgba16f) uniform readonly image2D frameAlbedo;
+// Read at the traced pixels, written at the others (hybrid_trace.comp).
+layout(set = 0, binding = 9, rgba32f) uniform image2D noisyPrimary;
+layout(set = 0, binding = 10, rgba32f) uniform image2D noisyGlass;
+layout(set = 0, binding = 11, rgba32f) uniform image2D noisySpecular;
+layout(set = 0, binding = 12, rgba32f) uniform image2D reflectionMotion;
+layout(set = 0, binding = 13, rgba32ui) uniform uimage2D reflectionGuide;
+
+// Traced pixels this far (pixels, each axis) may lend their samples: two to
+// four of them, one in each 2x2 block.
+const int kReach = 1;
+
+/** Where a pixel's sample saw its surface (the guide's view depth along its ray). */
+vec3 guidePoint(ivec2 pixel, uvec4 guide)
+{
+    vec3 direction = cameraDirection(vec2(pixel) + frameData.viewport.zw);
+    return frameData.cameraPosition.xyz +
+           direction * (guideDepth(guide) / dot(direction, frameData.cameraForward.xyz));
+}
+
+/**
+ * Weight of a traced pixel's samples for a pixel on the surface `guide` (at
+ * `point`): the same instance, a similar normal, on its tangent plane, nearer
+ * weighing more; 0 for another surface.
+ */
+float lend(uvec4 guide, vec3 point, ivec2 offset, ivec2 tap, uvec4 tapGuide)
+{
+    if (tapGuide.z != guide.z || guide.z == 0u) {
+        return 0.0;
+    }
+    vec3 normal = guideNormal(guide);
+    float tolerance = 0.01 * guideDepth(guide) * length(vec2(offset));
+    if (dot(guideNormal(tapGuide), normal) < 0.8 ||
+        abs(dot(normal, guidePoint(tap, tapGuide) - point)) > tolerance) {
+        return 0.0;
+    }
+    return 1.0 - length(vec2(offset)) / 2.0;
+}
+
+/** How much a traced pixel's surface is like a pixel's (a fallback lender's rank). */
+float fallbackScore(uvec4 guide, ivec2 offset, uvec4 tapGuide)
+{
+    if (tapGuide.z == 0u) {
+        return -1e9;  // Sky: nothing to lend.
+    }
+    float score = tapGuide.z == guide.z ? 4.0 : 0.0;
+    return score + dot(guideNormal(tapGuide), guideNormal(guide)) - 0.1 * length(vec2(offset));
+}
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    if (any(greaterThanEqual(vec2(pixel), viewportSize())) || tracedThisFrame(pixel)) {
+        return;
+    }
+    uvec4 primary = imageLoad(primaryGuide, pixel);
+    uvec4 glass = imageLoad(glassGuide, pixel);
+    vec3 primaryPoint = primary.z != 0u ? guidePoint(pixel, primary) : vec3(0.0);
+    vec3 glassPoint = glass.z != 0u ? guidePoint(pixel, glass) : vec3(0.0);
+
+    // Sums of the lent samples (the primary layer's divided by the albedo).
+    vec4 lighting = vec4(0.0);
+    vec4 specular = vec4(0.0);
+    vec4 reflections = vec4(0.0);  // The glass layer's.
+    float primaryWeights = 0.0;
+    float glassWeights = 0.0;
+    // The nearest lender per layer: its reflections' motion and guides.
+    float nearestPrimary = 0.0;
+    float nearestGlass = 0.0;
+    ivec2 primaryLender = ivec2(-1);
+    ivec2 glassLender = ivec2(-1);
+    // Where no lender saw the same surface (a silhouette, a sliver): the
+    // traced pixel most like one, on the same instance first.
+    float bestPrimary = -1e9;
+    float bestGlass = -1e9;
+    ivec2 primaryFallback = ivec2(-1);
+    ivec2 glassFallback = ivec2(-1);
+    for (int dy = -kReach; dy <= kReach; ++dy) {
+        for (int dx = -kReach; dx <= kReach; ++dx) {
+            ivec2 offset = ivec2(dx, dy);
+            ivec2 tap = pixel + offset;
+            if (any(lessThan(tap, ivec2(0))) || any(greaterThanEqual(vec2(tap), viewportSize())) ||
+                !tracedThisFrame(tap)) {
+                continue;
+            }
+            uvec4 tapPrimary = imageLoad(primaryGuide, tap);
+            float score = fallbackScore(primary, offset, tapPrimary);
+            if (score > bestPrimary) {
+                bestPrimary = score;
+                primaryFallback = tap;
+            }
+            float w = lend(primary, primaryPoint, offset, tap, tapPrimary);
+            if (w > 0.0) {
+                vec4 value = imageLoad(noisyPrimary, tap);
+                vec3 tapAlbedo = imageLoad(frameAlbedo, tap).rgb;
+                lighting += w * vec4(value.rgb / demodulationAlbedo(tapAlbedo), value.a);
+                specular += w * imageLoad(noisySpecular, tap);
+                primaryWeights += w;
+                if (w > nearestPrimary) {
+                    nearestPrimary = w;
+                    primaryLender = tap;
+                }
+            }
+            if (glass.z != 0u) {
+                uvec4 tapGlass = imageLoad(glassGuide, tap);
+                float glassScore = fallbackScore(glass, offset, tapGlass);
+                if (glassScore > bestGlass) {
+                    bestGlass = glassScore;
+                    glassFallback = tap;
+                }
+                float g = lend(glass, glassPoint, offset, tap, tapGlass);
+                if (g > 0.0) {
+                    reflections += g * imageLoad(noisyGlass, tap);
+                    glassWeights += g;
+                    if (g > nearestGlass) {
+                        nearestGlass = g;
+                        glassLender = tap;
+                    }
+                }
+            }
+        }
+    }
+    if (primaryWeights <= 0.0 && primary.z != 0u && primaryFallback.x >= 0) {
+        vec4 value = imageLoad(noisyPrimary, primaryFallback);
+        vec3 lenderAlbedo = imageLoad(frameAlbedo, primaryFallback).rgb;
+        lighting = vec4(value.rgb / demodulationAlbedo(lenderAlbedo), value.a);
+        specular = imageLoad(noisySpecular, primaryFallback);
+        primaryWeights = 1.0;
+        primaryLender = primaryFallback;
+    }
+    if (glassWeights <= 0.0 && glass.z != 0u && glassFallback.x >= 0) {
+        reflections = imageLoad(noisyGlass, glassFallback);
+        glassWeights = 1.0;
+        glassLender = glassFallback;
+    }
+
+    vec3 albedo = imageLoad(frameAlbedo, pixel).rgb;
+    lighting = primaryWeights > 0.0 ? lighting / primaryWeights : vec4(0.0);
+    imageStore(noisyPrimary, pixel, vec4(lighting.rgb * demodulationAlbedo(albedo), lighting.a));
+    imageStore(noisySpecular, pixel, primaryWeights > 0.0 ? specular / primaryWeights : vec4(0.0));
+    imageStore(noisyGlass, pixel, glassWeights > 0.0 ? reflections / glassWeights : vec4(0.0));
+    vec4 motion = vec4(0.0);
+    uvec4 reflected = uvec4(0u);
+    if (primaryLender.x >= 0) {
+        motion.xy = imageLoad(reflectionMotion, primaryLender).xy;
+        reflected.xy = imageLoad(reflectionGuide, primaryLender).xy;
+    }
+    if (glassLender.x >= 0) {
+        motion.zw = imageLoad(reflectionMotion, glassLender).zw;
+        reflected.zw = imageLoad(reflectionGuide, glassLender).zw;
+    }
+    imageStore(reflectionMotion, pixel, motion);
+    imageStore(reflectionGuide, pixel, reflected);
+}

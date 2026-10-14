@@ -44,6 +44,7 @@ struct GpuOptions
     std::string view = "Final";
     bool spatial = true;
     bool temporal = true;
+    bool half = false;  // TraceResolution::Half
     starcore::Vec3 move{0.0F};  // Camera translation per frame.
     starcore::Entity movedEntity;
     starcore::Vec3 entityMove{0.0F};  // Its translation per frame.
@@ -68,6 +69,8 @@ auto renderOnGpu([[maybe_unused]] starcore::Scene& scene,
         options.pipeline = starcore::GpuPipeline::Hybrid;
         options.denoiser.spatial = gpuOptions.spatial;
         options.denoiser.temporal = gpuOptions.temporal;
+        options.traceResolution =
+            gpuOptions.half ? starcore::TraceResolution::Half : starcore::TraceResolution::Full;
         if (!starcore::enumFromString(gpuOptions.view, options.view)) {
             SC_ERROR("Unknown view \"{}\"", gpuOptions.view);
             return std::nullopt;
@@ -174,6 +177,8 @@ auto main(int argc, char** argv) -> int
                    "History");
     app.add_flag("--no-spatial", noSpatial, "Hybrid: no spatial filter");
     app.add_flag("--no-temporal", noTemporal, "Hybrid: no reprojection");
+    app.add_flag("--half", gpuOptions.half,
+                 "Hybrid: paths from one pixel of each 2x2 per frame, in turn");
     app.add_option("--move", move, "GPU: camera translation per frame x y z")->expected(3);
     app.add_option("--move-entity", moveEntity,
                    "GPU: translation per frame of an entity (by name): name x y z")

@@ -23,7 +23,7 @@ layout(set = 0, binding = 1, std140) uniform FrameUniforms
     vec4 previousJitter;  // xy: the sample position of the previous frame
     uvec4 frame;     // random stream index, seed, samples per pixel, max bounces
     uvec4 options;   // flags, instance mask, light count, tone mapper
-    uvec4 history;   // cap (frames while things move; 0 = none), kHistory* bits, view, -
+    uvec4 history;   // cap (frames while things move; 0 = none), kHistory* bits, view, traced pixels
     vec4 denoiser;   // color sigma, normal power, depth sigma, -
 }
 frameData;
@@ -36,6 +36,56 @@ const uint kFlagWriteIds = 8u;
 // history.y
 const uint kHistoryReset = 1u;   // Ignore earlier frames.
 const uint kHistoryStatic = 2u;  // Nothing moved since the last frame.
+// Pixels traced (history.w, gpu::TraceResolution): bits 0-7 the stride, 1
+// for every pixel, 2 for one of each 2x2 per frame, in turn; bits 8-15 this
+// frame's turn, 16-23 the previous frame's.
+uint traceStride()
+{
+    return frameData.history.w & 0xFFu;
+}
+
+/** Which pixel of a block is traced on a turn: diagonals first, every pixel in 4 turns. */
+ivec2 traceOffset(uint turn)
+{
+    const ivec2 kOffsets[4] = ivec2[](ivec2(0, 0), ivec2(1, 1), ivec2(1, 0), ivec2(0, 1));
+    return traceStride() == 1u ? ivec2(0) : kOffsets[turn & 3u];
+}
+
+ivec2 currentTraceOffset()
+{
+    return traceOffset(frameData.history.w >> 8);
+}
+
+ivec2 previousTraceOffset()
+{
+    return traceOffset(frameData.history.w >> 16);
+}
+
+/** Whether a pixel's paths were traced this frame (the others are filled in, fill.comp). */
+bool tracedThisFrame(ivec2 pixel)
+{
+    return all(equal(pixel % int(traceStride()), currentTraceOffset()));
+}
+
+/** The pixel a thread of a dispatch over blocks traces this frame. */
+ivec2 tracedPixel(ivec2 block)
+{
+    return block * int(traceStride()) + currentTraceOffset();
+}
+
+/** The pixel of a block that was traced in the previous frame. */
+ivec2 previouslyTraced(ivec2 pixel)
+{
+    int stride = int(traceStride());
+    return pixel / stride * stride + previousTraceOffset();
+}
+
+/** Of a frame's samples per pixel, how many a pixel gets on average. */
+float traceRate()
+{
+    float stride = float(traceStride());
+    return 1.0 / (stride * stride);
+}
 
 /** gpu::InstanceTransformRecord: rows of 3x4 matrices. */
 struct InstanceTransform

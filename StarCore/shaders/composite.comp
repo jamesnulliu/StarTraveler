@@ -75,7 +75,7 @@ void main()
     case kViewHistory: {  // Raw.
         // The cap in samples (still: 64 frames).
         uint frames = frameData.history.x != 0u ? frameData.history.x : 64u;
-        float cap = float(frames * max(1u, frameData.frame.z));
+        float cap = float(frames * max(1u, frameData.frame.z)) * traceRate();
         radiance = vec3(imageLoad(primaryHistory, pixel).a / cap);
         break;
     }

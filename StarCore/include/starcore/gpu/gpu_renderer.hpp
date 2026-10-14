@@ -79,6 +79,23 @@ struct EnumNames<HybridView>
                                           "Glass", "Variance", "Motion", "History"};
 };
 
+/** @brief Which pixels the hybrid pipeline traces paths from each frame. */
+enum class TraceResolution : std::uint8_t
+{
+    Full,  // Every pixel.
+    // One pixel of each 2x2, each in turn: a quarter of the paths. The others
+    // borrow their neighbors' samples on the same surface while their history
+    // is young (new, or just uncovered), else wait for their own: half the
+    // resolution while things move, all of it as the history fills.
+    Half,
+};
+
+template <>
+struct EnumNames<TraceResolution>
+{
+    static constexpr std::array kNames = {"Full", "Half"};
+};
+
 /** @brief Sample reuse of the hybrid pipeline (SVGF-style). */
 struct DenoiserSettings
 {
@@ -141,6 +158,7 @@ struct ShadowSettings
 struct GpuRenderOptions
 {
     GpuPipeline pipeline = GpuPipeline::PathTracing;
+    TraceResolution traceResolution = TraceResolution::Full;  // Hybrid.
     DenoiserSettings denoiser;
     ShadowSettings shadows;
     HybridView view = HybridView::Final;
@@ -325,6 +343,7 @@ private:
     GpuPipeline m_lastPipeline = GpuPipeline::PathTracing;
     bool m_lastTemporal = true;
     ShadowSettings m_lastShadows;
+    TraceResolution m_lastTraceResolution = TraceResolution::Full;
     Camera m_lastCamera;  // For the hybrid pipeline's motion vectors.
 };
 

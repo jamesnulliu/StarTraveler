@@ -5,7 +5,8 @@
 //
 // The history holds means weighted by sample count (rgb, a = samples). While
 // nothing moves the count is unbounded: the means converge like the reference
-// accumulation. While things move it is capped (fewer samples for what smooth
+// accumulation (of each pixel's own samples: a pixel not traced, of
+// TraceResolution::Half, has its neighbors' only until it has some). While things move it is capped (fewer samples for what smooth
 // surfaces let through), and the lighting's keeps less where the temporal
 // gradients say it changed, like where a shadow moved on (A-SVGF, Schied et
 // al., HPG 2018). The primary layer also keeps the means of its albedo and
@@ -275,6 +276,7 @@ void main()
             history.color += weights[i] * h.color;
             history.albedo += weights[i] * h.albedo;
             history.emission += weights[i] * h.emission;
+
             history.moments += weights[i] * h.moments;
             total += weights[i];
         }
@@ -282,6 +284,7 @@ void main()
             history.color /= total;
             history.albedo /= total;
             history.emission /= total;
+
             history.moments /= total;
             if (cap > 0u && current.z != 0u && isPrimary()) {
                 // Of the lighting that changed, the history keeps that much less
@@ -298,19 +301,22 @@ void main()
         }
     }
 
-    // Accumulate this frame's samples.
+    // Accumulate this frame's samples, if its paths were traced (of a pixel not
+    // traced, TraceResolution::Half, the history waits for its own).
     float previousSamples = history.color.a;
     if (cap > 0u) {
         // Shorter history where the filter may not blur the lighting: what smooth
         // surfaces let through is a sharp image moving unlike them. (Reflections keep
         // all of it: they are reprojected from where their image was.)
-        // The cap counts frames: more samples per frame make the history smoother.
+        // The cap counts frames: more samples per frame make the history smoother
+        // (and fewer pixels traced per frame, rougher).
         float strength = isPrimary() && current.z != 0u ? guideStrength(current, pass.layer) : 1.0;
-        previousSamples =
-            min(previousSamples, float(cap * frameSamples()) * mix(0.25, 1.0, strength));
+        previousSamples = min(previousSamples, float(cap * frameSamples()) * traceRate() *
+                                                   mix(0.25, 1.0, strength));
     }
-    float samples = previousSamples + float(frameSamples());
-    float weight = float(frameSamples()) / samples;
+    float frameWeight = tracedThisFrame(pixel) ? float(frameSamples()) : 0.0;
+    float samples = previousSamples + frameWeight;
+    float weight = samples > 0.0 ? frameWeight / samples : 0.0;
     vec3 frameLighting = demodulated(frameNoisy.rgb, currentAlbedo);
     vec2 frameMoments = vec2(luminance(frameLighting), frameNoisy.a);
     // mean + (value - mean) * weight, not mix(): exact where the value is the mean.
@@ -318,6 +324,11 @@ void main()
     vec3 meanAlbedo = history.albedo + (currentAlbedo - history.albedo) * weight;
     vec3 meanEmission = history.emission + (currentEmission - history.emission) * weight;
     vec2 meanMoments = history.moments + (frameMoments - history.moments) * weight;
+    if (samples <= 0.0) {
+        // None yet: this frame's surface (lit by its neighbors' samples, below).
+        meanAlbedo = currentAlbedo;
+        meanEmission = currentEmission;
+    }
     imageStore(color, pixel, vec4(mean, samples));
     imageStore(moments, pixel, vec4(meanMoments, 0.0, 0.0));
     if (isPrimary()) {
@@ -326,11 +337,17 @@ void main()
     }
 
     // Filter input: the lighting and the variance of its mean.
+    if (samples <= 0.0) {
+        // No sample of its own yet (not traced since it came into view): its
+        // neighbors' (fill.comp), as uncertain as one frame of theirs.
+        float spread = current.z != 0u ? spatialVariance(pixel, current.z) : 0.0;
+        imageStore(filterInput, pixel, vec4(frameLighting, spread / float(frameSamples())));
+        return;
+    }
     float variance = max(0.0, meanMoments.y - meanMoments.x * meanMoments.x);
     // A young history (new, or cut short by the gradients): its moments say little.
     if (previousSamples < 4.0 * float(frameSamples()) && current.z != 0u) {
         variance = max(variance, spatialVariance(pixel, current.z));
     }
-    imageStore(filterInput, pixel,
-               vec4(demodulated(mean, meanAlbedo), variance / samples));
+    imageStore(filterInput, pixel, vec4(demodulated(mean, meanAlbedo), variance / samples));
 }

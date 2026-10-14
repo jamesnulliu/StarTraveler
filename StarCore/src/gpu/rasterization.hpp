@@ -32,7 +32,7 @@ struct FrameUniforms
     Vec4 previousJitter;         // xy: the previous frame's
     std::uint32_t frame[4];      // random stream index, seed, samples per pixel, max bounces
     std::uint32_t options[4];    // flags, instance mask, light count, tone mapper
-    std::uint32_t history[4];    // cap (0 = none), reset/still bits, view, -
+    std::uint32_t history[4];    // cap (0 = none), reset/still bits, view, traced pixels
     Vec4 denoiser;               // color sigma, normal power, depth sigma, -
 };
 static_assert(sizeof(FrameUniforms) == 240, "std140 layout of FrameUniforms");

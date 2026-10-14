@@ -553,9 +553,10 @@ TEST_CASE("GPU: scene updates upload only what changed", "[gpu]")
 namespace
 {
 
-auto hybridOptions(bool spatial = true) -> GpuRenderOptions
+auto hybridOptions(bool spatial = true, TraceResolution resolution = TraceResolution::Full)
+    -> GpuRenderOptions
 {
-    GpuRenderOptions options{.pipeline = GpuPipeline::Hybrid};
+    GpuRenderOptions options{.pipeline = GpuPipeline::Hybrid, .traceResolution = resolution};
     options.denoiser.spatial = spatial;
     return options;
 }
@@ -565,6 +566,9 @@ auto hybridOptions(bool spatial = true) -> GpuRenderOptions
 TEST_CASE("GPU hybrid: emissive sphere, sky and white furnace", "[gpu][hybrid]")
 {
     const GpuTest gpu;
+    // Pixels not traced (half resolution) fill in what their neighbors found.
+    const TraceResolution resolution = GENERATE(TraceResolution::Full, TraceResolution::Half);
+    INFO("trace resolution " << enumToString(resolution));
     for (const Vec3 sky : {Vec3(0.0F), Vec3(0.0F, 0.0F, 1.0F)}) {
         Scene scene;
         scene.environment().skyColor = sky;
@@ -573,7 +577,8 @@ TEST_CASE("GPU hybrid: emissive sphere, sky and white furnace", "[gpu][hybrid]")
         ball.add<MaterialComponent>(MaterialComponent{
             .albedo = Vec3(0.0F), .emissionColor = {1.0F, 0.0F, 0.0F}, .emissionPower = 1.0F});
         auto tracer = gpu.makeRenderer(64, 48);
-        tracer->render(buildRenderScene(scene), makeCamera(64, 48), {}, hybridOptions());
+        tracer->render(buildRenderScene(scene), makeCamera(64, 48), {},
+                       hybridOptions(true, resolution));
         const ColorImage image = tracer->readImage();
         const IdImage ids = tracer->readEntityIds();
         REQUIRE(image.at(0, 0) == packRgba8(Vec4(sky, 1.0F)));
@@ -597,7 +602,8 @@ TEST_CASE("GPU hybrid: emissive sphere, sky and white furnace", "[gpu][hybrid]")
         const RenderScene renderScene = buildRenderScene(scene);
         const PathTracerSettings settings{.maxBounces = 16, .srgbOutput = false};
         for (int i = 0; i < 4; ++i) {
-            tracer->render(renderScene, makeCamera(32, 32), settings, hybridOptions());
+            tracer->render(renderScene, makeCamera(32, 32), settings,
+                           hybridOptions(true, resolution));
         }
         const ColorImage image = tracer->readImage();
         for (const std::uint32_t pixel : image.pixels()) {
@@ -654,11 +660,14 @@ TEST_CASE("GPU hybrid: a still view converges to the path tracer's image", "[gpu
     }
     const ColorImage expected = reference->readImage();
 
+    // Half resolution: each pixel's own samples, a quarter of them (the
+    // neighbors' only count while its history is young).
+    const TraceResolution resolution = GENERATE(TraceResolution::Full, TraceResolution::Half);
     for (const bool spatial : {false, true}) {
-        INFO("spatial filter: " << spatial);
+        INFO("spatial filter: " << spatial << ", trace resolution " << enumToString(resolution));
         auto hybrid = gpu.makeRenderer(kWidth, kHeight);
         for (int i = 0; i < 128; ++i) {
-            hybrid->render(renderScene, camera, settings, hybridOptions(spatial));
+            hybrid->render(renderScene, camera, settings, hybridOptions(spatial, resolution));
         }
         REQUIRE(hybrid->accumulatedFrames() == 128);
         const BlockDifference difference = blockDifference(hybrid->readImage(), expected);
@@ -688,9 +697,10 @@ TEST_CASE("GPU hybrid: samples are reused while moving and filtered", "[gpu][hyb
     }
     const ColorImage expected = reference->readImage();
 
+    const TraceResolution resolution = GENERATE(TraceResolution::Full, TraceResolution::Half);
     // 32 still frames, then 4 frames moving to `moved`; or one frame there.
     auto render = [&](bool spatial, bool temporal) {
-        GpuRenderOptions options = hybridOptions(spatial);
+        GpuRenderOptions options = hybridOptions(spatial, resolution);
         options.denoiser.temporal = temporal;
         auto tracer = gpu.makeRenderer(kWidth, kHeight);
         if (temporal) {
@@ -712,8 +722,8 @@ TEST_CASE("GPU hybrid: samples are reused while moving and filtered", "[gpu][hyb
     const float reused = render(false, true);
     const float fresh = render(false, false);
     const float filtered = render(true, false);
-    INFO("mean error: reprojected " << reused << ", one frame " << fresh << ", filtered "
-                                    << filtered);
+    INFO("trace resolution " << enumToString(resolution) << ", mean error: reprojected "
+                             << reused << ", one frame " << fresh << ", filtered " << filtered);
     // 0.50 and 0.57 (lights picked by how much they may light a point; picked
     // uniformly, one frame was noisier: 0.39 and 0.51).
     CHECK(reused < 0.6F * fresh);
@@ -1088,6 +1098,11 @@ TEST_CASE("GPU hybrid: what restarts the accumulation", "[gpu][hybrid]")
     hybrid->render(renderScene, camera, bounces, hybridOptions());
     REQUIRE(hybrid->accumulatedFrames() == 1);
     hybrid->render(renderScene, camera, bounces);
+    REQUIRE(hybrid->accumulatedFrames() == 1);
+    hybrid->render(renderScene, camera, bounces, hybridOptions());
+    REQUIRE(hybrid->accumulatedFrames() == 1);
+    hybrid->render(renderScene, camera, bounces, hybridOptions());
+    hybrid->render(renderScene, camera, bounces, hybridOptions(true, TraceResolution::Half));
     REQUIRE(hybrid->accumulatedFrames() == 1);
     hybrid->render(renderScene, camera, bounces, hybridOptions());
     REQUIRE(hybrid->accumulatedFrames() == 1);

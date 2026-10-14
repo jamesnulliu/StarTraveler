@@ -4,10 +4,12 @@
 //      jittered projection, the primary surfaces and then, over a copy of
 //      their depth, the nearest smooth window panes (the glass layer);
 //   2. trace (hybrid_trace.comp): rebuild the hits of both from those ids,
-//      write their guides and motion vectors, trace paths from them into
-//      three layers: the primary surfaces' lighting, what they reflect
-//      (specular) and what the panes reflect (glass); while things move, the
-//      temporal gradients of their direct light (filtered by gradient.comp);
+//      write their guides and motion vectors, trace paths from them (every
+//      pixel, or one of each 2x2 in turn, TraceResolution) into three layers:
+//      the primary surfaces' lighting, what they reflect (specular) and what
+//      the panes reflect (glass); while things move, the temporal gradients of
+//      their direct light (filtered by gradient.comp); fill.comp gives the
+//      pixels not traced their neighbors' samples;
 //   3. temporal (temporal.comp, per layer): reproject and accumulate;
 //   4. a-trous (atrous.comp): the SVGF spatial filter, a few iterations;
 //   5. composite (composite.comp): lighting x albedo + emission + specular +
@@ -70,7 +72,8 @@ private:
 
     vulkan::Context* m_context;
     // hybrid_trace.comp, a pipeline per stage (TraceStage).
-    std::array<vulkan::ComputePipeline, 3> m_trace;
+    std::array<vulkan::ComputePipeline, 4> m_trace;
+    vulkan::ComputePipeline m_fill;
     vulkan::ComputePipeline m_temporal;
     vulkan::ComputePipeline m_atrous;
     vulkan::ComputePipeline m_gradient;

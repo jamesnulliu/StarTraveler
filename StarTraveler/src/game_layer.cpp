@@ -864,6 +864,12 @@ void GameLayer::drawRenderPanel()
                               "moves (the reference).");
         }
         if (gpu.pipeline == GpuPipeline::Hybrid) {
+            enumCombo("Trace resolution", gpu.traceResolution);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Half: paths from one pixel of each 2x2 per frame, in turn (a "
+                                  "third less GPU time in the cockpit, more noise while moving; "
+                                  "still images converge alike)");
+            }
             DenoiserSettings& denoiser = gpu.denoiser;
             ImGui::Checkbox("Reuse samples", &denoiser.temporal);
             ImGui::SameLine();

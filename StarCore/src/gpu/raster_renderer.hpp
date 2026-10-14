@@ -1,10 +1,11 @@
 #pragma once
 // The Raster pipeline of GpuRenderer (private): no rays at all. Per frame:
-//   1. visibility (VisibilityPass): the nearest surface and the nearest thin
+//   1. shadow maps (ShadowMaps): the scene's depth from the brightest lights;
+//   2. visibility (VisibilityPass): the nearest surface and the nearest thin
 //      transmissive surface in front of it, per pixel;
-//   2. shade (raster.comp): preview lighting without shadows, the glass
-//      blended over, averaged over jittered frames while nothing changes,
-//      into GpuRenderer's radiance image; and motion vectors.
+//   3. shade (raster.comp): preview lighting, shadows looked up in the shadow
+//      maps, the glass blended over, averaged over jittered frames while
+//      nothing changes, into GpuRenderer's radiance image; and motion vectors.
 
 #include <array>
 #include <cstdint>
@@ -12,6 +13,7 @@
 #include <vulkan/vulkan.h>
 
 #include "rasterization.hpp"
+#include "shadow_maps.hpp"
 #include "starcore/gpu/gpu_scene.hpp"
 #include "starcore/render/path_tracer.hpp"
 #include "starcore/vulkan/pipeline.hpp"
@@ -27,6 +29,7 @@ struct RasterFrame
     const Camera* camera = nullptr;
     const Camera* previousCamera = nullptr;  // For motion vectors.
     PathTracerSettings settings;             // The instance mask.
+    ShadowSettings shadows;
     std::uint32_t frameSlot = 0;
     // Frames averaged before this one (0: start over, sampling pixel centers).
     std::uint32_t accumulated = 0;
@@ -59,6 +62,7 @@ public:
 private:
     vulkan::Context* m_context;
     vulkan::ComputePipeline m_shade;
+    ShadowMaps m_shadows;
     std::array<vulkan::Buffer, kFramesInFlight> m_uniforms;
     vulkan::Image m_motion;
 };

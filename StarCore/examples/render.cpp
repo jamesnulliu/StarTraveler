@@ -40,6 +40,7 @@ struct GpuOptions
 {
     bool hybrid = false;
     bool raster = false;
+    starcore::ShadowSettings shadows;  // Raster.
     std::string view = "Final";
     bool spatial = true;
     bool temporal = true;
@@ -75,6 +76,7 @@ auto renderOnGpu([[maybe_unused]] starcore::Scene& scene,
     if (gpuOptions.raster) {
         options.pipeline = starcore::GpuPipeline::Raster;
     }
+    options.shadows = gpuOptions.shadows;
     options.effects.bloom = gpuOptions.bloom;
     options.effects.motionBlur = gpuOptions.motionBlur;
     options.effects.vignette = gpuOptions.vignette;
@@ -139,6 +141,7 @@ auto main(int argc, char** argv) -> int
     GpuOptions gpuOptions;
     bool noSpatial = false;
     bool noTemporal = false;
+    bool noShadows = false;
     std::vector<float> move;
     std::vector<std::string> moveEntity;
     starcore::PathTracerSettings settings;
@@ -160,7 +163,12 @@ auto main(int argc, char** argv) -> int
     app.add_flag("--hybrid", gpuOptions.hybrid,
                  "GPU, hybrid pipeline: rasterized first hits, reprojection and denoising");
     app.add_flag("--raster", gpuOptions.raster,
-                 "GPU, raster pipeline: direct light without shadows, no rays");
+                 "GPU, raster pipeline: direct light, shadow maps, no rays");
+    app.add_flag("--no-shadows", noShadows, "Raster: no shadow maps");
+    app.add_option("--shadow-distance", gpuOptions.shadows.distance,
+                   "Raster: how far from the camera far lights cast shadows");
+    app.add_option("--shadow-resolution", gpuOptions.shadows.resolution,
+                   "Raster: texels per side of a shadow map");
     app.add_option("--view", gpuOptions.view,
                    "Hybrid: Final, Noisy, Albedo, Lighting, Specular, Glass, Variance, Motion, "
                    "History");
@@ -180,6 +188,7 @@ auto main(int argc, char** argv) -> int
     CLI11_PARSE(app, argc, argv);
     gpuOptions.spatial = !noSpatial;
     gpuOptions.temporal = !noTemporal;
+    gpuOptions.shadows.enabled = !noShadows;
     if (move.size() == 3) {
         gpuOptions.move = {move[0], move[1], move[2]};
     }

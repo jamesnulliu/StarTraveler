@@ -223,12 +223,12 @@ void Image::destroy() noexcept
 
 // Sampler -----------------------------------------------------------------------------------------
 
-Sampler::Sampler(Context& context) : m_context(&context)
+Sampler::Sampler(Context& context, VkFilter filter) : m_context(&context)
 {
     VkSamplerCreateInfo info{};
     info.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
-    info.magFilter = VK_FILTER_LINEAR;
-    info.minFilter = VK_FILTER_LINEAR;
+    info.magFilter = filter;
+    info.minFilter = filter;
     info.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
     info.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     info.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;

@@ -17,27 +17,10 @@ draw;
 
 layout(location = 0) flat out uint outPrimitive;
 
-// The 36 corners of a [-1, 1]^3 cube's 12 triangles (bit i: axis i positive).
-const uint kCubeCorners[36] = uint[](0u, 2u, 1u, 1u, 2u, 3u,  // -z
-                                     4u, 5u, 6u, 5u, 7u, 6u,  // +z
-                                     0u, 1u, 4u, 1u, 5u, 4u,  // -y
-                                     2u, 6u, 3u, 3u, 6u, 7u,  // +y
-                                     0u, 4u, 2u, 2u, 4u, 6u,  // -x
-                                     1u, 3u, 5u, 3u, 7u, 5u   // +x
-);
-
 void main()
 {
-    Instance instance = instances[draw.instanceIndex];
-    vec3 p;
-    if (instance.kind == kGeometrySphere) {
-        uint corner = kCubeCorners[gl_VertexIndex];
-        p = vec3((corner & 1u) != 0u ? 1.0 : -1.0, (corner & 2u) != 0u ? 1.0 : -1.0,
-                 (corner & 4u) != 0u ? 1.0 : -1.0);
-    } else {
-        p = loadVec3(instance.positions, UintArray(instance.indices).values[gl_VertexIndex]);
-    }
-    vec3 d = transformPoint(transforms[draw.instanceIndex].objectToWorld, p) -
+    vec3 d = transformPoint(transforms[draw.instanceIndex].objectToWorld,
+                            drawnVertex(draw.instanceIndex, uint(gl_VertexIndex))) -
              frameData.cameraPosition.xyz;
 
     // x/w and y/w: NDC of the camera ray convention, shifted by half a pixel

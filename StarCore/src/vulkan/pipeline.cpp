@@ -124,7 +124,9 @@ GraphicsPipeline::GraphicsPipeline(Context& context, const GraphicsPipelineConfi
                config.pushConstantSize)
 {
     const VkShaderModule vertex = createShaderModule(config.vertexSpirv);
-    const VkShaderModule fragment = createShaderModule(config.fragmentSpirv);
+    const VkShaderModule fragment = config.fragmentSpirv.empty()
+                                        ? VK_NULL_HANDLE
+                                        : createShaderModule(config.fragmentSpirv);
     VkPipelineShaderStageCreateInfo stages[2]{};
     for (VkPipelineShaderStageCreateInfo& stage : stages) {
         stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
@@ -195,7 +197,7 @@ GraphicsPipeline::GraphicsPipeline(Context& context, const GraphicsPipelineConfi
     VkGraphicsPipelineCreateInfo pipelineInfo{};
     pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
     pipelineInfo.pNext = &rendering;
-    pipelineInfo.stageCount = 2;
+    pipelineInfo.stageCount = fragment != VK_NULL_HANDLE ? 2 : 1;
     pipelineInfo.pStages = stages;
     pipelineInfo.pVertexInputState = &vertexInput;
     pipelineInfo.pInputAssemblyState = &inputAssembly;
@@ -209,7 +211,9 @@ GraphicsPipeline::GraphicsPipeline(Context& context, const GraphicsPipelineConfi
     const VkResult result = vkCreateGraphicsPipelines(context.device(), VK_NULL_HANDLE, 1,
                                                       &pipelineInfo, nullptr, &m_pipeline);
     vkDestroyShaderModule(context.device(), vertex, nullptr);
-    vkDestroyShaderModule(context.device(), fragment, nullptr);
+    if (fragment != VK_NULL_HANDLE) {
+        vkDestroyShaderModule(context.device(), fragment, nullptr);
+    }
     check(result);
 }
 

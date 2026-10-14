@@ -11,8 +11,11 @@
 #include <memory>
 #include <utility>
 
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <glm/common.hpp>
+#include <glm/ext/matrix_transform.hpp>
 
 #include <starcore/asset/mesh.hpp>
 #include <starcore/gpu/gpu_renderer.hpp>
@@ -1117,7 +1120,8 @@ const GpuRenderOptions kRaster{.pipeline = GpuPipeline::Raster};
 
 /**
  * @brief Spheres, a cube and a window pane in front, lit by two sphere lights
- *        that nothing occludes: preview shading has no shadows to cast.
+ *        that nothing occludes: neither the preview's shadow rays nor the
+ *        raster's shadow maps find anything in the way.
  */
 auto unshadowedScene(Scene& scene) -> Entity
 {
@@ -1147,7 +1151,7 @@ auto unshadowedScene(Scene& scene) -> Entity
 
 }  // namespace
 
-TEST_CASE("GPU raster: the CPU preview without shadows", "[gpu][raster]")
+TEST_CASE("GPU raster: the CPU preview where nothing casts a shadow", "[gpu][raster]")
 {
     const GpuTest gpu(false);
     Scene scene;
@@ -1220,6 +1224,12 @@ TEST_CASE("GPU raster: what restarts the accumulation", "[gpu][raster]")
         ids.pixels(), static_cast<std::uint32_t>(entt::to_integral(test.hidden.handle()))));
     CHECK_FALSE(std::ranges::contains(
         ids.pixels(), static_cast<std::uint32_t>(entt::to_integral(test.pane.handle()))));
+    raster->render(renderScene, camera, masked, kRaster);
+    REQUIRE(raster->accumulatedFrames() == 2);
+    GpuRenderOptions withoutShadows = kRaster;
+    withoutShadows.shadows.enabled = false;
+    raster->render(renderScene, camera, masked, withoutShadows);
+    REQUIRE(raster->accumulatedFrames() == 1);
 
     // Switching pipelines both ways.
     raster->render(renderScene, camera, settings, {.pipeline = GpuPipeline::Hybrid});
@@ -1254,6 +1264,199 @@ TEST_CASE("GPU raster: runs without ray queries", "[gpu][raster]")
     }
     CHECK(std::ranges::contains(
         ids.pixels(), static_cast<std::uint32_t>(entt::to_integral(test.cube.handle()))));
+}
+
+namespace
+{
+
+/**
+ * @brief A floor with a floating ball, a table (one mesh: its top and a mat
+ *        under it, which it shadows) and a sphere light; diffuse surfaces
+ *        without a coat (IOR 1): the path tracer lights them as the raster.
+ */
+struct ShadowScene
+{
+    Scene scene;
+    Entity floor;
+    Entity table;
+
+    ShadowScene(Vec3 lightPosition, float lightRadius, float lightPower)
+    {
+        floor = scene.createEntity("Floor");
+        floor.add<MeshComponent>(MeshComponent{.mesh = primitives::plane(Vec2(30.0F)).build()});
+        floor.add<MaterialComponent>(MaterialComponent{.albedo = Vec3(0.6F), .ior = 1.0F});
+
+        Entity ball = scene.createEntity("Ball");
+        ball.get<TransformComponent>().translation = {0.5F, 1.6F, 0.0F};
+        ball.add<SphereComponent>(1.0F);
+        ball.add<MaterialComponent>(
+            MaterialComponent{.albedo = {0.8F, 0.3F, 0.2F}, .ior = 1.0F});
+
+        table = scene.createEntity("Table");
+        MeshBuilder mesh;
+        mesh.append(primitives::plane(Vec2(2.0F)),
+                    glm::translate(Mat4(1.0F), Vec3(-2.5F, 1.2F, 0.0F)));
+        mesh.append(primitives::plane(Vec2(4.0F)),
+                    glm::translate(Mat4(1.0F), Vec3(-2.5F, 0.02F, 0.0F)));
+        table.add<MeshComponent>(MeshComponent{.mesh = mesh.build()});
+        table.add<MaterialComponent>(
+            MaterialComponent{.albedo = {0.7F, 0.7F, 0.5F}, .ior = 1.0F});
+
+        Entity light = scene.createEntity("Light");
+        light.get<TransformComponent>().translation = lightPosition;
+        light.add<SphereComponent>(lightRadius);
+        light.add<MaterialComponent>(MaterialComponent{
+            .albedo = Vec3(0.0F), .emissionColor = Vec3(1.0F), .emissionPower = lightPower});
+    }
+};
+
+/** @brief Linear luminance of each pixel of an 8-bit sRGB image. */
+auto linearLuminance(const ColorImage& image) -> std::vector<float>
+{
+    std::vector<float> result;
+    result.reserve(image.pixels().size());
+    for (const std::uint32_t pixel : image.pixels()) {
+        Vec3 color;
+        for (int c = 0; c < 3; ++c) {
+            color[c] = srgbToLinear(static_cast<float>(channel(pixel, c)) / 255.0F);
+        }
+        result.push_back(glm::dot(color, Vec3(0.2126F, 0.7152F, 0.0722F)));
+    }
+    return result;
+}
+
+}  // namespace
+
+TEST_CASE("GPU raster: shadow maps shade like the path tracer's shadow rays", "[gpu][raster]")
+{
+    // How much of the light reaches each pixel of the floor and the table:
+    // (raster - raster without the light) / (raster without shadows - the
+    // same), and the path tracer's direct light (one segment, nothing else
+    // lights the scene) over that same unshadowed light.
+    const GpuTest gpu;
+    struct Light
+    {
+        const char* name;
+        Vec3 position;
+        float radius;
+        float power;
+        float distance;  // ShadowSettings::distance
+    };
+    const auto light = GENERATE(Light{"a light near the camera: six views around it",
+                                      {2.0F, 6.0F, 1.0F}, 0.4F, 100.0F, 64.0F},
+                                Light{"a far light: three views nested around the camera",
+                                      {-60.0F, 80.0F, 40.0F}, 6.0F, 150.0F, 16.0F});
+    INFO(light.name);
+    constexpr std::uint32_t kWidth = 128;
+    constexpr std::uint32_t kHeight = 96;
+    Camera camera = makeCamera(kWidth, kHeight);
+    camera.setPosition({0.0F, 9.0F, 9.0F});
+    camera.lookAt({0.0F, 0.0F, 0.0F});
+
+    const ShadowScene lit(light.position, light.radius, light.power);
+    const ShadowScene unlit(light.position, light.radius, 0.0F);
+    GpuRenderOptions shadows = kRaster;
+    shadows.shadows.distance = light.distance;
+    GpuRenderOptions noShadows = shadows;
+    noShadows.shadows.enabled = false;
+    auto renderer = gpu.makeRenderer(kWidth, kHeight);
+    auto render = [&](const Scene& scene, const GpuRenderOptions& options, int frames) {
+        const RenderScene renderScene = buildRenderScene(scene);
+        const PathTracerSettings settings{.maxBounces = 1};
+        for (int i = 0; i < frames; ++i) {
+            renderer->render(renderScene, camera, settings, options);
+        }
+        return renderer->readImage();
+    };
+    const std::vector<float> raster = linearLuminance(render(lit.scene, shadows, 16));
+    const IdImage ids = renderer->readEntityIds();
+    const std::vector<float> unshadowed = linearLuminance(render(lit.scene, noShadows, 4));
+    const std::vector<float> ambient = linearLuminance(render(unlit.scene, noShadows, 4));
+    const std::vector<float> traced =
+        linearLuminance(render(lit.scene, {.pipeline = GpuPipeline::PathTracing}, 256));
+
+    const std::array receivers{static_cast<std::uint32_t>(entt::to_integral(lit.floor.handle())),
+                               static_cast<std::uint32_t>(entt::to_integral(lit.table.handle()))};
+    std::vector<std::size_t> pixels;
+    std::vector<float> rasterVisible(raster.size(), 0.0F);
+    std::vector<float> tracedVisible(raster.size(), 0.0F);
+    double litTraced = 0.0;
+    double litLight = 0.0;
+    for (std::size_t i = 0; i < raster.size(); ++i) {
+        const float lightOnly = unshadowed[i] - ambient[i];
+        if (!std::ranges::contains(receivers, ids.pixels()[i]) || lightOnly < 0.05F) {
+            continue;
+        }
+        pixels.push_back(i);
+        rasterVisible[i] = (raster[i] - ambient[i]) / lightOnly;
+        tracedVisible[i] = traced[i] / lightOnly;
+        if (rasterVisible[i] > 0.995F) {
+            litTraced += traced[i];
+            litLight += lightOnly;
+        }
+    }
+    REQUIRE(pixels.size() > kWidth * kHeight / 3);
+    REQUIRE(litLight > 0.0);
+    // Where nothing is in the way, the path tracer's light is the raster's.
+    const auto scale = static_cast<float>(litTraced / litLight);
+    CHECK(scale == Catch::Approx(1.0).margin(0.03));
+    double difference = 0.0;
+    std::size_t large = 0;
+    for (const std::size_t i : pixels) {
+        const float d = std::abs(rasterVisible[i] - tracedVisible[i] / scale);
+        difference += d;
+        large += d > 0.25F ? 1 : 0;
+    }
+    const double meanDifference = difference / static_cast<double>(pixels.size());
+    const double largeFraction = static_cast<double>(large) / static_cast<double>(pixels.size());
+    INFO("mean visibility difference " << meanDifference << ", over 0.25: " << largeFraction);
+    // Measured on an RTX 4060: 0.0096 and 0.0073, none over 0.25 (penumbras
+    // are an estimate: their width from the occluders' mean distance).
+    CHECK(meanDifference < 0.02);
+    CHECK(largeFraction < 0.005);
+
+    // The table's top shadows its own mat.
+    auto visibleAt = [&](Vec3 world) {
+        const Vec2 pixel = camera.worldToScreen(world).value();
+        return rasterVisible[static_cast<std::size_t>(pixel.y) * kWidth +
+                             static_cast<std::size_t>(pixel.x)];
+    };
+    CHECK(visibleAt({-2.5F, 0.02F, 0.0F}) < 0.1F);
+    CHECK(visibleAt({5.0F, 0.0F, 4.0F}) == Catch::Approx(1.0F).margin(0.02F));
+}
+
+TEST_CASE("GPU raster: see-through panes and the light itself cast no shadow", "[gpu][raster]")
+{
+    const GpuTest gpu(false);
+    Scene scene;
+    Entity floor = scene.createEntity("Floor");
+    floor.add<MeshComponent>(MeshComponent{.mesh = primitives::plane(Vec2(30.0F)).build()});
+    Entity pane = scene.createEntity("Pane");
+    pane.get<TransformComponent>().translation = {0.0F, 3.0F, 0.0F};
+    pane.add<MeshComponent>(MeshComponent{.mesh = primitives::plane(Vec2(3.0F)).build()});
+    pane.add<MaterialComponent>(MaterialComponent{
+        .albedo = {0.8F, 0.9F, 1.0F}, .roughness = 0.0F, .transmission = 1.0F, .thinWalled = true});
+    Entity light = scene.createEntity("Light");
+    light.get<TransformComponent>().translation = {0.0F, 5.0F, 0.0F};
+    light.add<SphereComponent>(0.5F);
+    light.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(0.0F), .emissionColor = Vec3(1.0F), .emissionPower = 40.0F});
+    const RenderScene renderScene = buildRenderScene(scene);
+    Camera camera = makeCamera(64, 48);
+    camera.setPosition({0.0F, 8.0F, 8.0F});
+    camera.lookAt({0.0F, 0.0F, 0.0F});
+
+    auto renderer = gpu.makeRenderer(64, 48);
+    GpuRenderOptions noShadows = kRaster;
+    noShadows.shadows.enabled = false;
+    auto render = [&](const GpuRenderOptions& options) {
+        for (int i = 0; i < 4; ++i) {
+            renderer->render(renderScene, camera, {}, options);
+        }
+        return renderer->readImage();
+    };
+    const ColorImage shadowed = render(kRaster);
+    CHECK(meanDifference(shadowed, render(noShadows)) < 0.05F);
 }
 
 // Effects --------------------------------------------------------------------------------------------

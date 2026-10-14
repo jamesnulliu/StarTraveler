@@ -72,7 +72,7 @@ public:
 struct GraphicsPipelineConfig
 {
     std::span<const std::uint32_t> vertexSpirv;
-    std::span<const std::uint32_t> fragmentSpirv;
+    std::span<const std::uint32_t> fragmentSpirv;  // Empty: none (depth only).
     std::span<const VkDescriptorType> bindings;
     std::uint32_t pushConstantSize = 0;
     std::span<const VkFormat> colorFormats;

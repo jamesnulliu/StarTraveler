@@ -1,16 +1,19 @@
 #version 460
 // Raster pipeline, shading pass: the rasterized first hits (visibility
 // buffers) lit like RenderMode::Preview -- sky, ambient light, a headlight and
-// the sphere lights -- but without shadows, so no ray is traced; the nearest
-// thin transmissive surface in front (the glass layer) is blended over what it
-// covers, as the preview does with its first layer. Jittered frames are
-// averaged while nothing changes (anti-aliasing); post.comp tone maps the
-// mean. Also writes the motion vectors of the nearest surface (motion blur).
+// the sphere lights -- with no ray traced: the lights' shadows are looked up
+// in their shadow maps (soft, shadows.glsl), the preview's are hard; the
+// nearest thin transmissive surface in front (the glass layer) is blended over
+// what it covers, as the preview does with its first layer. Jittered frames
+// are averaged while nothing changes (anti-aliasing, smoother penumbras);
+// post.comp tone maps the mean. Also writes the motion vectors of the nearest
+// surface (motion blur).
 
 #extension GL_GOOGLE_include_directive : require
 
 #define STARCORE_NO_RAY_QUERY
 #include "hybrid.glsl"
+#include "shadows.glsl"
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -30,27 +33,48 @@ layout(set = 0, binding = 12, std430) readonly buffer PreviousTransforms
     InstanceTransform previousTransforms[];
 };
 
-/** Irradiance at a hit: shadePreview's (path.glsl) without shadows. */
-vec3 irradianceAt(SurfaceHit hit, vec3 direction)
+/** Irradiance of a sphere light at a hit, unshadowed (0: below its horizon, or a mesh). */
+vec3 sphereIrradiance(Light light, SurfaceHit hit)
+{
+    if (light.triangleCount > 0u) {
+        return vec3(0.0);  // Meshes: their own emission only.
+    }
+    vec3 toCenter = light.center - hit.position;
+    float distance2 = dot(toCenter, toCenter);
+    if (distance2 <= light.radius * light.radius) {
+        return vec3(0.0);
+    }
+    float cosine = dot(toCenter / sqrt(distance2), hit.normal);
+    return cosine <= 0.0 ? vec3(0.0)
+                         : light.emission * (cosine * light.radius * light.radius / distance2);
+}
+
+// Lights adding less than this fraction of a point's light skip the shadow
+// test: their shadows would hardly show.
+const float kFaintLight = 0.02;
+
+/**
+ * Irradiance at a hit: shadePreview's (path.glsl), shadows from the shadow
+ * maps; `rotation` turns the pattern of their taps.
+ */
+vec3 irradianceAt(SurfaceHit hit, vec3 direction, float rotation)
 {
     vec3 irradiance = frameData.skyColor.rgb + vec3(kPreviewAmbient) +
                       vec3(kPreviewHeadlight * max(0.0, -dot(hit.normal, direction)));
     uint count = frameData.options.z;
+    vec3 unshadowed = irradiance;
+    for (uint i = 0u; i < count; ++i) {
+        unshadowed += sphereIrradiance(lights[i], hit);
+    }
+    float faint = kFaintLight * luminance(unshadowed);
     for (uint i = 0u; i < count; ++i) {
         Light light = lights[i];
-        if (light.triangleCount > 0u) {
-            continue;  // Meshes: their own emission only.
+        vec3 lightIrradiance = sphereIrradiance(light, hit);
+        if (luminance(lightIrradiance) > faint) {
+            lightIrradiance *= shadowVisibility(i, light.center, light.radius, hit.position,
+                                                hit.geometricNormal, rotation);
         }
-        vec3 toCenter = light.center - hit.position;
-        float distance2 = dot(toCenter, toCenter);
-        if (distance2 <= light.radius * light.radius) {
-            continue;
-        }
-        float cosine = dot(toCenter / sqrt(distance2), hit.normal);
-        if (cosine <= 0.0) {
-            continue;
-        }
-        irradiance += light.emission * (cosine * light.radius * light.radius / distance2);
+        irradiance += lightIrradiance;
     }
     return irradiance;
 }
@@ -89,11 +113,17 @@ void main()
                                  primary.t * dot(direction, frameData.cameraForward.xyz))
                           : vec4(0.0, 0.0, 0.0, kFar));
 
+    // Interleaved gradient noise (Jimenez 2014): neighbors' taps differ, and
+    // averaged frames turn them on.
+    float rotation =
+        kTwoPi * fract(52.9829189 * fract(dot(vec2(pixel), vec2(0.06711056, 0.00583715))) +
+                       0.618034 * float(frameData.frame.x));
     vec3 radiance = frameData.skyColor.rgb;
     uint entityId = kNoEntityId;
     if (hasPrimary) {
         Material material = materialOf(primary.instanceIndex);
-        radiance = material.emission.rgb + material.albedo.rgb * irradianceAt(primary, direction);
+        radiance = material.emission.rgb +
+                   material.albedo.rgb * irradianceAt(primary, direction, rotation);
         entityId = instances[primary.instanceIndex].entityId;
     }
     if (hasPane) {
@@ -101,7 +131,8 @@ void main()
         float transmitted = (1.0 - material.metallic) * material.transmission;
         radiance = material.emission.rgb +
                    material.albedo.rgb *
-                       (irradianceAt(pane, direction) * (1.0 - transmitted) + transmitted * radiance);
+                       (irradianceAt(pane, direction, rotation) * (1.0 - transmitted) +
+                        transmitted * radiance);
         if (!isSeeThrough(material)) {
             entityId = instances[pane.instanceIndex].entityId;
         }

@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <format>
 #include <iterator>
@@ -787,8 +788,8 @@ void GameLayer::drawRenderPanel()
 
     ImGui::Checkbox("Ray tracing", &m_options.rayTracing);
     if (ImGui::IsItemHovered()) {
-        ImGui::SetTooltip(m_gpuRenderer ? "Off: rasterize on the GPU (direct light without "
-                                          "shadows or reflections, no rays)"
+        ImGui::SetTooltip(m_gpuRenderer ? "Off: rasterize on the GPU (direct light, shadow maps; "
+                                          "no reflections or bounced light, no rays)"
                                         : "Off: only the 2D shapes");
     }
     ImGui::SameLine();
@@ -881,6 +882,28 @@ void GameLayer::drawRenderPanel()
             }
             ImGui::SliderFloat("Color tolerance", &denoiser.colorSigma, 0.5F, 16.0F, "%.1f");
             enumCombo("Show", gpu.view);
+        }
+    }
+
+    if (usingGpu() && !m_options.rayTracing) {
+        ImGui::SeparatorText("Shadow maps");
+        ShadowSettings& shadows = m_options.gpuRender.shadows;
+        ImGui::Checkbox("Shadows", &shadows.enabled);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("The brightest sphere lights see the scene's depth: what is "
+                              "nearer them shades what is behind, softer the bigger the light");
+        }
+        if (shadows.enabled) {
+            ImGui::SliderFloat("Distance", &shadows.distance, 4.0F, 512.0F, "%.0f",
+                               ImGuiSliderFlags_Logarithmic);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Far lights cast shadows this far from the camera; nearer "
+                                  "lights all around them");
+            }
+            int resolution = static_cast<int>(shadows.resolution);
+            if (ImGui::SliderInt("Resolution", &resolution, 256, 2048)) {
+                shadows.resolution = std::bit_ceil(static_cast<std::uint32_t>(resolution));
+            }
         }
     }
 

@@ -128,12 +128,12 @@ private:
     std::uint32_t m_height = 0;
 };
 
-/** @brief Bilinear sampler, coordinates clamped to the edge (no mipmaps). */
+/** @brief Bilinear (or nearest) sampler, coordinates clamped to the edge (no mipmaps). */
 class Sampler
 {
 public:
     Sampler() = default;
-    explicit Sampler(Context& context);
+    explicit Sampler(Context& context, VkFilter filter = VK_FILTER_LINEAR);
     ~Sampler();
     Sampler(Sampler&& other) noexcept;
     auto operator=(Sampler&& other) noexcept -> Sampler&;

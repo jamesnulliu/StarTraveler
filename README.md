@@ -116,7 +116,8 @@ which restarts whenever anything moves), tunes the denoiser and shows its
 intermediate images. With `--cpu`, or on GPUs without ray queries, the CPU path
 tracer shows a noise-free preview while moving and path traces when still.
 Turning "Ray tracing" off (or `--raster`) rasterizes on the GPU instead: direct
-light without shadows or reflections, no rays at all, about 0.2 ms per frame.
+light with soft shadows from shadow maps, no reflections or bounced light, no
+rays at all, about 2 ms per frame in the cockpit (0.4 ms without the shadows).
 On the GPU the game adds bloom, motion blur (the cockpit stays sharp while the
 world rushes by) and a vignette, and draws particles: engine exhaust that
 follows the thrust, sparks when the hull scrapes something and space dust that
@@ -163,9 +164,17 @@ the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
     still image converges to the path tracer's (also checked by the tests).
     Rasterized first hits are where textures will be sampled.
   - *Raster*: the same visibility buffer lit like the preview (sky, ambient,
-    headlight, sphere lights) without shadows, the nearest window pane blended
-    over: no rays, so it also runs on GPUs without ray tracing hardware;
-    jittered frames are averaged while the view is still (anti-aliasing).
+    headlight, sphere lights), the nearest window pane blended over: no rays,
+    so it also runs on GPUs without ray tracing hardware; jittered frames are
+    averaged while the view is still (anti-aliasing). Shadows come from shadow
+    maps: the brightest sphere lights render the scene's depth from their
+    center into one atlas -- six views around a light near the camera, three
+    views nested around the camera for a far one (cascades, moved by whole
+    texels so edges do not crawl) -- and shading compares each surface's
+    distance with them, per texel against the surface's plane (no acne at any
+    slope), softened over the penumbra the light's size and the occluders'
+    distance make (percentage-closer soft shadows). Their shadows match the
+    path tracer's shadow rays (checked by the tests).
   Every pipeline writes linear radiance; a last stage draws particles over it
   (additive sprites, streaked along their screen motion, tested against the
   rasterized depth), adds bloom (a downsampled chain of blurs, Jimenez's
@@ -173,7 +182,8 @@ the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
   motion vectors and depths) and a vignette, and tone maps. With every effect
   off the image is exactly the tone-mapped one, as the CPU's.
   `starcore-render scene.yaml --gpu` (or `--hybrid`, with `--move`, `--view`,
-  or `--raster`; `--bloom`, `--motion-blur`, `--vignette`) renders offscreen.
+  or `--raster`, `--no-shadows`; `--bloom`, `--motion-blur`, `--vignette`)
+  renders offscreen.
 - **Particles**: a CPU particle system (emitter components spreading their
   particles along the path they moved, bursts), drawn by the GPU renderer.
 - **2D raster**: Bresenham/midpoint/DDA lines, midpoint ellipses, Bezier and

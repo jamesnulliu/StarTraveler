@@ -11,7 +11,8 @@ A small render engine with two frontends: C++ (`StarCore::Core`,
   with ray queries (`shaders/`), on BLAS/TLAS acceleration structures; plain
   progressive path tracing, the hybrid pipeline (rasterized first hits,
   reprojection across frames, SVGF denoising) for real time, or pure
-  rasterization (no ray tracing hardware needed); particles, bloom, motion
+  rasterization with soft shadow maps (no ray tracing hardware needed);
+  particles, bloom, motion
   blur and a vignette on top.
 - `StarCore::Runtime` -- GLFW window, Dear ImGui, textures, application and
   layers.

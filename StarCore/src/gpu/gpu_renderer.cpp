@@ -275,7 +275,8 @@ auto GpuRenderer::needsReset(const RenderScene& scene, const Camera& camera,
     case GpuPipeline::Raster:
         // Frames are tone mapped from the average, display settings may change.
         return scene.version != m_lastVersion || cameraMoved ||
-               settings.instanceMask != m_lastSettings.instanceMask;
+               settings.instanceMask != m_lastSettings.instanceMask ||
+               options.shadows != m_lastShadows;
     case GpuPipeline::Hybrid:
         // Only new content discards samples; motion reprojects them.
         if (estimatorSettings(settings) != estimatorSettings(m_lastSettings) ||
@@ -455,6 +456,7 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
             .camera = &camera,
             .previousCamera = &previousCamera,
             .settings = settings,
+            .shadows = options.shadows,
             .frameSlot = slotIndex,
             .accumulated = m_frameIndex,
             .writeIds = m_frameIndex == 0,
@@ -497,6 +499,7 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
     m_lastSettings = settings;
     m_lastPipeline = pipeline;
     m_lastTemporal = options.denoiser.temporal;
+    m_lastShadows = options.shadows;
     m_lastCamera = camera;
     ++m_frameNumber;
     ++m_frameIndex;

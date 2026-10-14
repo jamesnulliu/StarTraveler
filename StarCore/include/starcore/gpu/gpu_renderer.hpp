@@ -40,8 +40,9 @@ enum class GpuPipeline : std::uint8_t
     // with the same estimator, samples reprojected across frames and
     // denoised: for real time.
     Hybrid,
-    // Rasterized first hits lit like RenderMode::Preview without shadows: no
-    // rays, so no ray tracing hardware needed. Anti-aliased while still.
+    // Rasterized first hits lit like RenderMode::Preview, shadows from shadow
+    // maps (ShadowSettings): no rays, so no ray tracing hardware needed.
+    // Anti-aliased while still.
     Raster,
 };
 
@@ -118,10 +119,30 @@ struct EffectSettings
     auto operator==(const EffectSettings&) const -> bool = default;
 };
 
+/**
+ * @brief Shadows of the Raster pipeline (the others trace shadow rays): the
+ *        brightest sphere lights render the scene's depth as seen from their
+ *        center, and shading looks up whether something is nearer the light,
+ *        soft as far as the light's size and the occluder's distance make
+ *        them (percentage-closer soft shadows).
+ */
+struct ShadowSettings
+{
+    bool enabled = true;
+    // Lights within 1.25x this distance of the camera see all around them (six
+    // views, shadows everywhere); farther ones cast shadows up to this distance
+    // from the camera (three views, nested around it, finest near it).
+    float distance = 64.0F;
+    std::uint32_t resolution = 1024;  // Texels per side of a view.
+
+    auto operator==(const ShadowSettings&) const -> bool = default;
+};
+
 struct GpuRenderOptions
 {
     GpuPipeline pipeline = GpuPipeline::PathTracing;
     DenoiserSettings denoiser;
+    ShadowSettings shadows;
     HybridView view = HybridView::Final;
     EffectSettings effects;
 
@@ -303,6 +324,7 @@ private:
     PathTracerSettings m_lastSettings{};
     GpuPipeline m_lastPipeline = GpuPipeline::PathTracing;
     bool m_lastTemporal = true;
+    ShadowSettings m_lastShadows;
     Camera m_lastCamera;  // For the hybrid pipeline's motion vectors.
 };
 

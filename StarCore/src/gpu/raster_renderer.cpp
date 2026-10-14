@@ -12,14 +12,16 @@ namespace
 // Bindings of raster.comp (0 unused: the TLAS of the ray-traced passes).
 constexpr VkDescriptorType kBuffer = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 constexpr VkDescriptorType kImage = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+constexpr VkDescriptorType kUniform = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
 constexpr VkDescriptorType kShadeBindings[] = {
-    kBuffer, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kBuffer, kImage, kBuffer, kBuffer, kBuffer,
-    kImage,  kImage,                            kImage,  kImage, kImage,  kBuffer};
+    kBuffer, kUniform, kBuffer, kImage, kBuffer, kBuffer,  kBuffer,
+    kImage,  kImage,   kImage,  kImage, kImage,  kBuffer,  kUniform,
+    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER};  // 13, 14: shadows.glsl.
 
 }  // namespace
 
 RasterRenderer::RasterRenderer(vulkan::Context& context)
-    : m_context(&context), m_shade(context, raster_comp_spv, kShadeBindings)
+    : m_context(&context), m_shade(context, raster_comp_spv, kShadeBindings), m_shadows(context)
 {
 }
 
@@ -59,6 +61,7 @@ void RasterRenderer::record(VkCommandBuffer commandBuffer, const RasterFrame& fr
     const Vec2 sample = frame.accumulated == 0 ? Vec2(0.5F) : jitter(frame.accumulated);
     uniforms.viewport =
         Vec4(static_cast<float>(width), static_cast<float>(height), sample.x, sample.y);
+    uniforms.frame[0] = frame.accumulated;  // Turns the soft shadows' taps.
     uniforms.options[0] = frame.writeIds ? kFlagWriteIds : 0U;
     uniforms.options[1] = settings.instanceMask & kAllInstances;
     uniforms.options[2] = scene.lightCount();
@@ -66,6 +69,8 @@ void RasterRenderer::record(VkCommandBuffer commandBuffer, const RasterFrame& fr
     vulkan::Buffer& uniformBuffer = m_uniforms[frame.frameSlot];
     writeUniforms(*m_context, uniformBuffer, uniforms);
 
+    m_shadows.record(commandBuffer, frame.frameSlot, *frame.scene, scene, *frame.camera,
+                     settings.instanceMask, frame.shadows);
     visibility.record(commandBuffer, uniformBuffer.handle(), scene, *frame.scene,
                       settings.instanceMask, GlassLayer::ThinTransmissive);
 
@@ -81,7 +86,9 @@ void RasterRenderer::record(VkCommandBuffer commandBuffer, const RasterFrame& fr
         .storageImage(9, radiance.view())
         .storageImage(10, entityIds.view())
         .storageImage(11, m_motion.view())
-        .storageBuffer(12, scene.previousTransformBuffer());
+        .storageBuffer(12, scene.previousTransformBuffer())
+        .uniformBuffer(13, m_shadows.records(frame.frameSlot))
+        .sampledImage(14, m_shadows.atlas(), m_shadows.sampler());
     m_shade.bind(commandBuffer);
     m_shade.pushDescriptors(commandBuffer, writes.writes());
     vkCmdDispatch(commandBuffer, (width + kWorkgroupSize - 1) / kWorkgroupSize,

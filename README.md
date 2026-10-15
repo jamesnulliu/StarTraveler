@@ -167,13 +167,15 @@ the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
     out as samples accumulate: a still image converges to the path tracer's
     (also checked by the tests). Where the light changed, the history is
     dropped (A-SVGF's temporal gradients: each frame re-traces some of the
-    previous frame's samples with their random numbers), so neither a moving
-    shadow nor a highlight sliding along a glossy tube trails, nor the sunlit
-    patch a canopy reflects as the ship turns. The light the sphere lights (a
-    sun) give the surfaces' diffuse lobe is a layer of its own, as a ratio
-    estimator (as engines shade lights and denoise only their shadows): what it
-    would be unshadowed is in closed form every frame, so it follows the light
-    at once, and only how much of it arrives accumulates.
+    previous frame's samples with their random numbers; of the sphere lights'
+    highlights on glossy surfaces, their closed forms then and now, without
+    noise), so neither a moving shadow nor a highlight sliding along a glossy
+    tube trails, nor the sunlit patch a canopy reflects as the ship turns. The
+    light the sphere lights (a sun) give the surfaces' diffuse lobe is a layer
+    of its own, as a ratio estimator (as engines shade lights and denoise only
+    their shadows): what it would be unshadowed is in closed form every frame,
+    so it follows the light at once, and only how much of it arrives
+    accumulates.
     At half trace resolution (the game's) paths start from one pixel of each
     2x2 per frame, each in turn; the others borrow their neighbors' samples on
     the same surface: only those until they have their own (just uncovered),

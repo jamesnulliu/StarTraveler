@@ -33,7 +33,7 @@ constexpr VkDescriptorType kTraceBindings[] = {
 constexpr VkDescriptorType kTemporalBindings[] = {
     kBuffer, kUniform, kBuffer, kImage, kBuffer, kBuffer, kBuffer, kImage, kImage, kImage, kImage,
     kImage,  kImage,   kImage,  kImage, kImage,  kImage,  kImage,  kImage, kImage, kImage, kImage,
-    kImage,  kImage,   kImage};
+    kImage,  kImage,   kImage,  kImage};
 constexpr VkDescriptorType kAtrousBindings[] = {kBuffer, kUniform, kBuffer, kImage, kBuffer,
                                                 kBuffer, kBuffer,  kImage,  kImage, kImage};
 constexpr VkDescriptorType kGradientBindings[] = {kBuffer, kUniform, kBuffer, kImage,
@@ -41,7 +41,7 @@ constexpr VkDescriptorType kGradientBindings[] = {kBuffer, kUniform, kBuffer, kI
 constexpr VkDescriptorType kDirectBindings[] = {kTlas,  kUniform, kBuffer, kImage,  kBuffer,
                                                 kBuffer, kBuffer, kImage,  kImage,  kImage,
                                                 kImage,  kImage,  kImage,  kImage,  kImage,
-                                                kBuffer, kImage};
+                                                kBuffer, kImage,  kImage};
 
 /** @brief Stages of hybrid_trace.comp (specialization constant 0, a pipeline each). */
 enum class TraceStage : std::uint32_t
@@ -124,6 +124,9 @@ struct HybridRenderer::Images
     // unshadowed light (all).
     vulkan::Image noisyDirect;
     vulkan::Image frameUnshadowed;
+    // The sphere lights' highlights on the primary surfaces' reflections, this frame's and
+    // the previous one's (direct.comp: the specular layer's gradients).
+    vulkan::Image highlights;
     // Ping-pong: written this frame / read as the previous one.
     std::array<vulkan::Image, 2> primaryGuide;
     std::array<vulkan::Image, 2> glassGuide;
@@ -165,7 +168,7 @@ struct HybridRenderer::Images
         for (vulkan::Image* image :
              {&noisyPrimary, &noisyGlass, &noisySpecular, &frameAlbedo, &frameEmission,
               &primaryMotion, &glassMotion, &reflectionMotion, &primaryFilterGuide,
-              &glassFilterGuide, &noisyDirect, &frameUnshadowed}) {
+              &glassFilterGuide, &noisyDirect, &frameUnshadowed, &highlights}) {
             function(*image);
         }
         for (auto* pair :
@@ -276,6 +279,7 @@ void HybridRenderer::resize(std::uint32_t width, std::uint32_t height)
     images->glassFilterGuide = storage(VK_FORMAT_R32G32_UINT);
     images->noisyDirect = storage(VK_FORMAT_R32G32B32A32_SFLOAT);
     images->frameUnshadowed = storage(VK_FORMAT_R16G16B16A16_SFLOAT);
+    images->highlights = storage(VK_FORMAT_R32G32_SFLOAT);
     for (std::size_t i = 0; i < 2; ++i) {
         images->primaryGuide[i] = storage(VK_FORMAT_R32G32B32A32_UINT);
         images->glassGuide[i] = storage(VK_FORMAT_R32G32B32A32_UINT);
@@ -461,7 +465,8 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
                 .storageImage(13, images.sampleLight[current].view())
                 .storageImage(14, images.gradients[std::to_underlying(Layer::Direct)][0].view())
                 .storageBuffer(15, scene.previousTransformBuffer())
-                .storageImage(16, images.frameAlbedo.view());
+                .storageImage(16, images.frameAlbedo.view())
+                .storageImage(17, images.highlights.view());
             m_direct.bind(commandBuffer);
             m_direct.pushDescriptors(commandBuffer, directWrites.writes());
             // Every pixel, and every stratum's pixels (the gradients: the strata may reach
@@ -544,7 +549,8 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
             .storageImage(21, images.reflectionMotion.view())
             .storageImage(22, images.reflectionGuide[previous].view())
             .storageImage(23, images.reflectionGuide[current].view())
-            .storageImage(24, images.gradients[std::to_underlying(layer)][gradients].view());
+            .storageImage(24, images.gradients[std::to_underlying(layer)][gradients].view())
+            .storageImage(25, images.highlights.view());
         temporal.pushDescriptors(commandBuffer, writes.writes());
         temporal.pushConstants(commandBuffer, &layer, sizeof(layer));
         vkCmdDispatch(commandBuffer, groupsX, groupsY, 1);

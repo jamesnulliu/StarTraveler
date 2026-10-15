@@ -81,6 +81,9 @@ layout(set = 0, binding = 23, rgba32ui) uniform readonly uimage2D reflectionGuid
 // The layer's temporal gradients, filtered (hybrid.glsl, one per stratum): how
 // much of its light changed since the previous frame.
 layout(set = 0, binding = 24, rgba32f) uniform readonly image2D gradients;
+// The specular layer: the sphere lights' highlights in closed form, as they are (x) and
+// were (y) (direct.comp).
+layout(set = 0, binding = 25, rg32f) uniform readonly image2D highlights;
 
 // While moving, the history of the primary surfaces' sharp reflections is
 // clamped to this many standard deviations around the mean of this frame's
@@ -488,6 +491,17 @@ void main()
                                     ? demodulated(history.color.rgb, history.albedo)
                                     : history.color.rgb;
                 float change = gradientChange(gradient, current.z, luminance(lighting));
+                if (pass.layer == kLayerSpecular) {
+                    // The sphere lights' highlights as their closed forms tell (direct.comp):
+                    // one sliding along a glossy surface (the sun along a canopy's frame as
+                    // the ship turns) without the noise of samples; the samples' gradients,
+                    // left the rest, count for less (kSampledSpecularChange).
+                    vec2 highlight = imageLoad(highlights, pixel).xy;
+                    float moved = abs(highlight.x - highlight.y) /
+                                  max(max(max(highlight.x, highlight.y), luminance(lighting)), 1e-6);
+                    change = max(kSampledSpecularChange * change,
+                                 clamp(kGradientGain * moved, 0.0, 1.0));
+                }
                 history.color.a *= 1.0 - (reflects() ? min(change, kReflectionMaxChange) : change);
                 if (sharpness > 0.0 && pass.layer == kLayerSpecular) {
                     clampToFrame(pixel, current.z, kReflectionDeviations / sharpness, history);

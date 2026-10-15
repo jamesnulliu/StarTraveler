@@ -423,6 +423,13 @@ const float kGradientGain = 16.0;
 // changes by a few percent per frame, and its reflection in the canopy kept a
 // glow of where the sun had been.)
 const float kReflectionMaxChange = 0.75;
+// Of the specular layer, what its samples' gradients say counts a quarter: the sphere
+// lights' highlights, which change the most as a ship turns, have gradients in closed
+// form (direct.comp), and the rest of what glossy surfaces reflect is noisy, a few bright
+// samples among dark ones, whose gradients cut the history short all over them. (The
+// cockpit turning by a degree per frame, by its samples' gradients alone: its glossy
+// reflections 1.65 times as noisy, lagging 2.5 times as much.)
+const float kSampledSpecularChange = 0.25;
 
 /**
  * How much of a layer's light changed (0-1) by a (filtered) gradient on

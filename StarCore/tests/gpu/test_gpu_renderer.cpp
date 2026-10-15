@@ -1047,6 +1047,70 @@ TEST_CASE("GPU hybrid: a reflection whose light keeps changing is filtered", "[g
     INFO("noise " << noise);
     CHECK(noise < (resolution == TraceResolution::Full ? 1.0F : 1.5F));
 }
+TEST_CASE("GPU hybrid: a highlight sliding along a glossy surface follows it", "[gpu][hybrid]")
+{
+    // A glossy metal floor and a big light far away swinging around (the sun along a
+    // cockpit's frame as the ship turns): the highlight slides along the floor every
+    // frame. The highlight's closed form tells where it moved (direct.comp).
+    const GpuTest gpu;
+    const TraceResolution resolution = GENERATE(TraceResolution::Full, TraceResolution::Half);
+    INFO("trace resolution " << enumToString(resolution));
+    Scene scene;
+    scene.environment().skyColor = Vec3(0.0F);
+    Entity floor = scene.createEntity("Floor");
+    floor.add<MeshComponent>(MeshComponent{.mesh = primitives::plane(Vec2(20.0F)).build()});
+    floor.add<MaterialComponent>(
+        MaterialComponent{.albedo = Vec3(0.9F), .roughness = 0.12F, .metallic = 1.0F});
+    Entity light = scene.createEntity("Light");
+    light.add<SphereComponent>(3.0F);
+    light.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(1.0F), .emissionColor = Vec3(1.0F), .emissionPower = 20.0F});
+    RenderSceneBuilder builder;
+    constexpr std::uint32_t kWidth = 128;
+    constexpr std::uint32_t kHeight = 96;
+    constexpr int kFrames = 30;
+    auto lightAt = [&](int frame) {
+        const float angle = glm::radians(-30.0F + 2.0F * static_cast<float>(frame));
+        light.get<TransformComponent>().translation = {40.0F * std::sin(angle), 12.0F,
+                                                       -40.0F * std::cos(angle)};
+        scene.markDirty();
+        return &builder.update(scene);
+    };
+    Camera camera = makeCamera(kWidth, kHeight);
+    camera.setPosition({0.0F, 2.0F, 6.0F});
+    camera.lookAt({0.0F, 0.0F, -2.0F});
+    const PathTracerSettings settings{.samplesPerPixel = 1, .fireflyClamp = 8.0F};
+    auto hybrid = gpu.makeRenderer(kWidth, kHeight);
+    for (int i = 0; i < kFrames; ++i) {
+        hybrid->render(*lightAt(i), camera, settings, hybridOptions(true, resolution));
+    }
+    REQUIRE(hybrid->accumulatedFrames() == kFrames);  // Reprojected, not restarted.
+
+    auto reference = gpu.makeRenderer(kWidth, kHeight);
+    for (int i = 0; i < 64; ++i) {
+        reference->render(builder.update(scene), camera,
+                          PathTracerSettings{.samplesPerPixel = 8, .fireflyClamp = 8.0F});
+    }
+    const ColorImage image = hybrid->readImage();
+    const ColorImage expected = reference->readImage();
+    REQUIRE(meanLinear(expected) > 1e-3);  // The highlight is there.
+    // How far off, linear, relative to the light there is.
+    double difference = 0.0;
+    for (std::size_t i = 0; i < image.pixels().size(); ++i) {
+        for (int c = 0; c < 3; ++c) {
+            difference +=
+                std::abs(srgbToLinear(static_cast<float>(channel(image.pixels()[i], c)) / 255.0F) -
+                         srgbToLinear(static_cast<float>(channel(expected.pixels()[i], c)) / 255.0F));
+        }
+    }
+    const double off = difference / (3.0 * static_cast<double>(image.pixels().size())) /
+                       meanLinear(expected);
+    INFO("off by " << off << " of the light");
+    // 0.28, Half 0.32; by the samples' gradients alone 0.48 and 0.45, half as bright as
+    // it should be: the reflection is sharp enough that its samples find the light by
+    // sampling the lobe, past the vertex their gradients compare.
+    CHECK(off < 0.4);
+}
 TEST_CASE("GPU hybrid: the light of a sphere light follows it at once", "[gpu][hybrid]")
 {
     // A floor that a lamp lights (an emissive panel over it, a cockpit's screen) and a

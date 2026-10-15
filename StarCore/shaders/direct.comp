@@ -30,6 +30,10 @@
 // While things move, its temporal gradients (A-SVGF): at one pixel per stratum,
 // the previous frame's first sample (the same point of the same light) seen
 // again from the same surface point, as both are now.
+//
+// And for the specular layer, every pixel: its surface's highlights of the sphere
+// lights in closed form, now and as they were (sphereHighlights), whose change the
+// layer's history follows (temporal.comp): rough, but without noise.
 
 #extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_control_flow_attributes : require
@@ -65,6 +69,10 @@ layout(set = 0, binding = 15, std430) readonly buffer PreviousTransforms
 // hybrid_trace.comp's surfaces stage: the primary surface's albedo through the panes in
 // front of it, and (a) the path vertices they take.
 layout(set = 0, binding = 16, rgba16f) uniform readonly image2D frameAlbedo;
+// Every pixel: the sphere lights' highlights on its surface's reflection (the specular
+// layer's), unshadowed, in closed form, as they are (x) and were in the previous frame
+// (y), for the specular layer's gradients (temporal.comp).
+layout(set = 0, binding = 17, rg32f) uniform writeonly image2D highlights;
 
 #include "first_hits.glsl"
 
@@ -141,6 +149,50 @@ vec3 analyticLight(Material material, vec3 wo, SurfaceHit hit)
                sphereIlluminance(cosTheta, min(radius * radius / distance2, 0.9999));
     }
     return share * sum;
+}
+
+/**
+ * The light a surface's reflection (the specular layer's lobes) gets from the sphere
+ * lights, unshadowed, roughly (luminance), seen from `eye`: of each, the lobe towards
+ * its point nearest the mirror direction, widened by its size and normalized (Karis,
+ * "Real Shading in Unreal Engine 4", 2013), times its irradiance at normal incidence.
+ * Some 15 % off around a highlight, but smooth, and so where a highlight moves, it
+ * changes as the highlight does without the noise of samples. Of the lights where they
+ * were in the previous frame with `previousFrame`.
+ */
+float sphereHighlights(Material material, SurfaceHit hit, vec3 eye, bool previousFrame)
+{
+    vec3 wo = normalize(eye - hit.position);
+    vec3 mirror = reflect(-wo, hit.normal);
+    float alpha = roughnessToAlpha(material.roughness);
+    float sum = 0.0;
+    for (uint i = 0u; visitLight(i, kLightSpheres); ++i) {
+        uint instance = lights[i].instanceIndex;
+        if (instance == hit.instanceIndex) {
+            continue;
+        }
+        vec3 center = previousFrame
+                          ? transformPoint(previousTransforms[instance].objectToWorld, vec3(0.0))
+                          : lights[i].center;
+        vec3 toCenter = center - hit.position;
+        float distance2 = dot(toCenter, toCenter);
+        float radius = lights[i].radius;
+        if (distance2 <= radius * radius) {
+            continue;
+        }
+        vec3 toRay = dot(toCenter, mirror) * mirror - toCenter;
+        vec3 toPoint = toCenter + toRay * min(radius / max(length(toRay), 1e-12), 1.0);
+        float widened = min(alpha + 0.5 * radius * inversesqrt(distance2), 1.0);
+        Material lobe = material;
+        lobe.roughness = sqrt(widened);
+        float unusedPdf;
+        vec3 value = evaluateReflection(lobe, wo, hit, normalize(toPoint), kLobesReflection,
+                                        unusedPdf);
+        float normalization = alpha / widened;
+        sum += luminance(lights[i].emission) * kPi * radius * radius / distance2 *
+               luminance(value) * normalization * normalization;
+    }
+    return sum;
 }
 
 /**
@@ -274,6 +326,25 @@ void main()
               diffuseLobe(material) > 0.0;
     }
     vec3 wo = -direction;
+    // The highlights, now and then (of a surface that moved, where it was).
+    vec2 highlight = vec2(0.0);
+    if (hasPrimary) {
+        Material reflecting = materialOf(primary.instanceIndex);
+        if (hasSpecularLayer(reflecting)) {
+            SurfaceHit then = primary;
+            if (movedSince(primary.instanceIndex)) {
+                then.position = previousPosition(primary.instanceIndex, primary.position);
+                mat3 turn = linearPart(previousTransforms[primary.instanceIndex].objectToWorld) *
+                            linearPart(transforms[primary.instanceIndex].worldToObject);
+                then.normal = normalize(turn * primary.normal);
+                then.geometricNormal = normalize(turn * primary.geometricNormal);
+            }
+            highlight =
+                vec2(sphereHighlights(reflecting, primary, frameData.cameraPosition.xyz, false),
+                     sphereHighlights(reflecting, then, frameData.previousPosition.xyz, true));
+        }
+    }
+    imageStore(highlights, pixel, vec4(highlight, 0.0, 0.0));
     if (lit) {
         unshadowed = albedo.rgb * analyticLight(material, wo, primary);
     }

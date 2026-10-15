@@ -229,11 +229,25 @@ SurfaceHit makeSurfaceHit(vec3 origin, vec3 direction, float t, uint instanceInd
 #ifndef STARCORE_NO_RAY_QUERY
 
 /**
- * Closest hit in (0, tMax) among instances whose mask intersects `mask` (8
- * bits). Spheres are AABB geometry intersected here; triangles are opaque and
- * two-sided.
+ * At a ray query's candidate sphere (an AABB): its intersection with the ray, if
+ * nearer than what is committed (or tMax).
  */
-bool traceClosestHit(vec3 origin, vec3 direction, uint mask, float tMax, out SurfaceHit hit)
+void generateSphereIntersection(rayQueryEXT query, float tMax)
+{
+    float closest =
+        rayQueryGetIntersectionTypeEXT(query, true) == gl_RayQueryCommittedIntersectionNoneEXT
+            ? tMax
+            : rayQueryGetIntersectionTEXT(query, true);
+    float t;
+    if (intersectUnitSphere(rayQueryGetIntersectionObjectRayOriginEXT(query, false),
+                            rayQueryGetIntersectionObjectRayDirectionEXT(query, false), 0.0,
+                            closest, t)) {
+        rayQueryGenerateIntersectionEXT(query, t);
+    }
+}
+
+/** The intersection a finished ray query committed, as a hit of its ray; false if none. */
+bool committedHit(rayQueryEXT query, vec3 origin, vec3 direction, out SurfaceHit hit)
 {
     hit.t = 0.0;
     hit.position = vec3(0.0);
@@ -242,25 +256,6 @@ bool traceClosestHit(vec3 origin, vec3 direction, uint mask, float tMax, out Sur
     hit.frontFace = true;
     hit.instanceIndex = 0u;
     hit.primitive = 0u;
-
-    rayQueryEXT query;
-    rayQueryInitializeEXT(query, tlas, gl_RayFlagsOpaqueEXT, mask & 0xFFu, origin, 0.0, direction,
-                          tMax);
-    while (rayQueryProceedEXT(query)) {
-        if (rayQueryGetIntersectionTypeEXT(query, false) ==
-            gl_RayQueryCandidateIntersectionAABBEXT) {
-            float closest = rayQueryGetIntersectionTypeEXT(query, true) ==
-                                    gl_RayQueryCommittedIntersectionNoneEXT
-                                ? tMax
-                                : rayQueryGetIntersectionTEXT(query, true);
-            float t;
-            if (intersectUnitSphere(rayQueryGetIntersectionObjectRayOriginEXT(query, false),
-                                    rayQueryGetIntersectionObjectRayDirectionEXT(query, false),
-                                    0.0, closest, t)) {
-                rayQueryGenerateIntersectionEXT(query, t);
-            }
-        }
-    }
     if (rayQueryGetIntersectionTypeEXT(query, true) == gl_RayQueryCommittedIntersectionNoneEXT) {
         return false;
     }
@@ -281,6 +276,25 @@ bool traceClosestHit(vec3 origin, vec3 direction, uint mask, float tMax, out Sur
     hit = makeSurfaceHit(origin, direction, t, instanceIndex, primitive, objectGeometric,
                          objectShading, mat3(rayQueryGetIntersectionWorldToObjectEXT(query, true)));
     return true;
+}
+
+/**
+ * Closest hit in (0, tMax) among instances whose mask intersects `mask` (8
+ * bits). Spheres are AABB geometry intersected here; triangles are opaque and
+ * two-sided.
+ */
+bool traceClosestHit(vec3 origin, vec3 direction, uint mask, float tMax, out SurfaceHit hit)
+{
+    rayQueryEXT query;
+    rayQueryInitializeEXT(query, tlas, gl_RayFlagsOpaqueEXT, mask & 0xFFu, origin, 0.0, direction,
+                          tMax);
+    while (rayQueryProceedEXT(query)) {
+        if (rayQueryGetIntersectionTypeEXT(query, false) ==
+            gl_RayQueryCandidateIntersectionAABBEXT) {
+            generateSphereIntersection(query, tMax);
+        }
+    }
+    return committedHit(query, origin, direction, hit);
 }
 
 bool traceClosestHit(vec3 origin, vec3 direction, uint mask, out SurfaceHit hit)

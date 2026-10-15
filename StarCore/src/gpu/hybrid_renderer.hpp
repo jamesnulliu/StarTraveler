@@ -3,17 +3,20 @@
 //   1. visibility (VisibilityPass): rasterize instance and triangle ids with a
 //      jittered projection, the primary surfaces and then, over a copy of
 //      their depth, the nearest smooth window panes (the glass layer);
-//   2. trace (hybrid_trace.comp): rebuild the hits of both from those ids,
-//      write their guides and motion vectors, trace paths from them (every
-//      pixel, or one of each 2x2 in turn, TraceResolution) into three layers:
-//      the primary surfaces' lighting, what they reflect (specular) and what
-//      the panes reflect (glass); while things move, the temporal gradients of
-//      their direct light (filtered by gradient.comp);
+//   2. trace (hybrid_trace.comp, direct.comp): rebuild the hits of both from
+//      those ids, write their guides and motion vectors; the light the primary
+//      surfaces' diffuse lobe gets from the sphere lights, unshadowed in closed
+//      form and (pixels traced) shadowed (the direct layer); trace paths from
+//      them (every pixel, or one of each 2x2 in turn, TraceResolution) into
+//      three more layers: the rest of the primary surfaces' lighting, what they
+//      reflect (specular) and what the panes reflect (glass); while things move,
+//      the temporal gradients of each layer (filtered by gradient.comp);
 //   3. temporal (temporal.comp, per layer): reproject and accumulate (the
 //      pixels not traced borrow from the traced ones around them);
 //   4. a-trous (atrous.comp): the SVGF spatial filter, a few iterations;
-//   5. composite (composite.comp): lighting x albedo + emission + specular +
-//      glass into GpuRenderer's radiance image.
+//   5. composite (composite.comp): the direct light (unshadowed x how much of it
+//      arrives) + lighting x albedo + emission + specular + glass into
+//      GpuRenderer's radiance image.
 
 #include <array>
 #include <cstdint>
@@ -77,6 +80,7 @@ private:
     std::array<vulkan::ComputePipeline, 2> m_temporal;
     // atrous.comp: reading the taps from the images, and tiled.
     std::array<vulkan::ComputePipeline, 2> m_atrous;
+    vulkan::ComputePipeline m_direct;  // direct.comp
     vulkan::ComputePipeline m_gradient;
     vulkan::ComputePipeline m_composite;
     std::array<vulkan::Buffer, kFramesInFlight> m_uniforms;

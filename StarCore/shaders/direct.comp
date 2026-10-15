@@ -1,0 +1,394 @@
+#version 460
+// Hybrid renderer, direct layer: the light the primary surfaces' diffuse lobe
+// gets straight from the sphere lights; their paths skip it (kVertexSkipLights)
+// and sample only the meshes there. Spheres are what moves around a ship (a
+// sun), meshes mostly what moves with it (its screens), whose light is as it
+// was. A ratio estimator (Heitz et al., "Combining Analytic Direct Illumination
+// and Stochastic Shadows", I3D 2018):
+//   - every pixel, every frame: the light it would get unshadowed, in closed
+//     form (analyticLight, exact), so without noise. Nothing of it is kept
+//     across frames: it follows the lights at once (the sunlit side of a
+//     cockpit as the ship turns);
+//   - the pixels traced: the light they get, as the paths' estimator would (one
+//     of its candidates, of the lights and of the lobe, picked by the light it
+//     brings: resampled importance sampling, Talbot et al. 2005; and a shadow
+//     ray to it: one per frame, whatever the samples per pixel; more were
+//     hardly smoother, the history holds plenty of them). The temporal pass
+//     divides it by the closed form (as the primary layer's lighting by the
+//     albedo): how much of it arrives, which accumulates and is filtered
+//     (shadows); the composite multiplies it by the closed form of the last
+//     frames.
+// A still image converges to the reference all the same: that is the paths'
+// estimator in expectation.
+//
+// Not the glossy reflections' highlights: of a lobe narrower than a light, the
+// closed forms there are are rough (a representative point, Karis 2013: some 15 %
+// off around a highlight), and how much of the light arrives would carry that,
+// which the spatial filter blurs: while things move, a big glossy surface showed
+// its highlight too bright and around it too dark. They stay with the paths.
+//
+// While things move, its temporal gradients (A-SVGF): at one pixel per stratum,
+// the previous frame's first sample (the same point of the same light) seen
+// again from the same surface point, as both are now.
+
+#extension GL_GOOGLE_include_directive : require
+#extension GL_EXT_control_flow_attributes : require
+
+#include "hybrid.glsl"
+#include "path.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// Bindings 0-2 and 4-6 are the scene's (hybrid.glsl, scene.glsl).
+layout(set = 0, binding = 3, rg32ui) uniform readonly uimage2D visibility;
+layout(set = 0, binding = 7, rg32ui) uniform readonly uimage2D glassVisibility;
+// The pixels traced: rgb the shadowed light, a its luminance squared, divided by the
+// unshadowed light's.
+layout(set = 0, binding = 8, rgba32f) uniform writeonly image2D noisyDirect;
+// Every pixel: the unshadowed light.
+layout(set = 0, binding = 9, rgba16f) uniform writeonly image2D frameUnshadowed;
+// The first pass's sample, for the next frame's gradients: x the surface's
+// instance + 1 (0: none), yzw its point (object space, float bits); and x the
+// light, y and z.x its point (object space, half floats), z.y how much of its
+// light arrived (luminance).
+layout(set = 0, binding = 10, rgba32ui) uniform readonly uimage2D previousSampleOnSurface;
+layout(set = 0, binding = 11, rgba32ui) uniform writeonly uimage2D sampleOnSurface;
+layout(set = 0, binding = 12, rgba32ui) uniform readonly uimage2D previousSampleOnLight;
+layout(set = 0, binding = 13, rgba32ui) uniform writeonly uimage2D sampleOnLight;
+// The temporal gradients, one per stratum (hybrid.glsl, kGradientStratum).
+layout(set = 0, binding = 14, rgba32f) uniform writeonly image2D gradients;
+// GpuScene::previousTransformBuffer(): the instances' transforms of the previous frame.
+layout(set = 0, binding = 15, std430) readonly buffer PreviousTransforms
+{
+    InstanceTransform previousTransforms[];
+};
+// hybrid_trace.comp's surfaces stage: the primary surface's albedo through the panes in
+// front of it, and (a) the path vertices they take.
+layout(set = 0, binding = 16, rgba16f) uniform readonly image2D frameAlbedo;
+
+#include "first_hits.glsl"
+
+// Samples of the lights, besides one of the lobe: to pick the one whose shadow ray is
+// cast from.
+const uint kCandidates = 8u;
+
+/** The diffuse lobe's share of the light: what neither metal nor transmission take. */
+float diffuseLobe(Material material)
+{
+    return (1.0 - material.metallic) * (1.0 - material.transmission);
+}
+
+/**
+ * The share of a sample's light the diffuse lobe takes, as the paths sample it
+ * (sampleBsdf, sampleLobes): besides diffuseLobe, what the microfacet's Fresnel
+ * reflection does not. Of one microfacet normal: the paths draw one.
+ */
+float diffuseShare(Material material, vec3 woLocal, SurfaceHit hit, inout uint rng)
+{
+    float u1 = nextFloat(rng);
+    float u2 = nextFloat(rng);
+    vec3 h = sampleGgxVisibleNormal(woLocal, roughnessToAlpha(material.roughness), u1, u2);
+    bool thin = (material.flags & kMaterialThinWalled) != 0u;
+    float eta = thin || hit.frontFace ? 1.0 / material.ior : material.ior;
+    return diffuseLobe(material) * (1.0 - fresnelDielectric(dot(woLocal, h), eta));
+}
+
+/**
+ * Illuminance factor of a sphere of angular radius asin(sqrt(sinSigma2)) whose
+ * center is at angle acos(cosTheta) from the normal, clipped by the horizon
+ * (Snyder; as Lagarde and de Rousiers, "Moving Frostbite to PBR", 2014): times its
+ * radiance, the irradiance.
+ */
+float sphereIlluminance(float cosTheta, float sinSigma2)
+{
+    if (cosTheta * cosTheta > sinSigma2) {
+        return kPi * sinSigma2 * max(cosTheta, 0.0);
+    }
+    float sinTheta = sqrt(max(1.0 - cosTheta * cosTheta, 1e-12));
+    float x = sqrt(1.0 / sinSigma2 - 1.0);
+    float y = -x * cosTheta / sinTheta;
+    float sinThetaSqrtY = sinTheta * sqrt(max(1.0 - y * y, 0.0));
+    return max((cosTheta * acos(clamp(y, -1.0, 1.0)) - x * sinThetaSqrtY) * sinSigma2 +
+                   atan(sinThetaSqrtY / x),
+               0.0);
+}
+
+/**
+ * The light the diffuse lobe of a surface point would get unshadowed from the
+ * sphere lights, in closed form, over its albedo (its Fresnel share as at the
+ * normal, the paths average it over microfacets: off by a little, smoothly, which
+ * the direct layer's ratio holds).
+ */
+vec3 analyticLight(Material material, vec3 wo, SurfaceHit hit)
+{
+    bool thin = (material.flags & kMaterialThinWalled) != 0u;
+    float eta = thin || hit.frontFace ? 1.0 / material.ior : material.ior;
+    float share = diffuseLobe(material) / kPi *
+                  (1.0 - fresnelDielectric(max(dot(wo, hit.normal), 1e-5), eta));
+    vec3 sum = vec3(0.0);
+    for (uint i = 0u; visitLight(i, kLightSpheres); ++i) {
+        if (lights[i].instanceIndex == hit.instanceIndex) {
+            continue;  // Its own light (as sampling the lights).
+        }
+        vec3 toCenter = lights[i].center - hit.position;
+        float distance2 = dot(toCenter, toCenter);
+        float radius = lights[i].radius;
+        if (distance2 <= radius * radius) {
+            continue;  // Inside it (as sampling the lights).
+        }
+        float cosTheta = dot(toCenter, hit.normal) * inversesqrt(distance2);
+        sum += lights[i].emission *
+               sphereIlluminance(cosTheta, min(radius * radius / distance2, 0.9999));
+    }
+    return share * sum;
+}
+
+/**
+ * The nearest sphere light along a ray, through anything else in the way (what it
+ * would find unshadowed): its index and the distance to it; false if none.
+ */
+bool nearestSphereLight(vec3 origin, vec3 direction, out uint light, out float distance)
+{
+    light = 0u;
+    distance = kFar;
+    for (uint i = 0u; visitLight(i, kLightSpheres); ++i) {
+        float t;
+        if (intersectUnitSphere((origin - lights[i].center) / lights[i].radius, direction, 0.0,
+                                distance / lights[i].radius, t)) {
+            light = i;
+            distance = t * lights[i].radius;
+        }
+    }
+    return distance < kFar;
+}
+
+/**
+ * Solid-angle density of sampling a direction to a sphere light from `position`,
+ * given that light was picked (sampleLight): uniform over its cone.
+ */
+float sphereSampleDensity(Light light, vec3 position)
+{
+    vec3 toCenter = light.center - position;
+    float distance2 = dot(toCenter, toCenter);
+    return distance2 > light.radius * light.radius
+               ? conePdf(coneOneMinusCos(light.radius, distance2))
+               : 0.0;
+}
+
+/**
+ * The temporal gradient at a pixel: how much of the previous frame's first sample's
+ * light arrives now (as luminance: its transmittance), against then.
+ */
+vec4 gradientAt(ivec2 pixel)
+{
+    uvec2 seen = imageLoad(visibility, pixel).xy;
+    if (seen.x == 0u) {
+        return vec4(0.0);
+    }
+    uint instanceIndex = seen.x - 1u;
+    vec4 none = vec4(0.0, 0.0, 0.0, uintBitsToFloat(seen.x));
+    SurfaceHit hit;
+    vec3 objectPoint;
+    if (!reconstructHit(instanceIndex, seen.y, frameData.cameraPosition.xyz,
+                        cameraDirection(vec2(pixel) + frameData.viewport.zw), hit, objectPoint)) {
+        return none;
+    }
+    // The previous frame's pixel where this surface point was, of those around it
+    // the one traced then.
+    ivec2 previous = ivec2(floor(vec2(pixel) + frameData.viewport.zw +
+                                 motionOf(instanceIndex, objectPoint).xy));
+    if (any(lessThan(previous, ivec2(0)))) {
+        return none;
+    }
+    previous = previouslyTraced(previous);
+    if (any(greaterThanEqual(vec2(previous), viewportSize()))) {
+        return none;
+    }
+    uvec4 surface = imageLoad(previousSampleOnSurface, previous);
+    uvec4 light = imageLoad(previousSampleOnLight, previous);
+    if (surface.x != seen.x || light.x >= lightCount()) {
+        return none;  // No sample then, or of another surface.
+    }
+    // Its surface point and light point, as they are now.
+    vec3 point =
+        transformPoint(transforms[instanceIndex].objectToWorld, uintBitsToFloat(surface.yzw));
+    vec2 z = unpackHalf2x16(light.z);
+    vec3 lightPoint = transformPoint(transforms[lights[light.x].instanceIndex].objectToWorld,
+                                     vec3(unpackHalf2x16(light.y), z.x));
+    vec3 toLight = lightPoint - point;
+    float distance = length(toLight);
+    float now = 0.0;
+    if (distance > 0.0) {
+        vec3 direction = toLight / distance;
+        // This pixel's surface (the same, a pixel away at most) faces the way it did.
+        if (dot(direction, hit.geometricNormal) > 0.0) {
+            now = luminance(shadowTransmittance(
+                offsetOrigin(point, hit.geometricNormal, direction), direction, distance));
+        }
+    }
+    float then = z.y;
+    return vec4(abs(now - then), max(now, then), 1.0, none.w);
+}
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    bool moving = (frameData.history.y & (kHistoryReset | kHistoryStatic)) == 0u;
+    // The gradients first (they read the previous frame's samples): at one pixel of each
+    // stratum (another each frame, as hybrid_trace.comp's), outside the image too.
+    if (moving) {
+        uint k = pcgHash(frameData.frame.x) % uint(kGradientStratum * kGradientStratum);
+        ivec2 stratum = pixel / kGradientStratum;
+        if (all(equal(pixel - stratum * kGradientStratum,
+                      ivec2(k % uint(kGradientStratum), k / uint(kGradientStratum)))) &&
+            all(lessThan(stratum, imageSize(gradients)))) {
+            bool inside = all(lessThan(vec2(pixel), viewportSize()));
+            imageStore(gradients, stratum,
+                       inside && directLayerEnabled() ? gradientAt(pixel) : vec4(0.0));
+        }
+    }
+    if (any(greaterThanEqual(vec2(pixel), viewportSize()))) {
+        return;
+    }
+    bool traced = tracedThisFrame(pixel);
+    vec3 unshadowed = vec3(0.0);
+    vec3 shadowed = vec3(0.0);
+    uvec4 surfaceRecord = uvec4(0u);
+    uvec4 lightRecord = uvec4(0u);
+
+    vec3 direction = cameraDirection(vec2(pixel) + frameData.viewport.zw);
+    uvec2 seen = imageLoad(visibility, pixel).xy;
+    SurfaceHit primary;
+    vec3 primaryPoint;
+    bool hasPrimary = seen.x != 0u && reconstructHit(seen.x - 1u, seen.y,
+                                                     frameData.cameraPosition.xyz, direction,
+                                                     primary, primaryPoint);
+    // Its albedo through the panes in front, and the path vertices they take.
+    vec4 albedo = imageLoad(frameAlbedo, pixel);
+    bool lit = false;
+    Material material;
+    if (hasPrimary && directLayerEnabled()) {
+        material = materialOf(primary.instanceIndex);
+        // The paths' first vertex on it (and so its light) is within the bounce limit.
+        lit = uint(albedo.a) < maxBounces() && maxComponent(albedo.rgb) > 0.0 &&
+              diffuseLobe(material) > 0.0;
+    }
+    vec3 wo = -direction;
+    if (lit) {
+        unshadowed = albedo.rgb * analyticLight(material, wo, primary);
+    }
+    float total = lit && traced ? totalLightWeight(primary.position, primary.normal,
+                                                   primary.instanceIndex, kLightSpheres)
+                                : 0.0;
+    if (total > 0.0) {
+        // A stream of its own (the paths' are theirs).
+        uint rng = rngForPixel(uint(pixel.x), uint(pixel.y), frameData.frame.x,
+                               pcgHash(frameData.frame.y ^ 0x5bd1e995u));
+        // The strategies (kCandidates light samples, and one direction of the lobe), each
+        // candidate weighted by the balance heuristic: its light over the densities of
+        // both.
+        float lightCandidates = float(kCandidates);
+        float spacing = total / lightCandidates;
+        Frame frame = makeFrame(primary.normal);
+        vec3 woLocal = toLocal(frame, wo);
+        woLocal.z = max(woLocal.z, 1e-5);
+        woLocal = normalize(woLocal);
+        // The light samples are picked by weight (pickLight) in strata: one walk over the
+        // lights for all of them.
+        float jitter = nextFloat(rng);
+        // The diffuse lobe's share, of one microfacet for all candidates (still the
+        // paths' in expectation).
+        float diffuse = diffuseShare(material, woLocal, primary, rng);
+        uint walk = 0u;
+        float cumulative = 0.0;
+        uint current = 0u;
+        float currentWeight = 0.0;
+        // The candidate picked so far (weighted reservoir sampling by luminance).
+        float weights = 0.0;
+        vec3 picked = vec3(0.0);
+        float pickedLuminance = 0.0;
+        vec3 pickedDirection = vec3(0.0);
+        float pickedDistance = 0.0;
+        uint pickedLight = 0u;
+        [[dont_unroll]] for (uint k = 0u; k <= kCandidates; ++k) {
+            vec3 toLight = vec3(0.0);
+            float distance = 0.0;
+            uint light = 0u;
+            float lightDensity = 0.0;  // Of light sampling, given that light was picked.
+            float weight = 0.0;        // The light's.
+            bool found = false;
+            if (k < kCandidates) {
+                float target = (float(k) + jitter) * spacing;
+                // To the light whose share of the total holds the target (rounding past the
+                // last: the last).
+                while (cumulative <= target && visitLight(walk, kLightSpheres)) {
+                    float w = lightWeight(walk, primary.position, primary.normal,
+                                          primary.instanceIndex, kLightSpheres);
+                    if (w > 0.0) {
+                        cumulative += w;
+                        current = walk;
+                        currentWeight = w;
+                    }
+                    ++walk;
+                }
+                light = current;
+                weight = currentWeight;
+                found = sampleLight(lights[light], primary.position, rng, toLight, distance,
+                                    lightDensity);
+            } else {
+                // A direction of the lobe, and the sphere light it finds through anything
+                // else (lights that sampling them cannot pick, it alone finds).
+                toLight = cosineHemisphere(primary.normal, rng);
+                if (dot(toLight, primary.geometricNormal) > 0.0 &&
+                    nearestSphereLight(primary.position, toLight, light, distance)) {
+                    weight = lightWeight(light, primary.position, primary.normal,
+                                         primary.instanceIndex, kLightSpheres);
+                    lightDensity = sphereSampleDensity(lights[light], primary.position);
+                    found = true;
+                }
+            }
+            vec3 c = vec3(0.0);
+            if (found && dot(toLight, primary.geometricNormal) > 0.0) {
+                float cosine = max(0.0, dot(toLight, primary.normal));
+                float density = lightCandidates * weight / total * lightDensity + cosine / kPi;
+                if (density > 0.0) {
+                    c = lights[light].emission * (diffuse * cosine / (kPi * density));
+                }
+            }
+            float l = luminance(c);
+            if (l > 0.0) {
+                weights += l;
+                if (nextFloat(rng) * weights < l) {
+                    picked = c;
+                    pickedLuminance = l;
+                    pickedDirection = toLight;
+                    pickedDistance = distance;
+                    pickedLight = light;
+                }
+            }
+        }
+        if (weights > 0.0) {
+            // RIS: the picked candidate's light over its luminance, times the sum of the
+            // candidates' (each already over their density); shadowed.
+            vec3 arrives = shadowTransmittance(
+                offsetOrigin(primary.position, primary.geometricNormal, pickedDirection),
+                pickedDirection, pickedDistance);
+            shadowed = albedo.rgb * picked * (weights / pickedLuminance) * arrives;
+            uint instance = lights[pickedLight].instanceIndex;
+            vec3 lightPoint =
+                transformPoint(transforms[instance].worldToObject,
+                               primary.position + pickedDirection * pickedDistance);
+            vec3 surfacePoint =
+                transformPoint(transforms[primary.instanceIndex].worldToObject, primary.position);
+            surfaceRecord = uvec4(primary.instanceIndex + 1u, floatBitsToUint(surfacePoint));
+            lightRecord = uvec4(pickedLight, packHalf2x16(lightPoint.xy),
+                                packHalf2x16(vec2(lightPoint.z, luminance(arrives))), 0u);
+        }
+    }    imageStore(frameUnshadowed, pixel, vec4(unshadowed, 0.0));
+    if (traced) {
+        float scale = luminance(shadowed) / luminance(demodulationUnshadowed(unshadowed));
+        imageStore(noisyDirect, pixel, vec4(shadowed, scale * scale));
+        imageStore(sampleOnSurface, pixel, surfaceRecord);
+        imageStore(sampleOnLight, pixel, lightRecord);
+    }
+}

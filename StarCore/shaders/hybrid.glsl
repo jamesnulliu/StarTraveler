@@ -257,6 +257,9 @@ bool reconstructHit(uint instanceIndex, uint primitive, vec3 origin, vec3 direct
 const uint kLayerPrimary = 0u;   // Lighting of the primary surfaces (divided by their albedo).
 const uint kLayerGlass = 1u;     // What the smooth window panes in front reflect.
 const uint kLayerSpecular = 2u;  // What the primary surfaces reflect (kLobesReflection).
+// The light the primary surfaces get straight from the lights (direct.comp), divided
+// by what they would get unshadowed: how much of it arrives (visibility).
+const uint kLayerDirect = 3u;
 
 // Surfaces in the glass layer: smooth window panes, looked through.
 const float kGlassMaxRoughness = 0.1;
@@ -366,9 +369,15 @@ float guideRoughness(uvec4 guide)
     return unpackHalf2x16(guide.w).y;
 }
 
-/** Filter strength of a layer on a guide's surface (the primary guide's for kLayerSpecular). */
+/**
+ * Filter strength of a layer on a guide's surface (the primary guide's for
+ * kLayerSpecular and kLayerDirect): what arrives of the lights is blurred fully.
+ */
 float guideStrength(uvec4 guide, uint layer)
 {
+    if (layer == kLayerDirect) {
+        return 1.0;
+    }
     return layer == kLayerSpecular ? reflectionStrength(guideRoughness(guide))
                                    : unpackHalf2x16(guide.w).x;
 }
@@ -455,6 +464,16 @@ float luminance(vec3 color)
 vec3 demodulationAlbedo(vec3 albedo)
 {
     return max(albedo, vec3(0.01));
+}
+
+/**
+ * What the direct layer's light is divided by: the unshadowed light (direct.comp;
+ * the shadowed one is 0 where it is, in a channel). Not clamped as an albedo: its
+ * scale is the lights'.
+ */
+vec3 demodulationUnshadowed(vec3 unshadowed)
+{
+    return max(unshadowed, vec3(1e-12));
 }
 
 #endif  // STARCORE_HYBRID_GLSL

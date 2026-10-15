@@ -6,7 +6,9 @@
 //   - primary: the first surface that is not clear glass (visibility buffer).
 //     Paths start there (path.glsl, so the estimator is the reference's);
 //     its albedo and emission are kept apart so its lighting can be
-//     filtered without blurring surface detail.
+//     filtered without blurring surface detail. The light its diffuse lobe
+//     gets from the sphere lights is the direct layer's (direct.comp): the
+//     paths skip it (kVertexSkipLights).
 //   - specular: what the primary surface reflects, if it is smooth enough
 //     (hasSpecularLayer). Its paths then sample the other lobes; the
 //     reflection is traced as a path of its own into this layer.
@@ -51,7 +53,8 @@ layout(set = 0, binding = 7, rg32ui) uniform readonly uimage2D glassVisibility;
 // samples per pixel paths for the primary layer, one for the others.
 layout(set = 0, binding = 8, rgba32f) uniform writeonly image2D noisyPrimary;
 layout(set = 0, binding = 9, rgba32f) uniform writeonly image2D noisyGlass;
-// Primary surface albedo and emission (both after the glass in front of it).
+// Primary surface albedo and emission (both after the glass in front of it; a of the
+// albedo: the path vertices that glass takes).
 layout(set = 0, binding = 10, rgba16f) uniform writeonly image2D frameAlbedo;
 layout(set = 0, binding = 11, rgba16f) uniform writeonly image2D frameEmission;
 layout(set = 0, binding = 12, rgba32ui) uniform writeonly uimage2D primaryGuide;
@@ -74,12 +77,12 @@ layout(set = 0, binding = 21, rgba32f) uniform writeonly image2D reflectionMotio
 layout(set = 0, binding = 22, rgba32ui) uniform writeonly uimage2D reflectionGuide;
 // What the samples of the primary layer started from, for the next frame's
 // gradients: the visibility (instance + 1, primitive; the path vertices before
-// it in the top 8 bits of x), and the luminance of the direct light the first
-// path found there (-1: none).
+// it in the top 8 bits of x), and the luminance of the first path after its first
+// and second vertex (packFound; -1: none).
 layout(set = 0, binding = 23, rg32ui) uniform readonly uimage2D previousHits;
 layout(set = 0, binding = 24, rg32ui) uniform writeonly uimage2D hits;
-layout(set = 0, binding = 25, r32f) uniform readonly image2D previousDirectLight;
-layout(set = 0, binding = 26, r32f) uniform writeonly image2D directLight;
+layout(set = 0, binding = 25, r32ui) uniform readonly uimage2D previousPrimaryFound;
+layout(set = 0, binding = 26, r32ui) uniform writeonly uimage2D primaryFound;
 // The temporal gradients of each layer, one per stratum (hybrid.glsl, kGradientStratum).
 layout(set = 0, binding = 27, rgba32f) uniform writeonly image2D gradients;
 // What the reflected samples found, for the next frame's gradients: x, y the
@@ -94,109 +97,7 @@ layout(set = 0, binding = 31, rgba32f) uniform writeonly image2D specularGradien
 // The sky, reflected: this far away, where it does not move.
 const float kReflectedSky = 1e5;
 
-uint instanceMask()
-{
-    return frameData.options.y;
-}
-
-uint lightCount()
-{
-    return frameData.options.z;
-}
-
-vec3 skyColor()
-{
-    return frameData.skyColor.rgb;
-}
-
-uint maxBounces()
-{
-    return frameData.frame.w;
-}
-
-bool nextEventEnabled()
-{
-    return (frameData.options.x & kFlagNextEvent) != 0u;
-}
-
-float fireflyClamp()
-{
-    return frameData.cameraForward.w;
-}
-
-float viewDepth(SurfaceHit hit, vec3 direction)
-{
-    return hit.t * dot(direction, frameData.cameraForward.xyz);
-}
-
-vec4 motionOf(uint instanceIndex, vec3 objectPoint)
-{
-    return screenMotion(instanceIndex, previousTransforms[instanceIndex].objectToWorld,
-                        objectPoint);
-}
-
-/** A world point that moves with an instance, where it was in the previous frame. */
-vec3 previousPosition(uint instanceIndex, vec3 point)
-{
-    return transformPoint(previousTransforms[instanceIndex].objectToWorld,
-                          transformPoint(transforms[instanceIndex].worldToObject, point));
-}
-
-/** The rasterized first hits of a pixel's camera ray (with the pane only if in front). */
-void firstHits(ivec2 pixel, vec3 origin, vec3 direction, out bool hasPrimary,
-               out SurfaceHit primary, out vec3 primaryPoint, out bool hasPane,
-               out SurfaceHit pane, out vec3 panePoint)
-{
-    uvec2 opaque = imageLoad(visibility, pixel).xy;
-    hasPrimary = opaque.x != 0u &&
-                 reconstructHit(opaque.x - 1u, opaque.y, origin, direction, primary,
-                                primaryPoint);
-    uvec2 glass = imageLoad(glassVisibility, pixel).xy;
-    hasPane = glass.x != 0u &&
-              reconstructHit(glass.x - 1u, glass.y, origin, direction, pane, panePoint) &&
-              (!hasPrimary || pane.t < primary.t);
-}
-
-/**
- * What the primary surface (at distance primaryT) is seen through: the
- * expected transmittance of the panes in front of it, their emission, and the
- * path vertices they take (panes are vertices too: bounce limits as the
- * reference).
- */
-void throughPanes(bool hasPane, SurfaceHit pane, float primaryT, vec3 direction,
-                  out vec3 transmittance, out vec3 emission, out uint bounces)
-{
-    transmittance = vec3(1.0);
-    emission = vec3(0.0);
-    bounces = 0u;
-    if (!hasPane) {
-        return;
-    }
-    Material material = materialOf(pane.instanceIndex);
-    emission += material.emission.rgb;
-    transmittance = thinTransmittance(material, abs(dot(direction, pane.geometricNormal)));
-    bounces = 1u;
-    // Further panes before the primary surface (rare): their expected transmittance;
-    // what they reflect is left out.
-    vec3 position = offsetOrigin(pane.position, pane.geometricNormal, direction);
-    float remaining = primaryT - pane.t;
-    for (int layer = 1; layer < kMaxThinLayers && maxComponent(transmittance) > 0.0; ++layer) {
-        SurfaceHit next;
-        if (!traceClosestHit(position, direction, instanceMask(), remaining * 0.9999, next)) {
-            break;
-        }
-        Material nextMaterial = materialOf(next.instanceIndex);
-        if (!isGlassLayer(nextMaterial)) {
-            break;  // The rasterizer and the ray disagree: trust the rasterizer.
-        }
-        emission += transmittance * nextMaterial.emission.rgb;
-        transmittance *=
-            thinTransmittance(nextMaterial, abs(dot(direction, next.geometricNormal)));
-        position = offsetOrigin(next.position, next.geometricNormal, direction);
-        remaining -= next.t;
-        ++bounces;
-    }
-}
+#include "first_hits.glsl"
 
 /**
  * Curvature (1 / radius) of the surface at a hit as the ray sees it: > 0
@@ -297,6 +198,18 @@ uint packFound(vec3 firstRadiance, vec3 secondRadiance)
     return packHalf2x16(min(vec2(luminance(firstRadiance), luminance(secondRadiance)), kMaxHalf));
 }
 
+/**
+ * tracePathFrom's flags for the first vertex of the primary layer's paths: the
+ * lobes not reflected into the specular layer; the light the diffuse lobe gets
+ * from the sphere lights is the direct layer's.
+ */
+uint primaryFlags(Material surface)
+{
+    return kVertexSkipEmission |
+           (hasSpecularLayer(surface) ? kLobesDiffuse | kLobesTransmission : 0u) |
+           skipLightsFlag();
+}
+
 /** tracePathFrom's flags for the first vertex of a reflection layer's path. */
 uint reflectionFlags(uint layer)
 {
@@ -388,17 +301,6 @@ void traceReflections(ivec2 pixel, vec3 origin, vec3 direction)
                uvec4(found[1], found[0], glass ? imageLoad(glassVisibility, pixel).xy : uvec2(0u)));
 }
 
-bool movedSince(uint instanceIndex)
-{
-    for (int row = 0; row < 3; ++row) {
-        if (any(notEqual(transforms[instanceIndex].objectToWorld[row],
-                         previousTransforms[instanceIndex].objectToWorld[row]))) {
-            return true;
-        }
-    }
-    return false;
-}
-
 /**
  * Whether what a reflected path from `surface` found next (along `direction`)
  * moved with the surface since the previous frame, or both stood still: the
@@ -428,16 +330,16 @@ bool movesWith(SurfaceHit surface, vec3 direction)
  * instance) with the same random numbers (the same point on the same light),
  * in the scene as it is now. Where nothing changed it comes out the same, so
  * the (absolute) difference is what changed (a shadow that moved on), none of
- * the noise. Of the primary layer, only the direct light of the first vertex:
- * the rest of a path bounces off into the scene, and of a surface moving
- * through it (a cockpit) every one comes out different although its lighting
- * hardly changes; the history would be cut short for nothing. (The primary
- * layer's paths do not depend on where the camera is: their reflections are
- * the specular layer's.) Of the reflections, the first, the light the surface
- * reflects (a highlight sliding along a glossy tube as the light turns around
- * it), and the second where it moved with the surface (movesWith): the light
- * on what it reflects (a sunlit patch of a cockpit, in its canopy). Their
- * guides tell neither.
+ * the noise. Of the primary layer, the light its first vertex gets from the
+ * meshes (that from the spheres is the direct layer's, with gradients of its own:
+ * direct.comp): the rest of a path bounces off into the scene, and of a surface
+ * moving through it (a cockpit) every one comes out different although its
+ * lighting hardly changes; the history would be cut short for nothing. (The
+ * primary layer's paths do not depend on where the camera is: their reflections
+ * are the specular layer's.) Of the reflections, the light found after the first
+ * vertex and, where what the path found next moved with the surface (movesWith),
+ * after the second: the light on the cockpit a canopy reflects. Their guides tell
+ * none of it.
  */
 vec4 gradientAt(ivec2 pixel, uint layer)
 {
@@ -466,8 +368,8 @@ vec4 gradientAt(ivec2 pixel, uint layer)
         return none;
     }
     uvec2 previousHit = imageLoad(previousHits, previous).xy;
-    // What it found then: after its first vertex and (reflections) its second.
-    vec2 before = vec2(imageLoad(previousDirectLight, previous).x);
+    // What it found then: after its first vertex and its second.
+    vec2 before = unpackHalf2x16(imageLoad(previousPrimaryFound, previous).x);
     if (layer != kLayerPrimary) {
         uvec4 reflected = imageLoad(previousReflectionSamples, previous);
         before = unpackHalf2x16(glass ? reflected.y : reflected.x);
@@ -498,38 +400,39 @@ vec4 gradientAt(ivec2 pixel, uint layer)
         // where the camera is now, what it reflects there may have changed too.
         direction = normalize(hit.position - frameData.cameraPosition.xyz);
     }
-    // That path's first vertex (the primary layer's) or two, from the stream it had.
+    // That path's first two vertices, from the stream it had.
     uint bounce = glass ? 0u : previousHit.x >> 24;
     uint flags;
-    uint end;
     uint rng;
     if (layer == kLayerPrimary) {
-        uint lobes =
-            hasSpecularLayer(materialOf(instanceIndex)) ? kLobesDiffuse | kLobesTransmission : 0u;
-        flags = kVertexSkipEmission | lobes;
-        end = bounce + 1u;
+        flags = primaryFlags(materialOf(instanceIndex));
         // traceSamples' stream of that pixel and frame, whose first path it was.
         rng = rngForPixel(uint(previous.x), uint(previous.y), frameData.frame.x - 1u,
                           frameData.frame.y);
     } else {
         flags = reflectionFlags(layer);
-        end = min(bounce + 2u, maxBounces());
         rng = reflectionStream(previous, frameData.frame.x - 1u, layer);
     }
+    // The primary layer's first vertex only: the light it bounces from further on
+    // changes with every shadow moving anywhere around, sample by sample (a sun
+    // swinging around a cockpit), and its history would be cut short everywhere.
+    bool primaryLayer = layer == kLayerPrimary;
     PathState path = newPath();
     vec3 firstRadiance;
     vec3 firstDirection;
     vec3 secondRadiance;
-    tracePathFrom(hit, direction, bounce, end, flags, path, rng, firstRadiance, firstDirection,
-                  secondRadiance);
-    float now = luminance(path.radiance);
-    float then = before.x;
-    if (layer != kLayerPrimary) {
-        // As stored (half floats): the same where nothing changed.
-        vec2 found = unpackHalf2x16(packFound(firstRadiance, secondRadiance));
-        bool second = movesWith(hit, firstDirection);
-        now = second ? found.y : found.x;
-        then = second ? before.y : before.x;
+    tracePathFrom(hit, direction, bounce, min(bounce + (primaryLayer ? 1u : 2u), maxBounces()),
+                  flags, path, rng, firstRadiance, firstDirection, secondRadiance);
+    // As stored (half floats): the same where nothing changed.
+    vec2 found = unpackHalf2x16(packFound(firstRadiance, secondRadiance));
+    bool second = !primaryLayer && movesWith(hit, firstDirection);
+    float now = second ? found.y : found.x;
+    float then = second ? before.y : before.x;
+    if (primaryLayer && now == 0.0 && then == 0.0) {
+        // No light to measure: its lobe's is the direct layer's (or it is in a shadow,
+        // and no change is all it would tell). Not a gradient of 0: it would make
+        // those of the lobes that have light seem smaller.
+        return none;
     }
     return vec4(abs(now - then), max(now, then), 1.0, none.w);
 }
@@ -648,17 +551,19 @@ void writeSurfaces(ivec2 pixel, vec3 origin, vec3 direction)
     uint bounces;
     primaryThroughPanes(hasPrimary, primary, surface, hasPane, pane, direction, transmittance,
                         albedo, emission, bounces);
-    imageStore(frameAlbedo, pixel, vec4(albedo, 0.0));
+    // a: the path vertices the panes in front take (direct.comp).
+    imageStore(frameAlbedo, pixel, vec4(albedo, float(bounces)));
     imageStore(frameEmission, pixel, vec4(emission, 0.0));
 }
 
 /** The traced pixels: the primary layer's paths. */
 void traceSamples(ivec2 pixel, vec3 origin, vec3 direction)
 {
+    uint none = packHalf2x16(vec2(-1.0));
     if ((frameData.options.x & kFlagPreview) != 0u) {
         imageStore(noisyPrimary, pixel, vec4(0.0));
         imageStore(hits, pixel, uvec4(0u));
-        imageStore(directLight, pixel, vec4(-1.0));
+        imageStore(primaryFound, pixel, uvec4(none));
         return;
     }
     uint samples = max(1u, frameData.frame.z);
@@ -685,21 +590,20 @@ void traceSamples(ivec2 pixel, vec3 origin, vec3 direction)
 
     vec3 sum = vec3(0.0);
     float squares = 0.0;
-    // The first path's direct light, for the next frame's gradients (gradientAt).
-    float firstLight = -1.0;
+    // What the first path found, for the next frame's gradients (gradientAt).
+    uint found = none;
     if (hasPrimary && primaryBounce < maxBounces() && maxComponent(transmittance) > 0.0) {
         // The reflection is the specular layer's (traceReflections).
-        uint lobes = hasSpecularLayer(surface) ? kLobesDiffuse | kLobesTransmission : 0u;
+        uint flags = primaryFlags(surface);
         for (uint s = 0u; s < samples; ++s) {
             PathState path = newPath();
             vec3 firstRadiance;
             vec3 firstDirection;
             vec3 secondRadiance;
-            tracePathFrom(primary, direction, primaryBounce, maxBounces(),
-                          kVertexSkipEmission | lobes, path, rng, firstRadiance, firstDirection,
-                          secondRadiance);
+            tracePathFrom(primary, direction, primaryBounce, maxBounces(), flags, path, rng,
+                          firstRadiance, firstDirection, secondRadiance);
             if (s == 0u) {
-                firstLight = luminance(firstRadiance);
+                found = packFound(firstRadiance, secondRadiance);
             }
             vec3 radiance = transmittance * path.radiance;
             sum += radiance;
@@ -710,7 +614,7 @@ void traceSamples(ivec2 pixel, vec3 origin, vec3 direction)
     imageStore(noisyPrimary, pixel, vec4(sum, squares) / float(samples));
     uvec2 opaque = imageLoad(visibility, pixel).xy;
     imageStore(hits, pixel, uvec4(opaque.x | (min(primaryBounce, 255u) << 24), opaque.y, 0u, 0u));
-    imageStore(directLight, pixel, vec4(firstLight));
+    imageStore(primaryFound, pixel, uvec4(found));
 }
 
 void main()

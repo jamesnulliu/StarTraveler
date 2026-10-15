@@ -158,6 +158,8 @@ struct RenderScene
     // removing one moves the last instance into its slot.
     std::vector<RenderInstance> instances;
     std::vector<RenderMaterial> materials;  // materials[i] is instances[i]'s.
+    // The spheres first, then the meshes (the GPU renderers' direct layer, which samples
+    // the spheres only, stops at the first mesh).
     std::vector<RenderLight> lights;
     // The mesh lights' triangle distributions (RenderLight::firstTriangle):
     // per triangle, the fraction of its mesh's area up to and including it.

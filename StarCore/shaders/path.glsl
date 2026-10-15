@@ -122,15 +122,27 @@ float lightBrightness(vec3 emission)
     return 0.2126 * emission.r + 0.7152 * emission.g + 0.0722 * emission.b;
 }
 
+// Kinds of lights (bits), to sample some of them: the hybrid renderer's direct
+// layer takes the spheres' light at the primary surfaces (direct.comp), their
+// paths the meshes'.
+const uint kLightSpheres = 1u;
+const uint kLightMeshes = 2u;
+const uint kLightsAll = kLightSpheres | kLightMeshes;
+
+uint lightKind(uint index)
+{
+    return lights[index].triangleCount == 0u ? kLightSpheres : kLightMeshes;
+}
+
 /**
  * How much light `index` may light a surface point, roughly: its brightness
  * times the solid angle it covers. 0 if it cannot: below the surface's
- * horizon, around the point (a sphere), or the surface itself. (Reads only
- * the fields it needs: it runs for every light.)
+ * horizon, around the point (a sphere), the surface itself, or not of `kinds`.
+ * (Reads only the fields it needs: it runs for every light.)
  */
-float lightWeight(uint index, vec3 position, vec3 normal, uint surfaceInstance)
+float lightWeight(uint index, vec3 position, vec3 normal, uint surfaceInstance, uint kinds)
 {
-    if (lights[index].instanceIndex == surfaceInstance) {
+    if (lights[index].instanceIndex == surfaceInstance || (lightKind(index) & kinds) == 0u) {
         return 0.0;
     }
     vec3 toCenter = lights[index].center - position;
@@ -150,12 +162,21 @@ float lightWeight(uint index, vec3 position, vec3 normal, uint surfaceInstance)
     return brightness * min(lights[index].area / max(distance2, 1e-12), kTwoPi);
 }
 
-/** Sum of the lights' weights at a surface point. */
-float totalLightWeight(vec3 position, vec3 normal, uint surfaceInstance)
+/**
+ * Lights to visit for `kinds`: the spheres come first (RenderScene::lights), so of
+ * them alone, up to the first mesh.
+ */
+bool visitLight(uint index, uint kinds)
+{
+    return index < lightCount() && (kinds != kLightSpheres || lights[index].triangleCount == 0u);
+}
+
+/** Sum of the weights of the lights of `kinds` at a surface point. */
+float totalLightWeight(vec3 position, vec3 normal, uint surfaceInstance, uint kinds)
 {
     float total = 0.0;
-    for (uint i = 0u; i < lightCount(); ++i) {
-        total += lightWeight(i, position, normal, surfaceInstance);
+    for (uint i = 0u; visitLight(i, kinds); ++i) {
+        total += lightWeight(i, position, normal, surfaceInstance, kinds);
     }
     return total;
 }
@@ -165,15 +186,15 @@ float totalLightWeight(vec3 position, vec3 normal, uint surfaceInstance)
  * false if none may light it. `probability`: of the pick. One pass (weighted
  * reservoir sampling, `u` rescaled at each light).
  */
-bool pickLight(vec3 position, vec3 normal, uint surfaceInstance, float u, out uint picked,
-               out float probability)
+bool pickLight(vec3 position, vec3 normal, uint surfaceInstance, uint kinds, float u,
+               out uint picked, out float probability)
 {
     picked = 0u;
     probability = 0.0;
     float total = 0.0;
     float weight = 0.0;
-    for (uint i = 0u; i < lightCount(); ++i) {
-        float w = lightWeight(i, position, normal, surfaceInstance);
+    for (uint i = 0u; visitLight(i, kinds); ++i) {
+        float w = lightWeight(i, position, normal, surfaceInstance, kinds);
         if (w <= 0.0) {
             continue;
         }
@@ -288,15 +309,15 @@ bool sampleLight(Light light, vec3 position, inout uint rng, out vec3 direction,
  * Solid-angle pdf of next event estimation at a surface point (picking light
  * `index` and its point `lightHit`), for MIS against BSDF sampling.
  */
-float directLightPdf(uint index, vec3 position, vec3 normal, uint surfaceInstance,
+float directLightPdf(uint index, vec3 position, vec3 normal, uint surfaceInstance, uint kinds,
                      SurfaceHit lightHit)
 {
-    float weight = lightWeight(index, position, normal, surfaceInstance);
+    float weight = lightWeight(index, position, normal, surfaceInstance, kinds);
     if (weight <= 0.0) {
         return 0.0;
     }
     Light light = lights[index];
-    float probability = weight / totalLightWeight(position, normal, surfaceInstance);
+    float probability = weight / totalLightWeight(position, normal, surfaceInstance, kinds);
     if (light.triangleCount == 0u) {
         vec3 toCenter = light.center - position;
         return probability * conePdf(coneOneMinusCos(light.radius, dot(toCenter, toCenter)));
@@ -560,11 +581,11 @@ vec3 evaluateReflection(Material material, vec3 wo, SurfaceHit hit, vec3 wi, uin
  * inline every call, and a second copy of the shadow ray costs registers.
  */
 vec3 sampleLobeLight(Material material, vec3 wo, SurfaceHit hit, bool reflection, uint lobes,
-                     inout uint rng)
+                     uint kinds, inout uint rng)
 {
     uint index;
     float probability;
-    if (!pickLight(hit.position, hit.normal, hit.instanceIndex, nextFloat(rng), index,
+    if (!pickLight(hit.position, hit.normal, hit.instanceIndex, kinds, nextFloat(rng), index,
                    probability)) {
         return vec3(0.0);
     }
@@ -616,7 +637,11 @@ struct PathState
     vec3 misNormal;
     uint misInstance;
     float misPdf;
+    uint misLights;  // The kinds of lights it sampled.
     float scale;
+    // The kinds of lights whose light the last vertex left to someone else
+    // (kVertexSkipLights): those its lobe finds are not the path's.
+    uint skipLights;
 };
 
 PathState newPath()
@@ -630,7 +655,9 @@ PathState newPath()
     path.misNormal = vec3(0.0);
     path.misInstance = 0u;
     path.misPdf = 0.0;
+    path.misLights = kLightsAll;
     path.scale = 1.0;
+    path.skipLights = 0u;
     return path;
 }
 
@@ -649,6 +676,11 @@ vec3 clampContribution(vec3 contribution, uint scatteringEvents, float scale)
 
 // pathVertex flags, and kLobes* bits: only those lobes (sampleLobes; none: sampleBsdf).
 const uint kVertexSkipEmission = 1u;  // The caller accounts for the vertex's emission.
+// The caller accounts for the light the vertex gets straight from the sphere lights
+// through its diffuse lobe: there, its next event estimation samples the meshes only,
+// and the spheres its sampled direction finds next are not counted (the hybrid
+// renderer's direct layer, direct.comp).
+const uint kVertexSkipLights = 16u;
 
 /**
  * One vertex of a path reached along `direction`: emission (MIS-weighted),
@@ -664,12 +696,14 @@ bool pathVertex(SurfaceHit hit, Material material, int lightIndex, vec3 directio
     bool nextEvent = nextEventEnabled() && lightCount() > 0u;
 
     vec3 emission = material.emission.rgb;
-    if ((flags & kVertexSkipEmission) == 0u && maxComponent(emission) > 0.0) {
+    if ((flags & kVertexSkipEmission) == 0u && maxComponent(emission) > 0.0 &&
+        !(lightIndex >= 0 && (lightKind(uint(lightIndex)) & path.skipLights) != 0u)) {
         float weight = 1.0;
         if (nextEvent && path.mis && lightIndex >= 0) {
             weight = powerHeuristic(path.misPdf,
                                     directLightPdf(uint(lightIndex), path.misPosition,
-                                                   path.misNormal, path.misInstance, hit));
+                                                   path.misNormal, path.misInstance,
+                                                   path.misLights, hit));
         }
         path.radiance +=
             clampContribution(path.throughput * emission * weight, path.scatterings, path.scale);
@@ -692,13 +726,18 @@ bool pathVertex(SurfaceHit hit, Material material, int lightIndex, vec3 directio
     if (glossy) {
         evaluateReflection(material, wo, hit, scatter.direction, lobes, misPdf);
     }
+    // The kinds of lights sampled here (the others' light is the caller's).
+    uint sampled = nextEvent && (flags & kVertexSkipLights) != 0u && scatter.lobe == kLobeDiffuse
+                       ? kLightMeshes
+                       : kLightsAll;
     if (nextEvent && (scatter.lobe == kLobeDiffuse || glossy)) {
         // The reflection's, when the microfacet picked reflection: weighted up by that
         // chance.
         vec3 weight = glossy ? vec3(1.0 / scatter.probability) : scatter.weight;
-        path.radiance += clampContribution(
-            path.throughput * weight * sampleLobeLight(material, wo, hit, glossy, lobes, rng),
-            path.scatterings + 1u, path.scale);
+        path.radiance += clampContribution(path.throughput * weight *
+                                               sampleLobeLight(material, wo, hit, glossy, lobes,
+                                                               sampled, rng),
+                                           path.scatterings + 1u, path.scale);
     }
     path.throughput *= scatter.weight;
     path.scale *= scatter.scale;
@@ -711,8 +750,13 @@ bool pathVertex(SurfaceHit hit, Material material, int lightIndex, vec3 directio
         path.misNormal = hit.normal;
         path.misInstance = hit.instanceIndex;
         path.misPdf = misPdf;
+        path.misLights = sampled;
     } else if (!scatter.passThrough) {
         path.mis = false;
+    }
+    if (!scatter.passThrough) {
+        path.skipLights =
+            (scatter.lobe == kLobeDiffuse || glossy) ? kLightsAll & ~sampled : 0u;
     }
 
     if (bounce >= kRussianRouletteStart) {

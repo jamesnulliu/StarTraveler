@@ -299,8 +299,10 @@ void RenderSceneBuilder::removeInstance(Update& update, std::uint32_t index)
 void RenderSceneBuilder::syncLights(Update& update)
 {
     RenderScene& scene = m_scene;
-    // Emissive meshes and (nearly) uniformly scaled emissive spheres are sampled as lights.
+    // Emissive meshes and (nearly) uniformly scaled emissive spheres are sampled as lights;
+    // the spheres first (RenderScene::lights).
     std::vector<RenderLight> lights;
+    std::vector<RenderLight> meshLights;
     std::vector<float> cdf;
     for (std::uint32_t i = 0; i < scene.instances.size(); ++i) {
         const RenderInstance& instance = scene.instances[i];
@@ -342,7 +344,7 @@ void RenderSceneBuilder::syncLights(Update& update)
         const Vec3 extent = instance.worldBounds.max - instance.worldBounds.min;
         // Areas scale by the transform's determinant to the power 2/3 (exactly, if uniformly).
         const float scale = std::pow(std::abs(glm::determinant(Mat3(m))), 2.0F / 3.0F);
-        lights.push_back(RenderLight{
+        meshLights.push_back(RenderLight{
             .center = 0.5F * (instance.worldBounds.min + instance.worldBounds.max),
             .radius = 0.5F * glm::length(extent),
             .emission = emission,
@@ -352,6 +354,7 @@ void RenderSceneBuilder::syncLights(Update& update)
             .area = total * scale,
         });
     }
+    lights.insert(lights.end(), meshLights.begin(), meshLights.end());
     if (lights != scene.lights || cdf != scene.lightTriangleCdf) {
         scene.lights = std::move(lights);
         scene.lightTriangleCdf = std::move(cdf);

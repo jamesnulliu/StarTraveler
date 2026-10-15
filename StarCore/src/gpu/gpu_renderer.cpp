@@ -83,8 +83,9 @@ auto estimatorSettings(PathTracerSettings settings) -> PathTracerSettings
 /** @brief Hybrid debug images shown as they are (not tone mapped, see composite.comp). */
 auto rawView(HybridView view) -> bool
 {
-    return view == HybridView::Albedo || view == HybridView::Variance ||
-           view == HybridView::Motion || view == HybridView::History;
+    return view == HybridView::Albedo || view == HybridView::Visibility ||
+           view == HybridView::Variance || view == HybridView::Motion ||
+           view == HybridView::History;
 }
 
 }  // namespace

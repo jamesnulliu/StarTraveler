@@ -8,9 +8,13 @@
 // accumulation. While things move it is capped (fewer samples for what smooth
 // surfaces let through), and keeps less where the temporal gradients say the
 // light changed, like where a shadow moved on (A-SVGF, Schied et al., HPG
-// 2018; of reflections, what they reflect). The primary layer also keeps the means of its albedo and
-// emission: the lighting is divided by the albedo only after accumulating, so
-// edges anti-aliased by the jitter stay exact.
+// 2018; of reflections, what they reflect). The primary layer also keeps the
+// means of its albedo and emission: the lighting is divided by the albedo only
+// after accumulating, so edges anti-aliased by the jitter stay exact. The direct
+// layer keeps its unshadowed light as the albedo (direct.comp): the shadowed
+// light divided by it is how much of it arrives; and as the emission, a mean of
+// the last few frames' (kRecentUnshadowed; still, of all of them), what the
+// composite multiplies it by: it follows the lights, and edges stay anti-aliased.
 //
 // TraceResolution::Half: a pixel not traced this frame accumulates nothing (its
 // own samples only), and borrows from the traced pixels around it on the same
@@ -46,7 +50,7 @@ const bool kBorrowing = kBorrowingConstant != 0u;
 
 layout(push_constant) uniform Pass
 {
-    uint layer;  // kLayer*: the primary one has albedo and emission.
+    uint layer;  // kLayer*: the primary one has albedo and emission, the direct one albedo.
 }
 pass;
 
@@ -89,13 +93,40 @@ struct History
 {
     vec4 color;  // rgb: mean, a: samples
     vec3 albedo;
-    vec3 emission;
+    vec4 emission;  // a: the direct layer's frames of it
     vec2 moments;
 };
 
 bool isPrimary()
 {
     return pass.layer == kLayerPrimary;
+}
+
+/** Whether the layer's light is divided by what the "albedo" images hold (primary, direct). */
+bool demodulates()
+{
+    return pass.layer == kLayerPrimary || pass.layer == kLayerDirect;
+}
+
+/**
+ * Whether the layer keeps a mean of what the "emission" images hold (the primary
+ * layer's emission; the direct layer's unshadowed light of the last few frames).
+ */
+bool hasEmission()
+{
+    return pass.layer == kLayerPrimary || pass.layer == kLayerDirect;
+}
+
+// Of the direct layer's unshadowed light, the recent mean holds about the last this many
+// frames (as many sample positions of the jitter) while things move; still, more and
+// more, up to kStillUnshadowed.
+const float kRecentUnshadowed = 4.0;
+const float kStillUnshadowed = 1024.0;
+
+/** Whether the layer is a reflection (glass, specular): reprojected with its image. */
+bool reflects()
+{
+    return pass.layer == kLayerGlass || pass.layer == kLayerSpecular;
 }
 
 /** The previous camera's ray through a pixel position, at view depth 1. */
@@ -158,10 +189,12 @@ History loadHistory(ivec2 tap)
     h.color = imageLoad(previousColor, tap);
     h.moments = imageLoad(previousMoments, tap).xy;
     h.albedo = vec3(0.0);
-    h.emission = vec3(0.0);
-    if (isPrimary()) {
+    h.emission = vec4(0.0);
+    if (demodulates()) {
         h.albedo = imageLoad(previousAlbedo, tap).rgb;
-        h.emission = imageLoad(previousEmission, tap).rgb;
+    }
+    if (hasEmission()) {
+        h.emission = imageLoad(previousEmission, tap);
     }
     return h;
 }
@@ -172,9 +205,12 @@ uint frameSamples()
     return max(1u, frameData.frame.z);
 }
 
-/** This frame's lighting divided by the albedo, per channel. */
+/** This frame's lighting divided by the albedo (direct: the unshadowed light), per channel. */
 vec3 demodulated(vec3 radiance, vec3 surfaceAlbedo)
 {
+    if (pass.layer == kLayerDirect) {
+        return radiance / demodulationUnshadowed(surfaceAlbedo);
+    }
     return isPrimary() ? radiance / demodulationAlbedo(surfaceAlbedo) : radiance;
 }
 
@@ -204,7 +240,7 @@ float spatialVariance(ivec2 pixel, uint key)
             if (!sampledOn(tap, key)) {
                 continue;
             }
-            vec3 frameAlbedoTap = isPrimary() ? imageLoad(frameAlbedo, tap).rgb : vec3(1.0);
+            vec3 frameAlbedoTap = demodulates() ? imageLoad(frameAlbedo, tap).rgb : vec3(1.0);
             float l = luminance(demodulated(imageLoad(noisy, tap).rgb, frameAlbedoTap));
             sum += l;
             squares += l * l;
@@ -267,7 +303,7 @@ vec3 guidePoint(ivec2 pixel, uvec4 surface)
 vec4 lentSamples(ivec2 tap)
 {
     vec4 value = imageLoad(noisy, tap);
-    vec3 tapAlbedo = isPrimary() ? imageLoad(frameAlbedo, tap).rgb : vec3(1.0);
+    vec3 tapAlbedo = demodulates() ? imageLoad(frameAlbedo, tap).rgb : vec3(1.0);
     return vec4(demodulated(value.rgb, tapAlbedo), value.a);
 }
 
@@ -369,19 +405,19 @@ void main()
     // This frame's samples (none of a pixel not traced, TraceResolution::Half).
     bool traced = !kBorrowing || tracedThisFrame(pixel);
     vec4 frameNoisy = traced ? imageLoad(noisy, pixel) : vec4(0.0);
-    vec3 currentAlbedo = isPrimary() ? imageLoad(frameAlbedo, pixel).rgb : vec3(0.0);
-    vec3 currentEmission = isPrimary() ? imageLoad(frameEmission, pixel).rgb : vec3(0.0);
+    vec3 currentAlbedo = demodulates() ? imageLoad(frameAlbedo, pixel).rgb : vec3(0.0);
+    vec3 currentEmission = hasEmission() ? imageLoad(frameEmission, pixel).rgb : vec3(0.0);
     bool reset = (frameData.history.y & kHistoryReset) != 0u;
     bool still = (frameData.history.y & kHistoryStatic) != 0u;
     uint cap = frameData.history.x;  // Frames; 0: still.
-    float sharpness = !isPrimary() && current.z != 0u ? reflectionSharpness(guideRoughness(current))
-                                                      : 0.0;
+    float sharpness = reflects() && current.z != 0u ? reflectionSharpness(guideRoughness(current))
+                                                    : 0.0;
 
     // What a reflection layer reflects: the motion of its image and its guide (of a
     // pixel not traced, its lender's).
     vec2 reflectedMotion = vec2(0.0);
     uvec2 reflection = uvec2(0u);
-    if (!isPrimary() && current.z != 0u) {
+    if (reflects() && current.z != 0u) {
         vec4 unused;
         bool unusedOnSurface;
         ivec2 from = traced ? pixel : borrow(pixel, current, false, unused, unusedOnSurface);
@@ -393,10 +429,11 @@ void main()
     }
 
     // Bilinear reprojection over the taps that saw the same surface.
+    bool reprojected = false;  // Some taps saw the same surface.
     History history;
     history.color = vec4(0.0);
     history.albedo = vec3(0.0);
-    history.emission = vec3(0.0);
+    history.emission = vec4(0.0);
     history.moments = vec2(0.0);
     if (!reset && (isPrimary() || current.z != 0u)) {
         // This sample (at pixel + jitter) where it was last frame.
@@ -409,9 +446,9 @@ void main()
         // says little about glossy ones).
         // A glossy reflection is a blurred image, its motion a guess (of a curved surface,
         // a poor one): it follows the surface, and its gradients tell what changed.
-        vec2 moved = isPrimary() ? currentMotion.xy
-                                 : mix(currentMotion.xy, reflectedMotion, sharpness);
-        bool checkReflection = !isPrimary() && !still && sharpness > 0.5;
+        vec2 moved = reflects() ? mix(currentMotion.xy, reflectedMotion, sharpness)
+                                : currentMotion.xy;
+        bool checkReflection = reflects() && !still && sharpness > 0.5;
         // Bilinear taps around the pixel center, moved.
         vec2 position = vec2(pixel) + 0.5 + moved - 0.5;
         ivec2 base = ivec2(floor(position));
@@ -435,6 +472,7 @@ void main()
             total += weights[i];
         }
         if (total > 1e-3) {
+            reprojected = true;
             history.color /= total;
             history.albedo /= total;
             history.emission /= total;
@@ -444,9 +482,13 @@ void main()
                 // Of the light that changed, the history keeps that much less (A-SVGF):
                 // all of it where a shadow moved on, or a highlight, or the sunlit patch
                 // of a cockpit its canopy reflects.
+                // (The direct layer's gradients are of how much of the light arrives.)
                 vec4 gradient = imageLoad(gradients, pixel / kGradientStratum);
-                float change = gradientChange(gradient, current.z, luminance(history.color.rgb));
-                history.color.a *= 1.0 - (isPrimary() ? change : min(change, kReflectionMaxChange));
+                vec3 lighting = pass.layer == kLayerDirect
+                                    ? demodulated(history.color.rgb, history.albedo)
+                                    : history.color.rgb;
+                float change = gradientChange(gradient, current.z, luminance(lighting));
+                history.color.a *= 1.0 - (reflects() ? min(change, kReflectionMaxChange) : change);
                 if (sharpness > 0.0 && pass.layer == kLayerSpecular) {
                     clampToFrame(pixel, current.z, kReflectionDeviations / sharpness, history);
                 }
@@ -477,18 +519,42 @@ void main()
     // mean + (value - mean) * weight, not mix(): exact where the value is the mean.
     vec3 mean = history.color.rgb + (frameNoisy.rgb - history.color.rgb) * weight;
     vec3 meanAlbedo = history.albedo + (currentAlbedo - history.albedo) * weight;
-    vec3 meanEmission = history.emission + (currentEmission - history.emission) * weight;
+    vec4 meanEmission =
+        vec4(history.emission.rgb + (currentEmission - history.emission.rgb) * weight, 0.0);
     vec2 meanMoments = history.moments + (frameMoments - history.moments) * weight;
     if (samples <= 0.0) {
         // None yet: this frame's surface (lit by its neighbors' samples, below).
         meanAlbedo = currentAlbedo;
-        meanEmission = currentEmission;
+        meanEmission.rgb = currentEmission;
+    }
+    if (pass.layer == kLayerDirect) {
+        // Every pixel's, every frame (traced or not), the history clamped to this frame's
+        // around the pixel (3x3, as temporal anti-aliasing): where the light moved on, it
+        // is where it is now; at an edge, the mean of both sides. (Its closed form has no
+        // noise to mistake for change.) a: the frames it holds.
+        vec3 low = currentEmission;
+        vec3 high = currentEmission;
+        for (int dy = -1; dy <= 1; ++dy) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                ivec2 tap = clamp(pixel + ivec2(dx, dy), ivec2(0), ivec2(viewportSize()) - 1);
+                vec3 value = imageLoad(frameEmission, tap).rgb;
+                low = min(low, value);
+                high = max(high, value);
+            }
+        }
+        float frames = reprojected ? min(history.emission.a + 1.0,
+                                         still ? kStillUnshadowed : kRecentUnshadowed)
+                                   : 1.0;
+        vec3 recent = clamp(history.emission.rgb, low, high);
+        meanEmission = vec4(recent + (currentEmission - recent) / frames, frames);
     }
     imageStore(color, pixel, vec4(mean, samples));
     imageStore(moments, pixel, vec4(meanMoments, 0.0, 0.0));
-    if (isPrimary()) {
+    if (demodulates()) {
         imageStore(albedo, pixel, vec4(meanAlbedo, 0.0));
-        imageStore(emission, pixel, vec4(meanEmission, 0.0));
+    }
+    if (hasEmission()) {
+        imageStore(emission, pixel, meanEmission);
     }
 
     // Filter input: the lighting and the variance of its mean.

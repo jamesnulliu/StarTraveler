@@ -724,10 +724,12 @@ TEST_CASE("GPU hybrid: samples are reused while moving and filtered", "[gpu][hyb
     const float filtered = render(true, false);
     INFO("trace resolution " << enumToString(resolution) << ", mean error: reprojected "
                              << reused << ", one frame " << fresh << ", filtered " << filtered);
-    // 0.50 and 0.57 (lights picked by how much they may light a point; picked
-    // uniformly, one frame was noisier: 0.39 and 0.51).
-    CHECK(reused < 0.6F * fresh);
-    CHECK(filtered < 0.7F * fresh);
+    // Full 0.47 and 0.58, Half 0.68 and 0.73: one frame is not that noisy any more,
+    // the spheres' light unshadowed is in closed form (the direct layer); it was 0.39
+    // and 0.51, 0.58 and 0.67 (the errors themselves were 2.28, 5.83 and 2.97 and
+    // are 2.27, 4.87 and 2.80; Half, 2.88, 5.00 and 3.33 and are 2.81, 4.13 and 3.02).
+    CHECK(reused < 0.75F * fresh);
+    CHECK(filtered < 0.8F * fresh);
 }
 
 TEST_CASE("GPU hybrid: more samples per frame make the history smoother while moving",
@@ -989,6 +991,74 @@ TEST_CASE("GPU hybrid: reflected light that keeps changing does not lag", "[gpu]
     CHECK(bright == Catch::Approx(1.0).epsilon(0.05));
 }
 
+TEST_CASE("GPU hybrid: the light of a sphere light follows it at once", "[gpu][hybrid]")
+{
+    // A floor that a lamp lights (an emissive panel over it, a cockpit's screen) and a
+    // big light far away swinging around it, a little every frame (the sun, as the
+    // ship turns). What the floor gets from the sphere unshadowed is in closed form
+    // every frame; only how much of it arrives accumulates. Accumulated with the
+    // lamp's, its change was a small part of all the light, which the history kept.
+    const GpuTest gpu;
+    const TraceResolution resolution = GENERATE(TraceResolution::Full, TraceResolution::Half);
+    INFO("trace resolution " << enumToString(resolution));
+    Scene scene;
+    scene.environment().skyColor = Vec3(0.0F);
+    Entity floor = scene.createEntity("Floor");
+    floor.add<MeshComponent>(MeshComponent{.mesh = primitives::plane(Vec2(20.0F)).build()});
+    floor.add<MaterialComponent>(MaterialComponent{.albedo = Vec3(0.7F)});
+    Entity lamp = scene.createEntity("Lamp");
+    lamp.get<TransformComponent>().translation = {0.0F, 2.0F, 0.0F};
+    lamp.get<TransformComponent>().rotation = Quat(Vec3(0.5F * kPi, 0.0F, 0.0F));
+    lamp.add<MeshComponent>(MeshComponent{.mesh = primitives::quad(Vec2(2.0F)).build()});
+    lamp.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(0.0F), .emissionColor = Vec3(1.0F), .emissionPower = 4.0F});
+    Entity light = scene.createEntity("Light");
+    light.add<SphereComponent>(1.0F);
+    light.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(1.0F), .emissionColor = Vec3(1.0F), .emissionPower = 20.0F});
+    RenderSceneBuilder builder;
+    constexpr std::uint32_t kWidth = 96;
+    constexpr std::uint32_t kHeight = 72;
+    constexpr int kFrames = 30;
+    auto lightAt = [&](int frame) {
+        const float angle = glm::radians(-60.0F + 4.0F * static_cast<float>(frame));
+        light.get<TransformComponent>().translation = {6.0F * std::sin(angle), 4.0F,
+                                                       6.0F * std::cos(angle)};
+        scene.markDirty();
+        return &builder.update(scene);
+    };
+    Camera camera = makeCamera(kWidth, kHeight);
+    camera.setPosition({0.0F, 5.0F, 5.0F});
+    camera.lookAt({0.0F, 0.0F, 0.0F});
+    const PathTracerSettings settings{.samplesPerPixel = 2, .fireflyClamp = 8.0F};
+    auto hybrid = gpu.makeRenderer(kWidth, kHeight);
+    for (int i = 0; i < kFrames; ++i) {
+        hybrid->render(*lightAt(i), camera, settings, hybridOptions(true, resolution));
+    }
+    REQUIRE(hybrid->accumulatedFrames() == kFrames);  // Reprojected, not restarted.
+    auto reference = gpu.makeRenderer(kWidth, kHeight);
+    for (int i = 0; i < 64; ++i) {
+        reference->render(builder.update(scene), camera,
+                          PathTracerSettings{.samplesPerPixel = 8, .fireflyClamp = 8.0F});
+    }
+    const ColorImage image = hybrid->readImage();
+    const ColorImage expected = reference->readImage();
+    // How far off, linear, relative to the light there is.
+    double difference = 0.0;
+    for (std::size_t i = 0; i < image.pixels().size(); ++i) {
+        for (int c = 0; c < 3; ++c) {
+            difference +=
+                std::abs(srgbToLinear(static_cast<float>(channel(image.pixels()[i], c)) / 255.0F) -
+                         srgbToLinear(static_cast<float>(channel(expected.pixels()[i], c)) / 255.0F));
+        }
+    }
+    const double off = difference / (3.0 * static_cast<double>(image.pixels().size())) /
+                       meanLinear(expected);
+    INFO("off by " << off << " of the light");
+    // Full 0.030, Half 0.035 (an Intel Arc: 0.042); with the lamp's in the history, 0.037 and
+    // 0.046.
+    CHECK(off < (resolution == TraceResolution::Full ? 0.034 : 0.044));
+}
 TEST_CASE("GPU hybrid: moving shadows leave no trail", "[gpu][hybrid]")
 {
     // A ball moving under a light, seen from above: its shadow sweeps a floor that
@@ -1352,7 +1422,9 @@ TEST_CASE("GPU raster: what restarts the accumulation", "[gpu][raster]")
     if (gpu.context().deviceInfo().timestampPeriod > 0.0F) {
         raster->waitIdle();
         REQUIRE(raster->gpuTimeMs() > 0.0F);
-        REQUIRE(raster->traceTimeMs() < 0.01F);  // Nothing is traced.
+        // Nothing is traced: two timestamps one after the other (0.013 ms apart at times,
+        // after the hybrid tests' work).
+        REQUIRE(raster->traceTimeMs() < 0.1F);
     }
 
     // Display settings and things nothing traces keep it, anything seen restarts it.

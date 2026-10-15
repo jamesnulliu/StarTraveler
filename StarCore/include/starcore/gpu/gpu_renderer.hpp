@@ -62,21 +62,26 @@ struct EnumNames<GpuPipeline>
 enum class HybridView : std::uint8_t
 {
     Final,
-    Noisy,     // This frame's samples, before any reuse.
-    Albedo,    // Of the primary surfaces (lighting is filtered divided by it).
-    Lighting,  // Filtered lighting of the primary surfaces.
-    Specular,  // What smooth primary surfaces reflect (a layer of its own).
-    Glass,     // What window panes reflect (a layer of its own).
-    Variance,  // Relative standard deviation of the lighting's mean.
-    Motion,    // Screen motion of the primary surfaces (|x|, |y| / 8 px).
-    History,   // Samples per pixel reused (white: the history cap or more).
+    Noisy,   // This frame's samples, before any reuse.
+    Albedo,  // Of the primary surfaces (lighting is filtered divided by it).
+    // The light the primary surfaces get straight from the lights: unshadowed (this
+    // frame's while moving) times how much of it arrives (filtered).
+    Direct,
+    Visibility,  // How much of that light arrives (a layer of its own; 1: all).
+    Lighting,    // Filtered lighting of the primary surfaces, the rest of it.
+    Specular,    // What smooth primary surfaces reflect (a layer of its own).
+    Glass,       // What window panes reflect (a layer of its own).
+    Variance,    // Relative standard deviation of the lighting's mean.
+    Motion,      // Screen motion of the primary surfaces (|x|, |y| / 8 px).
+    History,     // Samples per pixel reused (white: the history cap or more).
 };
 
 template <>
 struct EnumNames<HybridView>
 {
-    static constexpr std::array kNames = {"Final", "Noisy",    "Albedo", "Lighting", "Specular",
-                                          "Glass", "Variance", "Motion", "History"};
+    static constexpr std::array kNames = {"Final",    "Noisy",   "Albedo", "Direct",
+                                          "Visibility", "Lighting", "Specular", "Glass",
+                                          "Variance", "Motion",  "History"};
 };
 
 /** @brief Which pixels the hybrid pipeline traces paths from each frame. */

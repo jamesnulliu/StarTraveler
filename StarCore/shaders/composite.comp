@@ -1,8 +1,9 @@
 #version 460
-// Hybrid renderer, composite: primary lighting x albedo + emission + what the
-// primary surfaces and the panes reflect (specular and glass layers) into the
-// radiance image (tone mapped by post.comp), or a debug view of one of the
-// intermediate images (raw ones: post.comp only clamps them).
+// Hybrid renderer, composite: the direct light (how much of it arrives x the
+// unshadowed light, direct.comp) + the rest of the primary lighting x albedo +
+// emission + what the primary surfaces and the panes reflect (specular and glass
+// layers) into the radiance image (tone mapped by post.comp), or a debug view of
+// one of the intermediate images (raw ones: post.comp only clamps them).
 
 #extension GL_GOOGLE_include_directive : require
 
@@ -24,17 +25,24 @@ layout(set = 0, binding = 14, rgba32f) uniform readonly image2D primaryMotion;
 layout(set = 0, binding = 15, rgba32f) uniform writeonly image2D radianceImage;
 layout(set = 0, binding = 16, rgba16f) uniform readonly image2D specularLighting;
 layout(set = 0, binding = 17, rgba32f) uniform readonly image2D noisySpecular;
+// The direct layer: how much of the light arrives (filtered), the unshadowed light of
+// the last frames (temporal.comp), this frame's shadowed light.
+layout(set = 0, binding = 18, rgba16f) uniform readonly image2D directVisibility;
+layout(set = 0, binding = 19, rgba16f) uniform readonly image2D recentUnshadowed;
+layout(set = 0, binding = 20, rgba32f) uniform readonly image2D noisyDirect;
 
 // HybridView.
 const uint kViewFinal = 0u;
 const uint kViewNoisy = 1u;
 const uint kViewAlbedo = 2u;
-const uint kViewLighting = 3u;
-const uint kViewSpecular = 4u;
-const uint kViewGlass = 5u;
-const uint kViewVariance = 6u;
-const uint kViewMotion = 7u;
-const uint kViewHistory = 8u;
+const uint kViewDirect = 3u;
+const uint kViewVisibility = 4u;
+const uint kViewLighting = 5u;
+const uint kViewSpecular = 6u;
+const uint kViewGlass = 7u;
+const uint kViewVariance = 8u;
+const uint kViewMotion = 9u;
+const uint kViewHistory = 10u;
 
 void main()
 {
@@ -46,7 +54,14 @@ void main()
     vec3 surfaceAlbedo = imageLoad(albedo, pixel).rgb;
     vec3 specular = imageLoad(specularLighting, pixel).rgb;
     vec3 glass = imageLoad(glassLighting, pixel).rgb;
-    vec3 radiance = demodulationAlbedo(surfaceAlbedo) * lighting.rgb +
+    // The unshadowed light of the last few frames (it follows the lights, and edges stay
+    // anti-aliased: as many positions of the jitter; still, of all of them), times how
+    // much of it arrives: that is a share, whatever the history holds of light that was
+    // brighter or dimmer then.
+    vec3 visibility = imageLoad(directVisibility, pixel).rgb;
+    vec3 unshadowed = imageLoad(recentUnshadowed, pixel).rgb;
+    vec3 direct = demodulationUnshadowed(unshadowed) * visibility;
+    vec3 radiance = direct + demodulationAlbedo(surfaceAlbedo) * lighting.rgb +
                     imageLoad(emission, pixel).rgb + specular + glass;
 
     switch (frameData.history.z) {
@@ -54,12 +69,18 @@ void main()
         // This frame's samples (TraceResolution::Half: of the pixels traced, the others black).
         radiance = imageLoad(frameEmission, pixel).rgb;
         if (tracedThisFrame(pixel)) {
-            radiance += imageLoad(noisyPrimary, pixel).rgb + imageLoad(noisySpecular, pixel).rgb +
-                        imageLoad(noisyGlass, pixel).rgb;
+            radiance += imageLoad(noisyDirect, pixel).rgb + imageLoad(noisyPrimary, pixel).rgb +
+                        imageLoad(noisySpecular, pixel).rgb + imageLoad(noisyGlass, pixel).rgb;
         }
         break;
     case kViewAlbedo:  // Raw.
         radiance = surfaceAlbedo;
+        break;
+    case kViewDirect:
+        radiance = direct;
+        break;
+    case kViewVisibility:  // Raw.
+        radiance = visibility;
         break;
     case kViewLighting:
         radiance = lighting.rgb;

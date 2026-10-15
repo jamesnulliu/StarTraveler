@@ -20,6 +20,7 @@ uint lightCount()
     return frameData.options.z;
 }
 
+
 vec3 skyColor()
 {
     return frameData.skyColor.rgb;
@@ -48,6 +49,18 @@ float fireflyClamp()
 bool directLayerEnabled()
 {
     return nextEventEnabled() && lightCount() > 0u && (frameData.options.x & kFlagPreview) == 0u;
+}
+
+// Light samples the diffuse lobes of the hybrid renderer's paths pick one of
+// (PathState::lightCandidates).
+const uint kHybridLightCandidates = 4u;
+
+/** A path of the hybrid renderer: its diffuse lobes' light resampled. */
+PathState hybridPath()
+{
+    PathState path = newPath();
+    path.lightCandidates = kHybridLightCandidates;
+    return path;
 }
 
 /** pathVertex flags for a path's vertex on the primary surface: kVertexSkipLights if so. */

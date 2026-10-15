@@ -265,7 +265,7 @@ void traceReflections(ivec2 pixel, vec3 origin, vec3 direction)
             rng = reflectionStream(pixel, frameData.frame.x,
                                    layer == 0 ? kLayerGlass : kLayerSpecular);
         }
-        PathState path = newPath();
+        PathState path = hybridPath();
         vec3 firstRadiance;
         vec3 secondRadiance;
         vec3 ray;
@@ -417,7 +417,7 @@ vec4 gradientAt(ivec2 pixel, uint layer)
     // changes with every shadow moving anywhere around, sample by sample (a sun
     // swinging around a cockpit), and its history would be cut short everywhere.
     bool primaryLayer = layer == kLayerPrimary;
-    PathState path = newPath();
+    PathState path = hybridPath();
     vec3 firstRadiance;
     vec3 firstDirection;
     vec3 secondRadiance;
@@ -596,7 +596,7 @@ void traceSamples(ivec2 pixel, vec3 origin, vec3 direction)
         // The reflection is the specular layer's (traceReflections).
         uint flags = primaryFlags(surface);
         for (uint s = 0u; s < samples; ++s) {
-            PathState path = newPath();
+            PathState path = hybridPath();
             vec3 firstRadiance;
             vec3 firstDirection;
             vec3 secondRadiance;

@@ -67,6 +67,11 @@ auto Window::isMinimized() const -> bool
     return glfwGetWindowAttrib(m_handle, GLFW_ICONIFIED) != 0;
 }
 
+auto Window::isFocused() const -> bool
+{
+    return glfwGetWindowAttrib(m_handle, GLFW_FOCUSED) != 0;
+}
+
 auto Window::framebufferSize() const -> IVec2
 {
     int width = 0;

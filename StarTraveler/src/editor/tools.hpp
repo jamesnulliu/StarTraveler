@@ -14,7 +14,8 @@ namespace startraveler
 
 enum class ToolKind : std::uint8_t
 {
-    None,
+    None,    // Flying: a click on the view captures the mouse.
+    Select,  // Handled by the GameLayer (Selection).
     Line,
     Ellipse,
     Arc,

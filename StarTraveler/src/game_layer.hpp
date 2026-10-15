@@ -125,6 +125,14 @@ private:
 
     // Per frame.
     void buildDefaultLayoutIfNeeded();
+    /** @brief Capture the mouse (a click on the view), free it (Esc: pause). */
+    void updateMouseCapture();
+    void setPaused(bool paused);
+    /** @brief The mouse and the keys fly the ship or the camera. */
+    [[nodiscard]] auto looking() const -> bool
+    {
+        return m_captured || m_dragLook;
+    }
     void handleShortcuts();
     void updateCamera();
     /** @brief Particles (exhaust, sparks) and the space dust around the camera. */
@@ -140,6 +148,8 @@ private:
     /** @brief The viewport image as shown (GPU frames are read back). */
     [[nodiscard]] auto captureFrame() -> starcore::ColorImage;
     void drawHud(starcore::Vec2 origin);
+    /** @param platformViewport The ImGuiID of the view's platform window. */
+    void drawPauseMenu(starcore::Vec2 origin, std::uint32_t platformViewport);
     [[nodiscard]] auto makeContext() -> EditorContext;
     void setTool(ToolKind kind);
 
@@ -173,7 +183,13 @@ private:
 
     starcore::Camera m_camera{45.0F, 0.1F, 1000.0F};
     starcore::FlyCameraController m_cameraController;
-    bool m_cameraActive = false;
+    // Flying (tool None): a click on the view captures the mouse, which then
+    // steers; Esc frees it and pauses. The editing tools take the clicks and
+    // look around while RMB is held.
+    bool m_captured = false;
+    bool m_dragLook = false;
+    bool m_paused = false;  // The pause menu: the ship and the particles stand still.
+    bool m_focusPauseMenu = false;
 
     starcore::CpuPathTracer m_tracer;
     std::unique_ptr<starcore::GpuRenderer> m_gpuRenderer;  // Null without a usable GPU.

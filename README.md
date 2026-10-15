@@ -97,17 +97,26 @@ the extension into `StarCore/python/starcore` (`$env:PYTHONPATH = "StarCore/pyth
 
 ## Playing
 
+A click on the view captures the mouse: it disappears behind the crosshair and
+steers until Esc opens the pause menu (the ship and the particles stand still,
+the mouse comes back; Esc or a click on the view flies on).
+
 | Input | Pilot view (default) | Free camera |
 |---|---|---|
-| W/S, A/D, E/Q | thrust forward/back, strafe, up/down | fly (while RMB is held) |
-| hold RMB + mouse | steer the ship | look around |
+| mouse | steer the ship | look around |
+| W/S, A/D | thrust forward/back, strafe | fly forward/back, sideways |
+| Space, Ctrl | thrust up, down | fly up, down |
 | Shift | boost | |
 | C | switch to the free camera | back to the cockpit |
 | T | open a portal in front (two portals link up) | |
-| Ctrl+N/O/S, Ctrl+D, Del, Esc | new/open/save scene, duplicate, delete, cancel tool | |
+| Esc | pause menu | |
+| Ctrl+N/O/S, Ctrl+D, Del | new/open/save scene, duplicate, delete (while the mouse is free) | |
 
-The drawing tools (line, ellipse, arc, polygon, curve, group, seed fill) work
-in both views; shapes are placed `Draw depth` units in front of the camera.
+The Tools panel switches from flying (Fly) to selecting and editing (Select)
+and the drawing tools (line, ellipse, arc, polygon, curve, group, seed fill);
+they take the clicks on the view instead, hold RMB to look around meanwhile,
+and Esc goes back to flying. They work in both views; shapes are placed
+`Draw depth` units in front of the camera.
 The viewport is rendered on the GPU in real time by the hybrid pipeline
 (rasterized first hits, paths from a quarter of the pixels per frame, samples
 reused across frames and denoised; see below), with samples per frame

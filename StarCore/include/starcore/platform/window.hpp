@@ -35,6 +35,8 @@ public:
     [[nodiscard]] auto shouldClose() const -> bool;
     void requestClose();
     [[nodiscard]] auto isMinimized() const -> bool;
+    /** @brief The window has the keyboard focus (another application does not). */
+    [[nodiscard]] auto isFocused() const -> bool;
     [[nodiscard]] auto framebufferSize() const -> IVec2;
     void setTitle(const std::string& title);
 

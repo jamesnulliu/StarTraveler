@@ -260,9 +260,59 @@ void GameLayer::setTool(ToolKind kind)
 {
     m_toolKind = kind;
     m_tool = makeTool(kind);
-    if (kind != ToolKind::None) {
+    if (kind != ToolKind::None && kind != ToolKind::Select) {
         m_selection.clear();
     }
+    if (kind != ToolKind::None) {
+        // Editing: the clicks go to the tool.
+        m_captured = false;
+        m_paused = false;
+    }
+}
+
+void GameLayer::setPaused(bool paused)
+{
+    m_paused = paused;
+    m_captured = !paused;  // Resuming flies on.
+    m_focusPauseMenu = paused;
+}
+
+void GameLayer::updateMouseCapture()
+{
+    const ImGuiIO& io = ImGui::GetIO();
+    const bool escape = !io.WantTextInput &&
+                        !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) &&
+                        input::isKeyPressed(ImGuiKey_Escape);
+    const bool clicked = m_viewport.hovered && input::isMouseClicked(ImGuiMouseButton_Left);
+    if (m_captured) {
+        // Another application taking the focus pauses too.
+        if (escape || !Application::get().window().isFocused()) {
+            setPaused(true);
+        }
+    } else if (m_paused) {
+        if (escape || clicked) {
+            setPaused(false);
+        }
+    } else if (escape) {
+        if (m_toolKind != ToolKind::None) {
+            setTool(ToolKind::None);  // Cancel drawing, drop the selection.
+            m_selection.clear();
+        } else {
+            setPaused(true);
+        }
+    } else if (clicked && m_toolKind == ToolKind::None) {
+        m_captured = true;
+    }
+
+    // The editing tools look around while RMB is held over the view.
+    if (!m_dragLook && !m_captured && !m_paused && m_viewport.hovered &&
+        input::isMouseClicked(ImGuiMouseButton_Right)) {
+        m_dragLook = true;
+    }
+    if (m_dragLook && (m_captured || m_paused || !input::isMouseDown(ImGuiMouseButton_Right))) {
+        m_dragLook = false;
+    }
+    input::setCursorMode(looking() ? input::CursorMode::Locked : input::CursorMode::Normal);
 }
 
 void GameLayer::handleShortcuts()
@@ -271,67 +321,60 @@ void GameLayer::handleShortcuts()
     if (io.WantTextInput) {
         return;
     }
-    if (io.KeyCtrl && input::isKeyPressed(ImGuiKey_N)) {
+    // While flying Ctrl goes down: the editing shortcuts wait for the mouse.
+    const bool ctrl = io.KeyCtrl && !looking();
+    if (ctrl && input::isKeyPressed(ImGuiKey_N)) {
         newScene();
-    } else if (io.KeyCtrl && input::isKeyPressed(ImGuiKey_O)) {
+    } else if (ctrl && input::isKeyPressed(ImGuiKey_O)) {
         m_fileDialog = FileDialog::Open;
-    } else if (io.KeyCtrl && input::isKeyPressed(ImGuiKey_S)) {
+    } else if (ctrl && input::isKeyPressed(ImGuiKey_S)) {
         if (m_scenePath.empty()) {
             m_fileDialog = FileDialog::SaveAs;
         } else {
             saveScene(m_scenePath);
         }
-    } else if (io.KeyCtrl && input::isKeyPressed(ImGuiKey_D) && m_selection.selected()) {
+    } else if (ctrl && input::isKeyPressed(ImGuiKey_D) && m_selection.selected()) {
         Entity copy = m_scene.copyEntity(m_selection.selected());
         m_selection.select(copy);
     }
 
-    if (!m_viewport.hovered || m_cameraActive) {
+    if (m_paused || (!looking() && !m_viewport.hovered)) {
         return;
     }
     // Legacy: T opens a portal in front of the camera.
-    if (!io.KeyCtrl && input::isKeyPressed(ImGuiKey_T)) {
+    if (!ctrl && input::isKeyPressed(ImGuiKey_T)) {
         Entity portal = m_portals.createPortal(m_scene, m_camera, kPortalLayer);
         m_status = std::format("Created {}", portal.name());
     }
-    if (!io.KeyCtrl && input::isKeyPressed(ImGuiKey_C)) {
+    if (!ctrl && input::isKeyPressed(ImGuiKey_C)) {
         setViewMode(m_viewMode == ViewMode::Pilot ? ViewMode::Free : ViewMode::Pilot);
-    }
-    if (m_toolKind != ToolKind::None && input::isKeyPressed(ImGuiKey_Escape)) {
-        setTool(ToolKind::None);  // Cancel drawing.
     }
 }
 
 void GameLayer::updateCamera()
 {
-    // Look mode starts with a right click on the viewport and lasts while
-    // the button is held; the cursor is captured meanwhile.
-    if (!m_cameraActive && m_viewport.hovered &&
-        input::isMouseClicked(ImGuiMouseButton_Right)) {
-        m_cameraActive = true;
+    if (m_paused) {
+        return;
     }
-    if (m_cameraActive && !input::isMouseDown(ImGuiMouseButton_Right)) {
-        m_cameraActive = false;
-    }
-    input::setCursorMode(m_cameraActive ? input::CursorMode::Locked
-                                        : input::CursorMode::Normal);
     const float deltaSeconds = Application::get().deltaTime();
     m_collisionFlash = std::max(0.0F, m_collisionFlash - deltaSeconds);
 
+    // W/S/A/D, Space up, Ctrl down, while the mouse steers.
+    const ImGuiIO& io = ImGui::GetIO();
+    const bool keys = looking() && !io.WantTextInput;
+    auto key = [&](ImGuiKey name) { return keys && input::isKeyDown(name); };
+    auto axis = [](bool positive, bool negative) {
+        return static_cast<float>(positive) - static_cast<float>(negative);
+    };
+    const bool up = key(ImGuiKey_Space);
+    const bool down = keys && io.KeyCtrl;
+    const Vec2 look = looking() ? input::mouseDelta() : Vec2(0.0F);
+
     if (m_viewMode == ViewMode::Pilot && m_ship.isValid()) {
-        // Thrust with the keyboard over the viewport, steer with RMB held.
-        const ImGuiIO& io = ImGui::GetIO();
-        const bool keys = (m_viewport.hovered || m_cameraActive) && !io.WantTextInput &&
-                          !io.KeyCtrl;
-        auto axis = [&](ImGuiKey positive, ImGuiKey negative) {
-            return keys ? static_cast<float>(input::isKeyDown(positive)) -
-                              static_cast<float>(input::isKeyDown(negative))
-                        : 0.0F;
-        };
         const ShipInput shipInput{
-            .thrust = {axis(ImGuiKey_D, ImGuiKey_A), axis(ImGuiKey_E, ImGuiKey_Q),
-                       m_gameOptions.cruise ? 1.0F : axis(ImGuiKey_W, ImGuiKey_S)},
-            .look = m_cameraActive ? input::mouseDelta() : Vec2(0.0F),
+            .thrust = {axis(key(ImGuiKey_D), key(ImGuiKey_A)), axis(up, down),
+                       m_gameOptions.cruise ? 1.0F : axis(key(ImGuiKey_W), key(ImGuiKey_S))},
+            .look = look,
             .boost = keys && io.KeyShift,
         };
         const PhysicsWorld physics = PhysicsWorld::build(m_scene);
@@ -358,14 +401,14 @@ void GameLayer::updateCamera()
     }
 
     const CameraInput cameraInput{
-        .forward = input::isKeyDown(ImGuiKey_W),
-        .backward = input::isKeyDown(ImGuiKey_S),
-        .left = input::isKeyDown(ImGuiKey_A),
-        .right = input::isKeyDown(ImGuiKey_D),
-        .up = input::isKeyDown(ImGuiKey_E),
-        .down = input::isKeyDown(ImGuiKey_Q),
-        .look = m_cameraActive,
-        .mouseDelta = m_cameraActive ? input::mouseDelta() : Vec2(0.0F),
+        .forward = key(ImGuiKey_W),
+        .backward = key(ImGuiKey_S),
+        .left = key(ImGuiKey_A),
+        .right = key(ImGuiKey_D),
+        .up = up,
+        .down = down,
+        .look = looking(),
+        .mouseDelta = look,
     };
     m_cameraController.update(m_camera, cameraInput, deltaSeconds);
     if (m_portals.update(m_scene, m_camera)) {
@@ -428,7 +471,9 @@ void GameLayer::handleViewportInput()
         return;
     }
 
-    m_selection.update(context, m_hovered);
+    if (m_toolKind == ToolKind::Select) {
+        m_selection.update(context, m_hovered);
+    }
 }
 
 auto GameLayer::usingGpu() const -> bool
@@ -581,9 +626,12 @@ void GameLayer::buildDefaultLayoutIfNeeded()
 void GameLayer::onUIRender()
 {
     buildDefaultLayoutIfNeeded();
+    updateMouseCapture();
     handleShortcuts();
     updateCamera();
-    updateParticles(Application::get().deltaTime());
+    if (!m_paused) {
+        updateParticles(Application::get().deltaTime());
+    }
 
     drawViewport();
     drawToolsPanel();
@@ -628,18 +676,35 @@ void GameLayer::drawHud(Vec2 origin)
     const ImVec2 center(origin.x + size.x * 0.5F, origin.y + size.y * 0.5F);
     const ImU32 white = IM_COL32(230, 240, 255, 170);
 
-    std::string text;
-    if (m_viewMode == ViewMode::Pilot && m_ship.isValid()) {
-        // Crosshair: the ship's heading.
+    const bool pilot = m_viewMode == ViewMode::Pilot && m_ship.isValid();
+    if (pilot || m_captured) {
+        // Crosshair: the ship's heading, or where the camera looks.
         draw->AddLine({center.x - 12, center.y}, {center.x - 4, center.y}, white, 1.5F);
         draw->AddLine({center.x + 4, center.y}, {center.x + 12, center.y}, white, 1.5F);
         draw->AddLine({center.x, center.y - 12}, {center.x, center.y - 4}, white, 1.5F);
         draw->AddLine({center.x, center.y + 4}, {center.x, center.y + 12}, white, 1.5F);
-        text = std::format("SPEED {:5.1f}   W/S/A/D/Q/E thrust, Shift boost, hold RMB to "
-                           "steer, C free camera, T portal",
+    }
+    if (!m_captured && !m_paused && m_toolKind == ToolKind::None) {
+        const char* prompt = "Click to fly";
+        const ImVec2 promptSize = ImGui::CalcTextSize(prompt);
+        const ImVec2 corner(center.x - promptSize.x * 0.5F, center.y + 24.0F);
+        draw->AddRectFilled({corner.x - 8, corner.y - 4},
+                            {corner.x + promptSize.x + 8, corner.y + promptSize.y + 4},
+                            IM_COL32(0, 0, 0, 140), 4.0F);
+        draw->AddText(corner, white, prompt);
+    }
+
+    std::string text;
+    if (pilot) {
+        text = std::format("SPEED {:5.1f}   W/S/A/D thrust, Space/Ctrl up/down, Shift boost, "
+                           "C free camera, T portal, Esc pause",
                            glm::length(m_ship.get<ShipComponent>().velocity));
     } else {
-        text = "FREE CAMERA   hold RMB + W/S/A/D/Q/E to fly, C back to the cockpit";
+        text = "FREE CAMERA   W/S/A/D, Space/Ctrl up/down, C back to the cockpit, Esc pause";
+    }
+    if (m_toolKind != ToolKind::None) {
+        text = std::format("{}: hold RMB to look around, Esc back to flying",
+                           toolName(m_toolKind));
     }
     if (m_previewing) {
         text += "   [preview while moving]";
@@ -662,6 +727,54 @@ void GameLayer::drawHud(Vec2 origin)
     }
 }
 
+void GameLayer::drawPauseMenu(Vec2 origin, std::uint32_t platformViewport)
+{
+    // In the middle of the view.
+    const Vec2 size(m_viewport.size);
+    ImGui::SetNextWindowPos({origin.x + size.x * 0.5F, origin.y + size.y * 0.5F},
+                            ImGuiCond_Always, {0.5F, 0.5F});
+    ImGui::SetNextWindowViewport(platformViewport);
+    if (m_focusPauseMenu) {
+        ImGui::SetNextWindowFocus();
+        m_focusPauseMenu = false;
+    }
+    constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_NoDecoration |
+                                        ImGuiWindowFlags_AlwaysAutoResize |
+                                        ImGuiWindowFlags_NoSavedSettings |
+                                        ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoMove;
+    if (ImGui::Begin("Paused", nullptr, kFlags)) {
+        const float width = ImGui::GetFontSize() * 16.0F;
+        const char* title = "PAUSED";
+        ImGui::SetCursorPosX((width - ImGui::CalcTextSize(title).x) * 0.5F +
+                             ImGui::GetStyle().WindowPadding.x);
+        ImGui::TextUnformatted(title);
+        ImGui::Spacing();
+        if (ImGui::Button("Resume", {width, 0.0F})) {
+            setPaused(false);
+        }
+        const bool pilot = m_viewMode == ViewMode::Pilot;
+        ImGui::BeginDisabled(!m_ship.isValid());
+        if (ImGui::Button(pilot ? "Free camera" : "Back to the cockpit", {width, 0.0F})) {
+            setViewMode(pilot ? ViewMode::Free : ViewMode::Pilot);
+        }
+        ImGui::EndDisabled();
+        if (ImGui::Button("Respawn ship", {width, 0.0F})) {
+            spawnShip();
+        }
+        if (ImGui::Button("Quit", {width, 0.0F})) {
+            Application::get().close();
+        }
+        ImGui::Spacing();
+        ImGui::Separator();
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + width);
+        ImGui::TextDisabled("Click the view or press Esc to fly on. Mouse: steer. W/S/A/D: "
+                            "thrust. Space/Ctrl: up/down. Shift: boost. C: free camera. "
+                            "T: portal. The panels stay usable while paused.");
+        ImGui::PopTextWrapPos();
+    }
+    ImGui::End();
+}
+
 // Panels ----------------------------------------------------------------------------------------------
 
 void GameLayer::drawViewport()
@@ -680,7 +793,7 @@ void GameLayer::drawViewport()
                          m_viewport.mouse.y >= 0.0F &&
                          m_viewport.mouse.x < static_cast<float>(m_viewport.size.x) &&
                          m_viewport.mouse.y < static_cast<float>(m_viewport.size.y);
-    m_viewport.cameraActive = m_cameraActive;
+    m_viewport.cameraActive = looking();
 
     handleViewportInput();
     composeFrame();
@@ -700,6 +813,12 @@ void GameLayer::drawViewport()
         ImGui::Image(m_texture->imguiTexture(), imageSize);
     }
     drawHud({origin.x, origin.y});
+    if (m_paused) {
+        // Dimmed under the pause menu.
+        ImGui::GetWindowDrawList()->AddRectFilled(
+            origin, ImVec2(origin.x + imageSize.x, origin.y + imageSize.y), IM_COL32(0, 0, 0, 110));
+    }
+    const ImGuiID platformViewport = ImGui::GetWindowViewport()->ID;
 
     // Entity under the mouse, for the status bar and the next click.
     m_hovered.reset();
@@ -719,14 +838,17 @@ void GameLayer::drawViewport()
 
     ImGui::End();
     ImGui::PopStyleVar();
+    if (m_paused) {
+        drawPauseMenu({origin.x, origin.y}, platformViewport);
+    }
 }
 
 void GameLayer::drawToolsPanel()
 {
     ImGui::Begin("Tools");
-    constexpr ToolKind kTools[] = {ToolKind::None,    ToolKind::Line,  ToolKind::Ellipse,
-                                   ToolKind::Arc,     ToolKind::Polygon, ToolKind::Curve,
-                                   ToolKind::Group,   ToolKind::SeedFill};
+    constexpr ToolKind kTools[] = {ToolKind::None,  ToolKind::Select,  ToolKind::Line,
+                                   ToolKind::Ellipse, ToolKind::Arc,   ToolKind::Polygon,
+                                   ToolKind::Curve, ToolKind::Group,   ToolKind::SeedFill};
     for (const ToolKind kind : kTools) {
         const bool active = kind == m_toolKind;
         if (active) {
@@ -749,9 +871,13 @@ void GameLayer::drawToolsPanel()
     } else if (m_toolKind == ToolKind::SeedFill) {
         ImGui::TextWrapped("Click inside a region of the frame to flood-fill it with "
                            "Color 1 (freezes the frame).");
-    } else {
+    } else if (m_toolKind == ToolKind::Select) {
         ImGui::TextWrapped("Click to select, drag to move, drag green handles to edit. "
                            "Ctrl+click: add child. Del: delete. Ctrl+D: duplicate. "
+                           "Hold RMB to look around. Esc: back to flying.");
+    } else {
+        ImGui::TextWrapped("Click the view to fly: the mouse steers, W/S/A/D thrust, "
+                           "Space/Ctrl up/down, Shift boost. Esc pauses and frees the mouse. "
                            "T: portal. C: cockpit / free camera.");
     }
     ImGui::Separator();
@@ -1008,7 +1134,7 @@ void GameLayer::drawHierarchyNode(Entity entity)
     const bool open = ImGui::TreeNodeEx(reinterpret_cast<void*>(static_cast<std::uintptr_t>(id)),
                                         flags, "%s", entity.name().c_str());
     if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
-        setTool(ToolKind::None);
+        setTool(ToolKind::Select);
         m_selection.select(entity);
     }
 
@@ -1474,7 +1600,7 @@ auto GameLayer::createAtCursor(const std::string& name) -> Entity
     entity.get<TransformComponent>().translation =
         m_camera.position() + m_camera.forward() * m_drawDepth;
     m_scene.setLayer(entity, m_activeLayer);
-    setTool(ToolKind::None);
+    setTool(ToolKind::Select);
     m_selection.select(entity);
     return entity;
 }

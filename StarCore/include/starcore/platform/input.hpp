@@ -17,7 +17,10 @@ enum class CursorMode : std::uint8_t
 {
     Normal,
     Hidden,
-    // Hidden and captured; mouse deltas stay unbounded (camera look).
+    // Hidden and captured; mouse deltas stay unbounded (camera look). The
+    // mouse and the keys steer the application meanwhile: ImGui neither
+    // hovers its windows under the hidden cursor nor navigates them with the
+    // keyboard (Space would press the focused button).
     Locked,
 };
 

@@ -24,6 +24,8 @@ auto toolName(ToolKind kind) -> std::string_view
 {
     switch (kind) {
     case ToolKind::None:
+        return "Fly";
+    case ToolKind::Select:
         return "Select";
     case ToolKind::Line:
         return "Line Segment";
@@ -463,6 +465,7 @@ auto makeTool(ToolKind kind) -> std::unique_ptr<Tool>
     case ToolKind::Group:
         return std::make_unique<GroupTool>();
     case ToolKind::None:
+    case ToolKind::Select:
     case ToolKind::SeedFill:
         return nullptr;
     }

@@ -68,10 +68,13 @@ enum class Layer : std::uint32_t
     Direct = 3,    // How much of the spheres' light the primary surfaces' diffuse lobe gets.
 };
 constexpr Layer kLayers[] = {Layer::Primary, Layer::Glass, Layer::Specular, Layer::Direct};
-// Spatial filter iterations of the layers but the primary one at most (radius 8 pixels): of
-// the reflections, sharp images; of the direct layer, how much of the light arrives, which
-// is smooth but at the edges of shadows (more did not make it smoother).
-constexpr std::uint32_t kShortIterations = 3;
+// Spatial filter iterations of the direct layer at most (radius 8 pixels): how much of the
+// light arrives is smooth but at the edges of shadows (more did not make it smoother). The
+// reflections take all of them: while things move, the gradients cut their histories short
+// wherever what they reflect changes, a little, and their samples are noisy (a canopy
+// reflecting a cockpit, a few bright samples among dark ones); still, their variance is
+// low, and the filter keeps their images sharp.
+constexpr std::uint32_t kDirectIterations = 3;
 
 // temporal.comp's specialization constant: no pixels borrow (every one traced), some do.
 constexpr std::uint32_t kBorrowing[] = {0, 1};
@@ -563,7 +566,7 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
         const vulkan::ComputePipeline& atrous = m_atrous[tiled ? 1 : 0];
         atrous.bind(commandBuffer);
         for (const Layer layer : kLayers) {
-            if (layer != Layer::Primary && i >= kShortIterations) {
+            if (layer == Layer::Direct && i >= kDirectIterations) {
                 continue;
             }
             const AtrousPass pass{.step = static_cast<std::int32_t>(1U << i),

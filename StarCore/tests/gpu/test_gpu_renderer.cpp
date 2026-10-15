@@ -991,6 +991,62 @@ TEST_CASE("GPU hybrid: reflected light that keeps changing does not lag", "[gpu]
     CHECK(bright == Catch::Approx(1.0).epsilon(0.05));
 }
 
+TEST_CASE("GPU hybrid: a reflection whose light keeps changing is filtered", "[gpu][hybrid]")
+{
+    // As above: the reflection's gradients cut its history short every frame, so the
+    // spatial filter has to make up for it, as for the lighting. (Filtered 3 times where
+    // the lighting is 5 times, TraceResolution::Half: 1.91, now 1.25; Full, each pixel
+    // traced every frame, 0.92 and 0.88.)
+    const GpuTest gpu;
+    const TraceResolution resolution = GENERATE(TraceResolution::Full, TraceResolution::Half);
+    INFO("trace resolution " << enumToString(resolution));
+    Scene scene;
+    scene.environment().skyColor = Vec3(0.0F);
+    Entity pane = scene.createEntity("Pane");
+    pane.get<TransformComponent>().translation = {0.0F, 1.0F, 5.0F};
+    pane.add<MeshComponent>(MeshComponent{.mesh = primitives::quad(Vec2(8.0F, 6.0F)).build()});
+    pane.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(1.0F), .roughness = 0.0F, .transmission = 1.0F, .thinWalled = true});
+    Entity wall = scene.createEntity("Wall");
+    wall.get<TransformComponent>().translation = {0.0F, 1.0F, 13.0F};
+    wall.get<TransformComponent>().rotation = Quat(Vec3(0.0F, kPi, 0.0F));
+    wall.add<MeshComponent>(MeshComponent{.mesh = primitives::quad(Vec2(16.0F, 10.0F)).build()});
+    wall.add<MaterialComponent>(MaterialComponent{.albedo = Vec3(0.8F)});
+    Entity light = scene.createEntity("Light");
+    light.add<SphereComponent>(4.0F);
+    light.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(1.0F), .emissionColor = Vec3(1.0F), .emissionPower = 100.0F});
+    RenderSceneBuilder builder;
+    constexpr std::uint32_t kWidth = 128;
+    constexpr std::uint32_t kHeight = 96;
+    constexpr int kFrames = 30;
+    auto lightAt = [&](int frame) {
+        const float angle = glm::radians(45.0F + 1.4F * static_cast<float>(frame));
+        light.get<TransformComponent>().translation = {40.0F * std::sin(angle), 1.0F,
+                                                       13.0F - 40.0F * std::cos(angle)};
+        scene.markDirty();
+        return &builder.update(scene);
+    };
+    Camera camera = makeCamera(kWidth, kHeight);
+    camera.setPosition({0.0F, 1.0F, 9.0F});
+    GpuRenderOptions options = hybridOptions(true, resolution);
+    options.view = HybridView::Glass;
+    auto render = [&](std::uint32_t seed) {
+        const PathTracerSettings settings{.samplesPerPixel = 1, .seed = seed, .fireflyClamp = 8.0F};
+        auto hybrid = gpu.makeRenderer(kWidth, kHeight);
+        for (int i = 0; i < kFrames; ++i) {
+            hybrid->render(*lightAt(i), camera, settings, options);
+        }
+        REQUIRE(hybrid->accumulatedFrames() == kFrames);  // Reprojected, not restarted.
+        return hybrid->readImage();
+    };
+    // Two runs of other random numbers differ by their noise only.
+    const ColorImage first = render(1);
+    REQUIRE(meanLinear(first) > 1e-3);  // The reflection is there.
+    const float noise = meanDifference(first, render(2));
+    INFO("noise " << noise);
+    CHECK(noise < (resolution == TraceResolution::Full ? 1.0F : 1.5F));
+}
 TEST_CASE("GPU hybrid: the light of a sphere light follows it at once", "[gpu][hybrid]")
 {
     // A floor that a lamp lights (an emissive panel over it, a cockpit's screen) and a
@@ -1059,6 +1115,7 @@ TEST_CASE("GPU hybrid: the light of a sphere light follows it at once", "[gpu][h
     // 0.046.
     CHECK(off < (resolution == TraceResolution::Full ? 0.034 : 0.044));
 }
+
 TEST_CASE("GPU hybrid: moving shadows leave no trail", "[gpu][hybrid]")
 {
     // A ball moving under a light, seen from above: its shadow sweeps a floor that

@@ -1938,3 +1938,203 @@ TEST_CASE("GPU effects: particles glow, hide behind surfaces and streak", "[gpu]
     INFO("lit pixels: still " << dot << ", moving " << streak);
     CHECK(streak > 3 * dot);
 }
+
+namespace
+{
+
+/** @brief Options of a pipeline upscaled at a quality. */
+auto upscaled(GpuRenderOptions options, Upscaler upscaler, UpscalerQuality quality)
+    -> GpuRenderOptions
+{
+    options.upscaling = {.upscaler = upscaler, .quality = quality};
+    return options;
+}
+
+/** @brief A renderer, or SKIP if the upscaler cannot run here (the vendors' need their GPUs). */
+auto upscalingRenderer(const GpuTest& gpu, Upscaler upscaler, std::uint32_t width,
+                       std::uint32_t height) -> std::unique_ptr<GpuRenderer>
+{
+    auto renderer = gpu.makeRenderer(width, height);
+    if (!renderer->upscalerAvailable(upscaler)) {
+        SKIP(enumToString(upscaler) << " is not available: " << renderer->upscalerError(upscaler));
+    }
+    return renderer;
+}
+
+}  // namespace
+
+TEST_CASE("GPU upscaling: fewer pixels rendered, the output's reconstructed", "[gpu][upscaling]")
+{
+    const GpuTest gpu(false);
+    Scene scene;
+    const Entity ball = unshadowedScene(scene);
+    const RenderScene renderScene = buildRenderScene(scene);
+    constexpr std::uint32_t kWidth = 192;
+    constexpr std::uint32_t kHeight = 144;
+    const Camera camera = makeCamera(kWidth, kHeight);
+    // The output's pixels rendered and anti-aliased.
+    auto native = gpu.makeRenderer(kWidth, kHeight);
+    for (int i = 0; i < 64; ++i) {
+        native->render(renderScene, camera, {}, kRaster);
+    }
+    const ColorImage expected = native->readImage();
+
+    const Upscaler upscaler = GENERATE(Upscaler::Taau, Upscaler::Fsr, Upscaler::Dlss);
+    INFO(enumToString(upscaler));
+    auto renderer = upscalingRenderer(gpu, upscaler, kWidth, kHeight);
+    const GpuRenderOptions options = upscaled(kRaster, upscaler, UpscalerQuality::Performance);
+    for (int i = 0; i < 64; ++i) {
+        renderer->render(renderScene, camera, {}, options);
+    }
+    REQUIRE(renderer->activeUpscaler() == upscaler);
+    REQUIRE(renderer->renderWidth() == kWidth / 2);
+    REQUIRE(renderer->renderHeight() == kHeight / 2);
+    const ColorImage image = renderer->readImage();
+    REQUIRE(image.size() == expected.size());
+    const BlockDifference difference = blockDifference(image, expected);
+    INFO("worst block " << difference.worst << ", mean " << difference.mean);
+    // A quarter of the samples per frame: edges are reconstructed from the frames
+    // (measured on an RTX 4060: worst blocks 2.7 TAAU, 1.7 FSR, 1.4 DLSS).
+    CHECK(difference.worst < 6.0F);
+    CHECK(difference.mean < 0.5F);
+    // Entity ids at the output's size (each from the rendered pixel it is in).
+    const IdImage ids = renderer->readEntityIds();
+    REQUIRE(ids.size() == expected.size());
+    CHECK(idMismatch(ids, native->readEntityIds()) < 0.05);
+    CHECK(ids.at(kWidth / 2, kHeight / 2) == entt::to_integral(ball.handle()));
+
+    // Off again: the output's size.
+    renderer->render(renderScene, camera, {}, kRaster);
+    CHECK(renderer->activeUpscaler() == Upscaler::Off);
+    CHECK(renderer->renderWidth() == kWidth);
+}
+
+TEST_CASE("GPU upscaling: falls back where the upscaler cannot run", "[gpu][upscaling]")
+{
+    const GpuTest gpu(false);
+    Scene scene;
+    unshadowedScene(scene);
+    const RenderScene renderScene = buildRenderScene(scene);
+    auto renderer = gpu.makeRenderer(40, 18);
+    const GpuRenderOptions options = upscaled(kRaster, Upscaler::Dlss, UpscalerQuality::Quality);
+    // DLSS refuses images this small (a window being laid out): FSR or TAAU instead.
+    renderer->render(renderScene, makeCamera(40, 18), {}, options);
+    CHECK(renderer->activeUpscaler() != Upscaler::Off);
+    CHECK(renderer->renderWidth() == 27);
+    if (renderer->upscalerAvailable(Upscaler::Dlss)) {
+        CHECK(renderer->activeUpscaler() != Upscaler::Dlss);
+        renderer->resize(160, 120);
+        renderer->render(renderScene, makeCamera(160, 120), {}, options);
+        CHECK(renderer->activeUpscaler() == Upscaler::Dlss);
+    }
+    // TAAU runs everywhere.
+    CHECK(renderer->upscalerAvailable(Upscaler::Taau));
+    CHECK(renderer->upscalerError(Upscaler::Taau).empty());
+}
+
+TEST_CASE("GPU upscaling: the hybrid pipeline's image", "[gpu][upscaling][hybrid]")
+{
+    const GpuTest gpu;
+    TestScene test;
+    const RenderScene renderScene = buildRenderScene(test.scene);
+    constexpr std::uint32_t kWidth = 144;
+    constexpr std::uint32_t kHeight = 108;
+    const Camera camera = makeCamera(kWidth, kHeight);
+    const PathTracerSettings settings{.samplesPerPixel = 4, .fireflyClamp = 8.0F};
+    const GpuRenderOptions options = hybridOptions(true, TraceResolution::Half);
+    auto native = gpu.makeRenderer(kWidth, kHeight);
+    for (int i = 0; i < 64; ++i) {
+        native->render(renderScene, camera, settings, options);
+    }
+    const ColorImage expected = native->readImage();
+
+    const Upscaler upscaler = GENERATE(Upscaler::Taau, Upscaler::Fsr, Upscaler::Dlss);
+    INFO(enumToString(upscaler));
+    auto renderer = upscalingRenderer(gpu, upscaler, kWidth, kHeight);
+    for (int i = 0; i < 64; ++i) {
+        renderer->render(renderScene, camera, settings,
+                         upscaled(options, upscaler, UpscalerQuality::Quality));
+    }
+    REQUIRE(renderer->renderWidth() == 96);
+    const BlockDifference difference = blockDifference(renderer->readImage(), expected);
+    INFO("worst block " << difference.worst << ", mean " << difference.mean);
+    CHECK(difference.worst < 16.0F);
+    CHECK(difference.mean < 1.0F);
+}
+
+TEST_CASE("GPU upscaling: what moves leaves no trail", "[gpu][upscaling]")
+{
+    const GpuTest gpu(false);
+    // A bright ball sweeping across a dark sky, a pixel or two per frame.
+    Scene scene;
+    scene.environment().skyColor = Vec3(0.0F);
+    Entity ball = scene.createEntity("Ball");
+    ball.add<SphereComponent>(0.8F);
+    ball.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(0.0F), .emissionColor = Vec3(1.0F), .emissionPower = 1.0F});
+    constexpr std::uint32_t kWidth = 160;
+    constexpr std::uint32_t kHeight = 96;
+    const Camera camera = makeCamera(kWidth, kHeight);
+    auto sweep = [&](const GpuRenderOptions& options, GpuRenderer& renderer) {
+        RenderSceneBuilder builder;
+        ball.patch<TransformComponent>([](auto& t) { t.translation = {-3.0F, 0.0F, 0.0F}; });
+        for (int i = 0; i < 40; ++i) {
+            ball.patch<TransformComponent>([](auto& t) { t.translation.x += 0.15F; });
+            renderer.render(builder.update(scene), camera, {}, options);
+        }
+        return renderer.readImage();
+    };
+    // Where it ends, on its own (no history).
+    auto native = gpu.makeRenderer(kWidth, kHeight);
+    const ColorImage expected = sweep(kRaster, *native);
+
+    const Upscaler upscaler = GENERATE(Upscaler::Taau, Upscaler::Fsr, Upscaler::Dlss);
+    INFO(enumToString(upscaler));
+    auto renderer = upscalingRenderer(gpu, upscaler, kWidth, kHeight);
+    const ColorImage image =
+        sweep(upscaled(kRaster, upscaler, UpscalerQuality::Performance), *renderer);
+    // Its edges are reconstructed from fewer pixels; behind it, where it was a few frames
+    // ago, no light is left.
+    const BlockDifference difference = blockDifference(image, expected);
+    INFO("worst block " << difference.worst << ", mean " << difference.mean);
+    CHECK(difference.mean < 1.0F);
+    const float ballX = ball.get<TransformComponent>().translation.x;
+    for (const float back : {1.3F, 1.8F, 2.6F, 3.5F}) {
+        const Vec2 behind = *camera.worldToScreen({ballX - back, 0.0F, 0.0F});
+        const Vec3 trail = blockMean(image, static_cast<std::uint32_t>(behind.x) - 3,
+                                     static_cast<std::uint32_t>(behind.y) - 3, 6);
+        INFO(back << " behind the ball's center: " << trail.x);
+        CHECK(trail.x < 4.0F);
+    }
+}
+
+TEST_CASE("GPU upscaling: particles hide behind the rendered surfaces", "[gpu][upscaling]")
+{
+    const GpuTest gpu(false);
+    Scene scene;  // A black ball on a black sky.
+    scene.environment().skyColor = Vec3(0.0F);
+    Entity ball = scene.createEntity("Ball");
+    ball.add<SphereComponent>(1.0F);
+    ball.add<MaterialComponent>(MaterialComponent{.albedo = Vec3(0.0F)});
+    const RenderScene renderScene = buildRenderScene(scene);
+    const Camera camera = makeCamera(128, 96);
+    const RenderParticle particles[] = {
+        {.position = {0.0F, 0.0F, 3.0F},  // In front of the ball.
+         .size = 0.05F,
+         .previousPosition = {0.0F, 0.0F, 3.0F},
+         .color = {50.0F, 0.0F, 0.0F, 1.0F}},
+        {.position = {0.0F, 0.0F, -3.0F},  // Behind it.
+         .size = 0.05F,
+         .previousPosition = {0.0F, 0.0F, -3.0F},
+         .color = {0.0F, 50.0F, 0.0F, 1.0F}},
+    };
+    auto renderer = gpu.makeRenderer(128, 96);
+    renderer->render(renderScene, camera, {},
+                     upscaled(kRaster, Upscaler::Taau, UpscalerQuality::Performance), particles);
+    REQUIRE(renderer->renderWidth() == 64);
+    const ColorImage image = renderer->readImage();
+    const Vec2 front = *camera.worldToScreen({0.0F, 0.0F, 3.0F});
+    CHECK(channel(image.at(static_cast<std::uint32_t>(front.x), static_cast<std::uint32_t>(front.y)),
+                  0) == 255);
+    CHECK(countPixels(image, 1) == 0);
+}

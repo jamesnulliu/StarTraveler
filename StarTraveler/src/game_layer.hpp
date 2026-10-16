@@ -43,6 +43,10 @@ struct GameOptions
     bool cruise = false;
     // What the hybrid pipeline shows (its debug views; also in the Render panel).
     starcore::HybridView view = starcore::HybridView::Final;
+    // Upscaling of the hybrid and raster pipelines (also in the Render panel): as games on
+    // NVIDIA GPUs, DLSS (FSR, then TAAU where it cannot run) rendering 2/3 of each side.
+    starcore::UpscalerSettings upscaling{.upscaler = starcore::Upscaler::Dlss,
+                                         .quality = starcore::UpscalerQuality::Quality};
 };
 
 struct RenderOptions

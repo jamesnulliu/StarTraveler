@@ -27,6 +27,8 @@ layout(set = 0, binding = 3, std430) readonly buffer Particles
 layout(push_constant) uniform Draw
 {
     float shutter;  // Streak length in frames (0: round sprites).
+    float padding;
+    vec2 depthScale;  // particle.frag's.
 }
 draw;
 

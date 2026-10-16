@@ -62,6 +62,10 @@ struct GpuOptions
     bool bloom = false;
     bool motionBlur = false;
     float vignette = 0.0F;
+    // Upscaling (UpscalerSettings).
+    std::string upscaler = "Off";
+    std::string quality = "Quality";
+    float sharpness = 0.0F;
 };
 
 /** @brief Render `frames` frames on the GPU; nullopt (logged) if it cannot. */
@@ -92,6 +96,15 @@ auto renderOnGpu([[maybe_unused]] starcore::Scene& scene,
     options.effects.bloom = gpuOptions.bloom;
     options.effects.motionBlur = gpuOptions.motionBlur;
     options.effects.vignette = gpuOptions.vignette;
+    if (!starcore::enumFromString(gpuOptions.upscaler, options.upscaling.upscaler)) {
+        SC_ERROR("Unknown upscaler \"{}\"", gpuOptions.upscaler);
+        return std::nullopt;
+    }
+    if (!starcore::enumFromString(gpuOptions.quality, options.upscaling.quality)) {
+        SC_ERROR("Unknown upscaler quality \"{}\"", gpuOptions.quality);
+        return std::nullopt;
+    }
+    options.upscaling.sharpness = gpuOptions.sharpness;
     auto context = starcore::vulkan::Context::create(
         {.applicationName = "starcore-render", .enableValidation = gpuOptions.validation});
     if (!context) {
@@ -157,6 +170,11 @@ auto renderOnGpu([[maybe_unused]] starcore::Scene& scene,
         SC_INFO("GPU: {:.2f} ms/frame after setup (last frame: {:.2f} ms, {:.2f} tracing)",
                 elapsed.count() / (frames - 1), (*tracer)->gpuTimeMs(),
                 (*tracer)->traceTimeMs());
+    }
+    if (options.upscaling.upscaler != starcore::Upscaler::Off) {
+        SC_INFO("Upscaled with {}: {}x{} -> {}x{}",
+                starcore::enumToString((*tracer)->activeUpscaler()), (*tracer)->renderWidth(),
+                (*tracer)->renderHeight(), (*tracer)->width(), (*tracer)->height());
     }
     return image;
 #else
@@ -234,6 +252,11 @@ auto main(int argc, char** argv) -> int
     app.add_flag("--motion-blur", gpuOptions.motionBlur,
                  "GPU (hybrid, raster): blur along the motion, see --move");
     app.add_option("--vignette", gpuOptions.vignette, "GPU: darker corners, 0-1");
+    app.add_option("--upscaler", gpuOptions.upscaler,
+                   "GPU (hybrid, raster): Off, TAAU, FSR, DLSS (falls back to FSR, then TAAU)");
+    app.add_option("--quality", gpuOptions.quality,
+                   "Upscaler: Native, Quality, Balanced, Performance, \"Ultra performance\"");
+    app.add_option("--sharpness", gpuOptions.sharpness, "Upscaler: FSR's sharpening, 0-1");
     app.add_option("--camera", cameraPosition, "Camera position x y z")->expected(3);
     app.add_option("--look-at", cameraLookAt, "Camera target x y z")->expected(3);
     CLI11_PARSE(app, argc, argv);

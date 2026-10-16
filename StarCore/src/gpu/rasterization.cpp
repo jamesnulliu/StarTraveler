@@ -104,9 +104,10 @@ void VisibilityPass::resize(std::uint32_t width, std::uint32_t height)
     if (width == 0 || height == 0) {
         return;
     }
+    // Sampled: the particles and the upscalers read it.
     m_depth = vulkan::Image(*m_context, width, height, kDepthFormat,
                             VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
-                                VK_IMAGE_USAGE_TRANSFER_SRC_BIT);
+                                VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
     m_glassDepth = vulkan::Image(*m_context, width, height, kDepthFormat,
                                  VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT |
                                      VK_IMAGE_USAGE_TRANSFER_DST_BIT);

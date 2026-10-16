@@ -94,8 +94,9 @@ struct AtrousPass
     Layer layer = Layer::Primary;
 };
 constexpr VkDescriptorType kCompositeBindings[] = {
-    kBuffer, kUniform, kBuffer, kImage, kBuffer, kBuffer, kBuffer, kImage, kImage, kImage, kImage,
-    kImage,  kImage,   kImage,  kImage, kImage,  kImage,  kImage,  kImage, kImage, kImage};
+    kBuffer, kUniform, kBuffer, kImage, kBuffer, kBuffer, kBuffer, kImage,
+    kImage,  kImage,   kImage,  kImage, kImage,  kImage,  kImage,  kImage,
+    kImage,  kImage,   kImage,  kImage, kImage,  kImage,  kImage};
 
 void computeBarrier(VkCommandBuffer commandBuffer)
 {
@@ -272,7 +273,9 @@ void HybridRenderer::resize(std::uint32_t width, std::uint32_t height)
     images->noisySpecular = storage(VK_FORMAT_R32G32B32A32_SFLOAT);
     images->frameAlbedo = storage(VK_FORMAT_R16G16B16A16_SFLOAT);
     images->frameEmission = storage(VK_FORMAT_R16G16B16A16_SFLOAT);
-    images->primaryMotion = storage(VK_FORMAT_R32G32B32A32_SFLOAT);
+    images->primaryMotion =
+        vulkan::Image(*m_context, width, height, VK_FORMAT_R32G32B32A32_SFLOAT,
+                      VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
     images->glassMotion = storage(VK_FORMAT_R32G32B32A32_SFLOAT);
     images->reflectionMotion = storage(VK_FORMAT_R32G32B32A32_SFLOAT);
     images->primaryFilterGuide = storage(VK_FORMAT_R32G32_UINT);
@@ -365,6 +368,9 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
     }
     if (frame.writeIds) {
         flags |= kFlagWriteIds;
+    }
+    if (frame.upscaled) {
+        flags |= kFlagUpscaled;
     }
     const std::uint32_t samples =
         settings.mode == RenderMode::Preview ? 1U : std::max(1U, settings.samplesPerPixel);
@@ -620,7 +626,9 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
             .storageImage(17, images.noisySpecular.view())
             .storageImage(18, latest(Layer::Direct).view())
             .storageImage(19, images.directRecent[current].view())
-            .storageImage(20, images.noisyDirect.view());
+            .storageImage(20, images.noisyDirect.view())
+            .storageImage(21, images.frameAlbedo.view())
+            .storageImage(22, images.frameUnshadowed.view());
         m_composite.bind(commandBuffer);
         m_composite.pushDescriptors(commandBuffer, writes.writes());
         vkCmdDispatch(commandBuffer, groupsX, groupsY, 1);

@@ -14,7 +14,8 @@ layout(set = 0, binding = 1, rgba32f) uniform writeonly image2D tiles;
 layout(push_constant) uniform Params
 {
     float shutter;
-    float maxRadius;  // Pixels.
+    float maxRadius;   // Pixels.
+    vec2 motionScale;  // The motion image's size over the output's (outputMotion).
 }
 params;
 
@@ -24,13 +25,16 @@ void main()
     if (any(greaterThanEqual(tile, imageSize(tiles)))) {
         return;
     }
-    ivec2 size = imageSize(motion);
+    // The output's pixels (the tiles cover it).
+    ivec2 size = ivec2(ceil(vec2(imageSize(motion)) / params.motionScale - 0.001));
     ivec2 first = tile * kMotionTile;
     ivec2 last = min(first + kMotionTile, size);
     vec2 largest = vec2(0.0);
     for (int y = first.y; y < last.y; ++y) {
         for (int x = first.x; x < last.x; ++x) {
-            vec2 v = halfBlur(imageLoad(motion, ivec2(x, y)), params.shutter, params.maxRadius);
+            ivec2 rendered = renderedPixel(ivec2(x, y), params.motionScale);
+            vec2 v = halfBlur(outputMotion(imageLoad(motion, rendered), params.motionScale),
+                              params.shutter, params.maxRadius);
             if (dot(v, v) > dot(largest, largest)) {
                 largest = v;
             }

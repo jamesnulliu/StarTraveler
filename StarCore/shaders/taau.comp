@@ -1,0 +1,187 @@
+#version 460
+// TAAU, StarCore's temporal upscaler (upscaler_taau.cpp): each output pixel blends
+// what this frame rendered around it into its history -- the output of the frames
+// before, reprojected with the motion vectors of the nearest surface around and clipped
+// to the colors rendered around (variance clipping, Salvi), so whatever moved, changed
+// or was uncovered leaves no trail. A rendered sample counts as much as it is near the
+// output pixel's center: with the jitter, every output pixel gets samples near it in
+// turn, and the history gathers the detail of more pixels than were rendered.
+// Colors are blended tone mapped (x / (1 + luminance)): a single bright sample neither
+// flickers nor smears. The history's alpha counts the samples it holds.
+
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// The pipeline's size:
+layout(set = 0, binding = 0, rgba32f) uniform readonly image2D color;
+layout(set = 0, binding = 1) uniform sampler2D depth;  // Reversed (nearest).
+layout(set = 0, binding = 2, rgba32f) uniform readonly image2D motion;
+// The output's size: the previous frame's history (bilinear) and this frame's.
+layout(set = 0, binding = 3) uniform sampler2D history;
+layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D historyOut;
+layout(set = 0, binding = 5, rgba32f) uniform writeonly image2D outputImage;
+
+layout(push_constant) uniform Params
+{
+    vec2 jitter;       // Sample position in the rendered pixels, [0, 1).
+    uint flags;
+    float maxHistory;  // Samples the history holds at most.
+}
+params;
+
+const uint kReset = 1u;  // No history: this frame alone.
+// Clip box: the mean of the colors around +- this many standard deviations.
+const float kClipSigma = 1.25;
+
+float luma(vec3 c)
+{
+    return dot(c, vec3(0.2126, 0.7152, 0.0722));
+}
+
+vec3 toneMap(vec3 c)
+{
+    return c / (1.0 + luma(c));
+}
+
+vec3 inverseToneMap(vec3 c)
+{
+    return c / max(1.0 - luma(c), 1e-4);
+}
+
+vec3 toYCoCg(vec3 c)
+{
+    return vec3(dot(c, vec3(0.25, 0.5, 0.25)), dot(c, vec3(0.5, 0.0, -0.5)),
+                dot(c, vec3(-0.25, 0.5, -0.25)));
+}
+
+vec3 fromYCoCg(vec3 c)
+{
+    return vec3(c.x + c.y - c.z, c.x + c.z, c.x - c.y - c.z);
+}
+
+/** Catmull-Rom filtered history from five bilinear taps (Jimenez): sharp under motion. */
+vec4 sampleHistory(vec2 position, vec2 size)
+{
+    vec2 center = floor(position - 0.5) + 0.5;
+    vec2 f = position - center;
+    vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+    vec2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+    vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+    vec2 w3 = f * f * (-0.5 + 0.5 * f);
+    vec2 w12 = w1 + w2;
+    vec2 tc12 = (center + w2 / w12) / size;
+    vec2 tc0 = (center - 1.0) / size;
+    vec2 tc3 = (center + 2.0) / size;
+    float wA = w12.x * w0.y;
+    float wB = w0.x * w12.y;
+    float wC = w12.x * w12.y;
+    float wD = w3.x * w12.y;
+    float wE = w12.x * w3.y;
+    vec4 sum = textureLod(history, vec2(tc12.x, tc0.y), 0.0) * wA +
+               textureLod(history, vec2(tc0.x, tc12.y), 0.0) * wB +
+               textureLod(history, tc12, 0.0) * wC +
+               textureLod(history, vec2(tc3.x, tc12.y), 0.0) * wD +
+               textureLod(history, vec2(tc12.x, tc3.y), 0.0) * wE;
+    // The lobes ring below zero around sharp edges.
+    return max(sum / (wA + wB + wC + wD + wE), vec4(0.0));
+}
+
+/** The point of the segment from the box's center to `c` on the box (Salvi's clip). */
+vec3 clipToBox(vec3 c, vec3 lo, vec3 hi)
+{
+    vec3 center = 0.5 * (lo + hi);
+    vec3 extent = max(0.5 * (hi - lo), vec3(1e-5));
+    vec3 offset = c - center;
+    vec3 units = abs(offset / extent);
+    float largest = max(units.x, max(units.y, units.z));
+    return largest > 1.0 ? center + offset / largest : c;
+}
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 outputSize = imageSize(outputImage);
+    if (any(greaterThanEqual(pixel, outputSize))) {
+        return;
+    }
+    ivec2 renderSize = imageSize(color);
+    // Rendered pixels per output pixel (at most 1).
+    vec2 scale = vec2(renderSize) / vec2(outputSize);
+    // The output pixel's center in rendered pixels; the rendered sample nearest to it.
+    vec2 position = (vec2(pixel) + 0.5) * scale;
+    ivec2 nearest = ivec2(floor(position - params.jitter + 0.5));
+
+    // The 3x3 samples around: their colors' range (YCoCg moments), and the nearest
+    // surface among them (its motion: edges reproject with what is in front).
+    vec3 samples[9];
+    vec3 m1 = vec3(0.0);
+    vec3 m2 = vec3(0.0);
+    vec3 lo = vec3(1e9);
+    vec3 hi = vec3(-1e9);
+    float closest = -1.0;
+    ivec2 closestTap = clamp(nearest, ivec2(0), renderSize - 1);
+    for (int i = 0; i < 9; ++i) {
+        ivec2 tap = clamp(nearest + ivec2(i % 3 - 1, i / 3 - 1), ivec2(0), renderSize - 1);
+        vec3 c = imageLoad(color, tap).rgb;
+        c = any(isnan(c)) || any(isinf(c)) ? vec3(0.0) : toneMap(max(c, vec3(0.0)));
+        samples[i] = c;
+        vec3 y = toYCoCg(c);
+        m1 += y;
+        m2 += y * y;
+        lo = min(lo, y);
+        hi = max(hi, y);
+        float z = texelFetch(depth, tap, 0).r;
+        if (z > closest) {
+            closest = z;
+            closestTap = tap;
+        }
+    }
+
+    // Where this pixel was in the previous frame's output.
+    vec4 moved = imageLoad(motion, closestTap);
+    bool onScreen = abs(moved.x) < 1e8 && abs(moved.y) < 1e8;
+    vec2 previous = (position + moved.xy) / scale;
+    vec4 before = vec4(0.0);
+    if ((params.flags & kReset) == 0u && onScreen &&
+        all(greaterThanEqual(previous, vec2(0.0))) &&
+        all(lessThan(previous, vec2(outputSize)))) {
+        before = sampleHistory(previous, vec2(outputSize));
+    }
+    bool hasHistory = before.a > 0.0;
+
+    // This frame's color here: the samples weighted by their distance (Blackman-Harris
+    // approximated by a Gaussian), in output pixels -- in rendered ones while there is
+    // no history, smoother (else every rendered pixel shows as a block).
+    float kernel = hasHistory ? 1.0 : min(scale.x, scale.y);
+    vec3 sum = vec3(0.0);
+    float weights = 0.0;
+    float confidence = 0.0;  // How near the samples are, in output pixels.
+    for (int i = 0; i < 9; ++i) {
+        vec2 offset = vec2(nearest + ivec2(i % 3 - 1, i / 3 - 1)) + params.jitter - position;
+        vec2 inOutput = offset / scale;
+        float near = exp(-2.29 * dot(inOutput, inOutput));
+        float weight = hasHistory ? near : exp(-2.29 * dot(inOutput, inOutput) * kernel * kernel);
+        sum += samples[i] * weight;
+        weights += weight;
+        confidence += near;
+    }
+    vec3 current = sum / max(weights, 1e-8);
+
+    vec3 blended = current;
+    float count = min(confidence, 1.0);
+    if (hasHistory) {
+        // Clip the history to what is around now.
+        vec3 mean = m1 / 9.0;
+        vec3 sigma = sqrt(max(m2 / 9.0 - mean * mean, vec3(0.0)));
+        vec3 boxLo = max(lo, mean - kClipSigma * sigma);
+        vec3 boxHi = min(hi, mean + kClipSigma * sigma);
+        vec3 clipped = fromYCoCg(clipToBox(toYCoCg(before.rgb), boxLo, boxHi));
+        float held = min(before.a, params.maxHistory);
+        float added = clamp(confidence, 0.02, 1.0);
+        blended = (clipped * held + current * added) / (held + added);
+        count = min(held + added, params.maxHistory);
+    }
+    imageStore(historyOut, pixel, vec4(blended, max(count, 1e-3)));
+    imageStore(outputImage, pixel, vec4(inverseToneMap(blended), 1.0));
+}

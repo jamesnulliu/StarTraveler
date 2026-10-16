@@ -24,6 +24,9 @@ option(STARCORE_BUILD_EXAMPLES "Build the StarCore examples (e.g. starcore-rende
 option(STARCORE_BUILD_PYTHON   "Build the Python extension module (starcore._core)"    OFF)
 # Development aid: build VK_LAYER_KHRONOS_validation with vcpkg; tests and `--validation` use it.
 option(STARCORE_VULKAN_VALIDATION "Install the Vulkan validation layers (vcpkg)"        OFF)
+# The vendors' upscalers (downloaded at configure time, see cmake/libraries/upscalers.cmake).
+option(STARCORE_FSR            "AMD FSR upscaler (FidelityFX SDK; Windows)"              ON)
+option(STARCORE_DLSS           "NVIDIA DLSS upscaler (DLSS SDK; MSVC, Windows x64)"      ON)
 
 if(STARCORE_BUILD_RUNTIME AND NOT STARCORE_BUILD_GPU)
     log_fatal("STARCORE_BUILD_RUNTIME requires STARCORE_BUILD_GPU (the runtime presents with Vulkan)")

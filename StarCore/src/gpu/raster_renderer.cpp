@@ -32,7 +32,7 @@ void RasterRenderer::resize(std::uint32_t width, std::uint32_t height)
         return;
     }
     m_motion = vulkan::Image(*m_context, width, height, VK_FORMAT_R32G32B32A32_SFLOAT,
-                             VK_IMAGE_USAGE_STORAGE_BIT);
+                             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
     m_context->submitAndWait([&](VkCommandBuffer commandBuffer) {
         vulkan::transitionImage(commandBuffer, m_motion.handle(), VK_IMAGE_LAYOUT_UNDEFINED,
                                 VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
@@ -58,14 +58,19 @@ void RasterRenderer::record(VkCommandBuffer commandBuffer, const RasterFrame& fr
     uniforms.cameraPosition.w = kNearPlane;
     uniforms.skyColor = Vec4(frame.scene->skyColor, 0.0F);
     // A frame on its own samples pixel centers; averaged ones spread over the pixel.
-    const Vec2 sample = frame.accumulated == 0 ? Vec2(0.5F) : jitter(frame.accumulated);
+    // Upscaled: every frame on its own, each at its own sample position.
+    const bool alone = frame.jittered || frame.accumulated == 0;
+    const Vec2 sample = frame.jittered            ? jitter(frame.frameIndex)
+                        : frame.accumulated == 0 ? Vec2(0.5F)
+                                                 : jitter(frame.accumulated);
     uniforms.viewport =
         Vec4(static_cast<float>(width), static_cast<float>(height), sample.x, sample.y);
-    uniforms.frame[0] = frame.accumulated;  // Turns the soft shadows' taps.
+    // Turns the soft shadows' taps.
+    uniforms.frame[0] = frame.jittered ? frame.frameIndex : frame.accumulated;
     uniforms.options[0] = frame.writeIds ? kFlagWriteIds : 0U;
     uniforms.options[1] = settings.instanceMask & kAllInstances;
     uniforms.options[2] = scene.lightCount();
-    uniforms.history[1] = frame.accumulated == 0 ? kHistoryReset : 0U;
+    uniforms.history[1] = alone ? kHistoryReset : 0U;
     vulkan::Buffer& uniformBuffer = m_uniforms[frame.frameSlot];
     writeUniforms(*m_context, uniformBuffer, uniforms);
 

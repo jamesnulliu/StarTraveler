@@ -27,6 +27,7 @@ namespace gpu
 class HybridRenderer;
 class PostProcess;
 class RasterRenderer;
+class TemporalUpscaler;
 class VisibilityPass;
 }  // namespace gpu
 
@@ -160,6 +161,73 @@ struct ShadowSettings
     auto operator==(const ShadowSettings&) const -> bool = default;
 };
 
+/**
+ * @brief Temporal upscalers (Hybrid and Raster): fewer pixels are rendered,
+ *        each frame at another position in its pixel (jitter), and the
+ *        output's pixels are reconstructed from the frames, reprojected with
+ *        the motion vectors -- how games make ray tracing affordable at high
+ *        resolutions.
+ */
+enum class Upscaler : std::uint8_t
+{
+    Off,   // Every output pixel rendered (each pipeline's own anti-aliasing).
+    Taau,  // StarCore's temporal upsampling: any GPU.
+    Fsr,   // AMD FidelityFX Super Resolution 3.1: any GPU (Windows).
+    Dlss,  // NVIDIA DLSS Super Resolution: NVIDIA RTX GPUs (Windows, MSVC builds).
+};
+
+template <>
+struct EnumNames<Upscaler>
+{
+    static constexpr std::array kNames = {"Off", "TAAU", "FSR", "DLSS"};
+};
+
+/** @brief How much of the output's width and height is rendered (the upscalers' modes). */
+enum class UpscalerQuality : std::uint8_t
+{
+    Native,            // All of it, anti-aliasing only (DLAA, FSR native AA).
+    Quality,           // 1 / 1.5
+    Balanced,          // 1 / 1.7
+    Performance,       // 1 / 2
+    UltraPerformance,  // 1 / 3
+};
+
+template <>
+struct EnumNames<UpscalerQuality>
+{
+    static constexpr std::array kNames = {"Native", "Quality", "Balanced", "Performance",
+                                          "Ultra performance"};
+};
+
+/** @brief Rendered fraction of each side of the output. */
+[[nodiscard]] constexpr auto renderScale(UpscalerQuality quality) noexcept -> float
+{
+    switch (quality) {
+    case UpscalerQuality::Native:
+        return 1.0F;
+    case UpscalerQuality::Quality:
+        return 1.0F / 1.5F;
+    case UpscalerQuality::Balanced:
+        return 1.0F / 1.7F;
+    case UpscalerQuality::Performance:
+        return 0.5F;
+    case UpscalerQuality::UltraPerformance:
+        return 1.0F / 3.0F;
+    }
+    return 1.0F;
+}
+
+struct UpscalerSettings
+{
+    // Where it cannot run (GpuRenderer::upscalerError; DLSS also refuses tiny
+    // images), FSR, then TAAU.
+    Upscaler upscaler = Upscaler::Off;
+    UpscalerQuality quality = UpscalerQuality::Quality;
+    float sharpness = 0.0F;  // FSR's sharpening, 0 to 1 (the others: none).
+
+    auto operator==(const UpscalerSettings&) const -> bool = default;
+};
+
 struct GpuRenderOptions
 {
     GpuPipeline pipeline = GpuPipeline::PathTracing;
@@ -168,6 +236,7 @@ struct GpuRenderOptions
     ShadowSettings shadows;
     HybridView view = HybridView::Final;
     EffectSettings effects;
+    UpscalerSettings upscaling;  // Hybrid and Raster.
 
     auto operator==(const GpuRenderOptions&) const -> bool = default;
 };
@@ -183,8 +252,10 @@ struct GpuRenderOptions
  * rasterizes the first hits, traces paths from there with the same estimator
  * and reuses samples across frames while the view moves (see
  * GpuRenderOptions). The Raster pipeline traces nothing. Every pipeline
- * writes linear radiance; a last stage draws particles over it, applies the
- * effects (EffectSettings) and tone maps. Each render() records and submits
+ * writes linear radiance, Hybrid and Raster possibly at a lower resolution
+ * reconstructed to the output's by a temporal upscaler (UpscalerSettings); a
+ * last stage draws particles over it, applies the effects (EffectSettings)
+ * and tone maps. Each render() records and submits
  * one frame without waiting for it; at most kFramesInFlight frames are
  * queued. The output image is read by later work on the same queue (the UI
  * pass) or copied back with readImage().
@@ -243,6 +314,28 @@ public:
     {
         return m_output.height();
     }
+    /** @brief Size the last frame was rendered at (the output's unless it was upscaled). */
+    [[nodiscard]] auto renderWidth() const noexcept -> std::uint32_t
+    {
+        return m_radiance.width();
+    }
+    [[nodiscard]] auto renderHeight() const noexcept -> std::uint32_t
+    {
+        return m_radiance.height();
+    }
+
+    /**
+     * @brief Whether an upscaler can run on this device (the vendors' are
+     *        loaded when first asked about or used).
+     */
+    [[nodiscard]] auto upscalerAvailable(Upscaler upscaler) -> bool;
+    /** @brief Why an upscaler cannot run (empty if it can). */
+    [[nodiscard]] auto upscalerError(Upscaler upscaler) -> std::string;
+    /** @brief The upscaler of the last frame (Off: none, or not available nor any fallback). */
+    [[nodiscard]] auto activeUpscaler() const noexcept -> Upscaler
+    {
+        return m_activeUpscaler;
+    }
 
     /** @brief Layout the output image stays in (storage writes and sampling). */
     static constexpr VkImageLayout kOutputLayout = VK_IMAGE_LAYOUT_GENERAL;
@@ -284,7 +377,10 @@ public:
 
     /** @brief Wait for the GPU and copy the output image to the CPU. */
     [[nodiscard]] auto readImage() -> ColorImage;
-    /** @brief Entity ids of the first frame since the last reset (kNoEntityId = sky). */
+    /**
+     * @brief Entity ids of the first frame since the last reset (kNoEntityId
+     *        = sky), at the output's size (an upscaled frame's are stretched).
+     */
     [[nodiscard]] auto readEntityIds() -> IdImage;
 
     /** @brief Wait until all submitted frames have completed. */
@@ -303,6 +399,10 @@ private:
 
     explicit GpuRenderer(vulkan::Context& context);
     void waitForSlot(std::uint32_t slot);
+    /** @brief (Re)create the images of the pipelines' size (waits for the device). */
+    void resizeRender(std::uint32_t width, std::uint32_t height);
+    /** @brief The upscaler, created when first asked for; null if it cannot run. */
+    auto upscaler(Upscaler upscaler) -> gpu::TemporalUpscaler*;
     /** @brief Whether the frame starts over; `still`: nothing moved since the last one. */
     [[nodiscard]] auto needsReset(const RenderScene& scene, const Camera& camera,
                                   const PathTracerSettings& settings,
@@ -327,10 +427,24 @@ private:
     std::array<FrameSlot, gpu::kFramesInFlight> m_slots{};
     std::uint64_t m_frameNumber = 0;  // Submitted frames.
 
+    // The pipelines' size (the output's unless upscaled):
     vulkan::Image m_accumulation;  // RGBA32F: rgb = sum of samples, a = count.
     vulkan::Image m_radiance;      // RGBA32F: the frame, linear (pipelines -> post).
-    vulkan::Image m_output;        // RGBA8, tone mapped.
     vulkan::Image m_entityIds;     // R32_UINT.
+    // The output's size:
+    vulkan::Image m_upscaled;  // RGBA32F: the upscaler's result (upscaler -> post).
+    vulkan::Image m_output;    // RGBA8, tone mapped.
+
+    // Per Upscaler: created when first used (null if it cannot run), why not.
+    std::array<std::unique_ptr<gpu::TemporalUpscaler>, 4> m_upscalers;
+    std::array<std::string, 4> m_upscalerErrors;
+    std::array<bool, 4> m_upscalerTried{};
+    // The sizes each was resized to (rendered, output), and whether it can upscale so.
+    std::array<UVec2, 4> m_upscalerRenderSizes{};
+    std::array<UVec2, 4> m_upscalerOutputSizes{};
+    std::array<bool, 4> m_upscalerReady{};
+    Upscaler m_activeUpscaler = Upscaler::Off;
+    double m_lastFrameTime = 0.0;  // Seconds (steady clock) of the last render().
 
     std::uint32_t m_frameIndex = 0;  // Accumulated frames since the last reset.
     float m_gpuTimeMs = 0.0F;
@@ -349,6 +463,7 @@ private:
     bool m_lastTemporal = true;
     ShadowSettings m_lastShadows;
     TraceResolution m_lastTraceResolution = TraceResolution::Full;
+    Upscaler m_lastUpscaler = Upscaler::Off;
     Camera m_lastCamera;  // For the hybrid pipeline's motion vectors.
 };
 

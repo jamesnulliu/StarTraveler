@@ -40,6 +40,9 @@ if(STARCORE_BUILD_GPU)
         REQUIRED
     )
     log_info("glslang: ${STARCORE_GLSLANG_EXECUTABLE}")
+
+    # AMD FSR, NVIDIA DLSS (optional): StarCore::Fsr, StarCore::Dlss.
+    include(${CMAKE_CURRENT_LIST_DIR}/upscalers.cmake)
 endif()
 
 # Runtime (window / ImGui) -------------------------------------------------------------------------

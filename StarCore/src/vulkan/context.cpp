@@ -258,6 +258,27 @@ auto Context::create(const ContextConfig& config)
                    gpu.enable_extension_features_if_present(accelerationFeatures) &&
                    gpu.enable_extension_features_if_present(rayQueryFeatures);
     }
+    for (const std::string& extension : config.optionalDeviceExtensions) {
+        gpu.enable_extension_if_present(extension);
+    }
+    // Where the GPU has them: AMD's FSR picks its shaders by what the GPU supports (half
+    // floats, wave sizes, barriers), not by what the device enables.
+    VkPhysicalDeviceFeatures shortIntegers{};
+    shortIntegers.shaderInt16 = VK_TRUE;
+    gpu.enable_features_if_present(shortIntegers);
+    VkPhysicalDeviceVulkan12Features halfFloats{};
+    halfFloats.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+    halfFloats.shaderFloat16 = VK_TRUE;
+    gpu.enable_extension_features_if_present(halfFloats);
+    VkPhysicalDeviceVulkan13Features waveSizes{};
+    waveSizes.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+    waveSizes.subgroupSizeControl = VK_TRUE;
+    waveSizes.computeFullSubgroups = VK_TRUE;
+    gpu.enable_extension_features_if_present(waveSizes);
+    VkPhysicalDeviceVulkan13Features barriers{};
+    barriers.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+    barriers.synchronization2 = VK_TRUE;
+    gpu.enable_extension_features_if_present(barriers);
 
     // Logical device + queue ----------------------------------------------------------------------
     vkb::DeviceBuilder deviceBuilder(impl->physicalDevice);
@@ -340,6 +361,7 @@ auto Context::create(const ContextConfig& config)
     info.discrete = gpu.properties.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU;
     info.pushDescriptors = pushDescriptors;
     info.rayQuery = rayQuery;
+    info.extensions = gpu.get_extensions();
     if (rayQuery) {
         VkPhysicalDeviceAccelerationStructurePropertiesKHR accelerationProperties{};
         accelerationProperties.sType =

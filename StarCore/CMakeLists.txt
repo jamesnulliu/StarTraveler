@@ -133,6 +133,12 @@ if(STARCORE_BUILD_GPU)
             vk-bootstrap::vk-bootstrap
             GPUOpen::VulkanMemoryAllocator
     )
+    # The vendors' upscalers, where available (cmake/libraries/upscalers.cmake).
+    foreach(UPSCALER IN ITEMS Fsr Dlss)
+        if(TARGET ${PROJECT_NAMESPACE}${UPSCALER})
+            target_link_libraries(StarCoreGpu PRIVATE ${PROJECT_NAMESPACE}${UPSCALER})
+        endif()
+    endforeach()
 
     file(GLOB SHADER_INCLUDES CONFIGURE_DEPENDS ${PROJECT_SOURCE_DIR}/shaders/*.glsl)
     file(GLOB SHADER_SOURCES CONFIGURE_DEPENDS

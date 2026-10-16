@@ -20,7 +20,6 @@ namespace
 
 constexpr VkFormat kParticleFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkFormat kBloomFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
-constexpr VkFormat kDepthFormat = VK_FORMAT_D32_SFLOAT;  // VisibilityPass's.
 constexpr std::uint32_t kMaxBloomLevels = 6;
 constexpr std::uint32_t kMinBloomSize = 8;  // Pixels of the smallest level.
 constexpr std::uint32_t kMotionTile = 16;   // motion_blur.glsl.
@@ -30,13 +29,21 @@ constexpr float kMaxBlurRadius = 1.5F * static_cast<float>(kMotionTile);
 constexpr VkDescriptorType kBuffer = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
 constexpr VkDescriptorType kImage = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
 constexpr VkDescriptorType kSampled = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-// particle.vert: 1 frame uniforms, 3 particles (0, 2 unused).
+// particle.vert/.frag: 1 frame uniforms, 3 particles, 4 the surfaces' depth (0, 2 unused).
 constexpr VkDescriptorType kParticleBindings[] = {kBuffer, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                                                  kBuffer, kBuffer};
+                                                  kBuffer, kBuffer, kSampled};
 constexpr VkDescriptorType kPrefilterBindings[] = {kImage, kImage, kImage};
 constexpr VkDescriptorType kResampleBindings[] = {kSampled, kImage};
 constexpr VkDescriptorType kTileBindings[] = {kImage, kImage};
 constexpr VkDescriptorType kFinalBindings[] = {kImage, kImage, kImage, kSampled, kImage, kImage};
+
+/** @brief Push constants of particle.vert/.frag. */
+struct ParticleParams
+{
+    float shutter = 0.0F;
+    float padding = 0.0F;
+    Vec2 depthScale{1.0F};  // The depth's size over the particle image's.
+};
 
 /** @brief Push constants of bloom_prefilter.comp. */
 struct PrefilterParams
@@ -50,6 +57,7 @@ struct TileParams
 {
     float shutter = 0.0F;
     float maxRadius = 0.0F;
+    Vec2 motionScale{1.0F};  // The motion image's size over the output's.
 };
 
 /** @brief Push constants of post.comp. */
@@ -63,6 +71,7 @@ struct FinalParams
     float shutter = 0.0F;
     float maxRadius = 0.0F;
     float vignette = 0.0F;
+    Vec2 motionScale{1.0F};  // The motion image's size over the output's.
 };
 
 auto blurRadius(const EffectSettings& effects) -> float
@@ -93,14 +102,12 @@ void computeBarrier(VkCommandBuffer commandBuffer)
 
 PostProcess::PostProcess(vulkan::Context& context)
     : m_context(&context),
+      // The fragment shader tests the depth (it may be smaller than the particle image).
       m_particlePipeline(context, {.vertexSpirv = particle_vert_spv,
                                    .fragmentSpirv = particle_frag_spv,
                                    .bindings = kParticleBindings,
-                                   .pushConstantSize = sizeof(float),
+                                   .pushConstantSize = sizeof(ParticleParams),
                                    .colorFormats = std::span(&kParticleFormat, 1),
-                                   .depthFormat = kDepthFormat,
-                                   .depthCompare = VK_COMPARE_OP_GREATER_OR_EQUAL,
-                                   .depthWrite = false,
                                    .additiveBlending = true}),
       m_bloomPrefilter(context, bloom_prefilter_comp_spv, kPrefilterBindings,
                        static_cast<std::uint32_t>(sizeof(PrefilterParams))),
@@ -111,7 +118,7 @@ PostProcess::PostProcess(vulkan::Context& context)
       m_motionNeighbors(context, motion_neighbors_comp_spv, kTileBindings),
       m_final(context, post_comp_spv, kFinalBindings,
               static_cast<std::uint32_t>(sizeof(FinalParams))),
-      m_sampler(context)
+      m_sampler(context), m_nearest(context, VK_FILTER_NEAREST)
 {
 }
 
@@ -188,9 +195,7 @@ auto PostProcess::drawParticles(VkCommandBuffer commandBuffer, const PostFrame& 
     vulkan::memoryBarrier(commandBuffer,
                           VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT,
                           VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                          VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
-                              VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT,
-                          VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT);
+                          VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
 
     VkRenderingAttachmentInfo color{};
     color.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
@@ -198,19 +203,12 @@ auto PostProcess::drawParticles(VkCommandBuffer commandBuffer, const PostFrame& 
     color.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
     color.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     color.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
-    VkRenderingAttachmentInfo depth{};
-    depth.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-    depth.imageView = frame.depth->view();
-    depth.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-    depth.loadOp = VK_ATTACHMENT_LOAD_OP_LOAD;
-    depth.storeOp = VK_ATTACHMENT_STORE_OP_NONE;  // Only tested.
     VkRenderingInfo rendering{};
     rendering.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
     rendering.renderArea = {{0, 0}, {width, height}};
     rendering.layerCount = 1;
     rendering.colorAttachmentCount = 1;
     rendering.pColorAttachments = &color;
-    rendering.pDepthAttachment = &depth;
     vkCmdBeginRendering(commandBuffer, &rendering);
     const VkViewport viewport{0.0F, 0.0F, static_cast<float>(width), static_cast<float>(height),
                               0.0F, 1.0F};
@@ -219,11 +217,18 @@ auto PostProcess::drawParticles(VkCommandBuffer commandBuffer, const PostFrame& 
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
     vulkan::DescriptorWrites writes;
-    writes.uniformBuffer(1, m_uniforms[frame.frameSlot].handle()).storageBuffer(3, buffer.handle());
+    writes.uniformBuffer(1, m_uniforms[frame.frameSlot].handle())
+        .storageBuffer(3, buffer.handle())
+        .sampledImage(4, frame.depth->view(), m_nearest.handle());
     m_particlePipeline.bind(commandBuffer);
     m_particlePipeline.pushDescriptors(commandBuffer, writes.writes());
-    const float shutter = frame.effects.motionBlur ? frame.effects.shutter : 0.0F;
-    m_particlePipeline.pushConstants(commandBuffer, &shutter, sizeof(shutter));
+    const ParticleParams params{
+        .shutter = frame.effects.motionBlur ? frame.effects.shutter : 0.0F,
+        .depthScale = Vec2(static_cast<float>(frame.depth->width()) / static_cast<float>(width),
+                           static_cast<float>(frame.depth->height()) /
+                               static_cast<float>(height)),
+    };
+    m_particlePipeline.pushConstants(commandBuffer, &params, sizeof(params));
     vkCmdDraw(commandBuffer, static_cast<std::uint32_t>(6 * frame.particles.size()), 1, 0, 0);
     vkCmdEndRendering(commandBuffer);
 
@@ -272,7 +277,8 @@ void PostProcess::recordMotionTiles(VkCommandBuffer commandBuffer, const PostFra
         vulkan::DescriptorWrites writes;
         writes.storageImage(0, frame.motion->view()).storageImage(1, m_tileBlur.view());
         const TileParams params{.shutter = frame.effects.shutter,
-                                .maxRadius = blurRadius(frame.effects)};
+                                .maxRadius = blurRadius(frame.effects),
+                                .motionScale = frame.renderScale};
         m_motionTiles.bind(commandBuffer);
         m_motionTiles.pushDescriptors(commandBuffer, writes.writes());
         m_motionTiles.pushConstants(commandBuffer, &params, sizeof(params));
@@ -312,6 +318,7 @@ void PostProcess::record(VkCommandBuffer commandBuffer, const PostFrame& frame,
         .shutter = effects.shutter,
         .maxRadius = blurRadius(effects),
         .vignette = frame.raw ? 0.0F : std::clamp(effects.vignette, 0.0F, 1.0F),
+        .motionScale = frame.renderScale,
     };
     params.flags = (frame.raw ? kPostRaw : 0U) | (frame.settings.srgbOutput ? kPostSrgb : 0U) |
                    (particles ? kPostParticles : 0U) | (motionBlur ? kPostMotionBlur : 0U) |

@@ -2,7 +2,7 @@
 // The last stage of every GpuRenderer pipeline (private). Per frame:
 //   1. particles (particle.vert/.frag): additive sprites, streaked along their
 //      screen motion, into a particle image, tested against the visibility
-//      buffer's depth;
+//      buffer's depth (at the rendered size: lower when the frame is upscaled);
 //   2. bloom (bloom_prefilter/down/up.comp): the frame downsampled into a
 //      chain of half-size levels, then upsampled back summing them;
 //   3. motion tiles (motion_tiles/neighbors.comp): the largest blur per 16x16
@@ -39,6 +39,8 @@ struct PostFrame
     const vulkan::Image* depth = nullptr;
     // RGBA32F motion vectors and depths (motion_blur.glsl); null: no motion blur.
     const vulkan::Image* motion = nullptr;
+    // The size of those (rendered) over the output's: less than 1 when upscaled.
+    Vec2 renderScale{1.0F};
     std::uint32_t frameSlot = 0;
 };
 
@@ -73,6 +75,7 @@ private:
     vulkan::ComputePipeline m_motionNeighbors;
     vulkan::ComputePipeline m_final;
     vulkan::Sampler m_sampler;
+    vulkan::Sampler m_nearest;  // The depth.
     vulkan::Image m_particles;           // RGBA16F, cleared and drawn each frame.
     std::vector<vulkan::Image> m_bloom;  // RGBA16F, half the size of the one before.
     vulkan::Image m_tileBlur;            // RGBA32F per motion tile: its largest blur...

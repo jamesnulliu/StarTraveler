@@ -29,8 +29,16 @@ layout(push_constant) uniform Params
     float shutter;         // Motion blur: fraction of the frame's motion.
     float maxRadius;       // Of the blur, pixels.
     float vignette;        // Darkening of the corners (0: none).
+    vec2 motionScale;      // The motion image's size over the output's (outputMotion).
 }
 params;
+
+/** An output pixel's motion (the motion image may be of a lower, rendered size). */
+vec4 motionAt(ivec2 pixel)
+{
+    return outputMotion(imageLoad(motion, renderedPixel(pixel, params.motionScale)),
+                        params.motionScale);
+}
 
 const uint kRaw = 1u;  // A debug image: clamped, not tone mapped, no effects.
 const uint kSrgb = 2u;
@@ -75,7 +83,7 @@ vec3 motionBlur(ivec2 pixel, ivec2 size, vec3 center)
     if (length(neighborhood) < 0.5) {
         return center;
     }
-    vec4 motionX = imageLoad(motion, pixel);
+    vec4 motionX = motionAt(pixel);
     float radiusX = max(length(halfBlur(motionX, params.shutter, params.maxRadius)), 0.5);
     float weight = 1.0 / radiusX;
     vec3 sum = center * weight;
@@ -87,7 +95,7 @@ vec3 motionBlur(ivec2 pixel, ivec2 size, vec3 center)
         float t = mix(-1.0, 1.0, (float(i) + jitter + 1.0) / float(kBlurTaps + 1));
         ivec2 tap =
             clamp(ivec2(floor(vec2(pixel) + 0.5 + neighborhood * t)), ivec2(0), size - 1);
-        vec4 motionY = imageLoad(motion, tap);
+        vec4 motionY = motionAt(tap);
         float radiusY = max(length(halfBlur(motionY, params.shutter, params.maxRadius)), 0.5);
         float distance = length(vec2(tap - pixel));
         float alpha = inFront(motionY.w, motionX.w) * cone(distance, radiusY) +

@@ -1,8 +1,10 @@
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <format>
+#include <utility>
 
 #include <glm/trigonometric.hpp>
 
@@ -10,7 +12,9 @@
 #include "post_process.hpp"
 #include "raster_renderer.hpp"
 #include "rasterization.hpp"
+#include "upscaler.hpp"
 #include "starcore/common/assert.hpp"
+#include "starcore/common/log.hpp"
 #include "starcore/gpu/gpu_renderer.hpp"
 #include "starcore/vulkan/check.hpp"
 #include "starcore/vulkan/context.hpp"
@@ -88,6 +92,20 @@ auto rawView(HybridView view) -> bool
            view == HybridView::History;
 }
 
+/** @brief The rendered size of an output size (at least a pixel per side). */
+auto scaledSize(std::uint32_t width, std::uint32_t height, UpscalerQuality quality) -> UVec2
+{
+    const float scale = renderScale(quality);
+    return {std::max(1U, static_cast<std::uint32_t>(std::lround(static_cast<float>(width) * scale))),
+            std::max(1U, static_cast<std::uint32_t>(std::lround(static_cast<float>(height) * scale)))};
+}
+
+auto secondsNow() -> double
+{
+    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
 }  // namespace
 
 auto GpuRenderer::create(vulkan::Context& context)
@@ -134,6 +152,9 @@ GpuRenderer::GpuRenderer(vulkan::Context& context)
 GpuRenderer::~GpuRenderer()
 {
     waitIdle();
+    for (auto& upscaler : m_upscalers) {
+        upscaler.reset();
+    }
     m_hybrid.reset();
     m_raster.reset();
     m_visibility.reset();
@@ -207,9 +228,47 @@ void GpuRenderer::resize(std::uint32_t width, std::uint32_t height)
         m_context->waitIdle();
     }
     waitIdle();
+    m_output = {};
+    m_upscaled = {};
+    m_post->resize(width, height);
+    // The pipelines render at the output's size until a frame is upscaled.
+    resizeRender(width, height);
+    if (width == 0 || height == 0) {
+        return;
+    }
+    m_output = vulkan::Image(*m_context, width, height, VK_FORMAT_R8G8B8A8_UNORM,
+                             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                                 VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+
+    // GENERAL from now on; black until the first frame, so the UI may show the output
+    // before anything was rendered.
+    m_context->submitAndWait([&](VkCommandBuffer commandBuffer) {
+        vulkan::transitionImage(commandBuffer, m_output.handle(), VK_IMAGE_LAYOUT_UNDEFINED,
+                                VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+        const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+        VkClearColorValue black{};
+        black.float32[3] = 1.0F;
+        vkCmdClearColorImage(commandBuffer, m_output.handle(), VK_IMAGE_LAYOUT_GENERAL, &black, 1,
+                             &range);
+        vulkan::memoryBarrier(commandBuffer, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                              VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                              VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
+    });
+    resetAccumulation();
+}
+
+void GpuRenderer::resizeRender(std::uint32_t width, std::uint32_t height)
+{
+    if (width == m_radiance.width() && height == m_radiance.height()) {
+        return;
+    }
+    if (m_radiance.isValid()) {
+        m_context->waitIdle();
+    }
+    waitIdle();
     m_accumulation = {};
     m_radiance = {};
-    m_output = {};
     m_entityIds = {};
     if (m_visibility) {
         m_visibility->resize(width, height);
@@ -220,7 +279,7 @@ void GpuRenderer::resize(std::uint32_t width, std::uint32_t height)
     if (m_raster) {
         m_raster->resize(width, height);
     }
-    m_post->resize(width, height);
+    resetAccumulation();
     if (width == 0 || height == 0) {
         return;
     }
@@ -228,26 +287,20 @@ void GpuRenderer::resize(std::uint32_t width, std::uint32_t height)
         VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
     m_accumulation = vulkan::Image(*m_context, width, height, VK_FORMAT_R32G32B32A32_SFLOAT,
                                    VK_IMAGE_USAGE_STORAGE_BIT);
+    // Sampled: the vendors' upscalers read it so.
     m_radiance = vulkan::Image(*m_context, width, height, VK_FORMAT_R32G32B32A32_SFLOAT,
-                               VK_IMAGE_USAGE_STORAGE_BIT);
-    m_output = vulkan::Image(*m_context, width, height, VK_FORMAT_R8G8B8A8_UNORM,
-                             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | kCopyUsage);
+                               VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
     m_entityIds = vulkan::Image(*m_context, width, height, VK_FORMAT_R32_UINT,
                                 VK_IMAGE_USAGE_STORAGE_BIT | kCopyUsage);
 
-    // GENERAL from now on; black and "no entity" until the first frame, so the
-    // UI may show the output before anything was rendered.
+    // GENERAL from now on; "no entity" until the first frame.
     m_context->submitAndWait([&](VkCommandBuffer commandBuffer) {
-        for (const vulkan::Image* image : {&m_accumulation, &m_radiance, &m_output, &m_entityIds}) {
+        for (const vulkan::Image* image : {&m_accumulation, &m_radiance, &m_entityIds}) {
             vulkan::transitionImage(commandBuffer, image->handle(), VK_IMAGE_LAYOUT_UNDEFINED,
                                     VK_IMAGE_LAYOUT_GENERAL, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
                                     VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
         }
         const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
-        VkClearColorValue black{};
-        black.float32[3] = 1.0F;
-        vkCmdClearColorImage(commandBuffer, m_output.handle(), VK_IMAGE_LAYOUT_GENERAL, &black, 1,
-                             &range);
         VkClearColorValue noEntity{};
         noEntity.uint32[0] = kNoEntityId;
         vkCmdClearColorImage(commandBuffer, m_entityIds.handle(), VK_IMAGE_LAYOUT_GENERAL,
@@ -256,7 +309,50 @@ void GpuRenderer::resize(std::uint32_t width, std::uint32_t height)
                               VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                               VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT);
     });
-    resetAccumulation();
+}
+
+auto GpuRenderer::upscaler(Upscaler kind) -> gpu::TemporalUpscaler*
+{
+    const auto index = static_cast<std::size_t>(std::to_underlying(kind));
+    if (kind == Upscaler::Off || index >= m_upscalers.size()) {
+        return nullptr;
+    }
+    if (!m_upscalerTried[index]) {
+        m_upscalerTried[index] = true;
+        std::expected<std::unique_ptr<gpu::TemporalUpscaler>, std::string> created =
+            std::unexpected(std::string());
+        switch (kind) {
+        case Upscaler::Taau:
+            created = gpu::createTaau(*m_context);
+            break;
+        case Upscaler::Fsr:
+            created = gpu::createFsr(*m_context);
+            break;
+        case Upscaler::Dlss:
+            created = gpu::createDlss(*m_context);
+            break;
+        case Upscaler::Off:
+            break;
+        }
+        if (created) {
+            m_upscalers[index] = std::move(*created);
+        } else {
+            m_upscalerErrors[index] = created.error();
+            SC_CORE_INFO("{} is not available: {}", enumToString(kind), created.error());
+        }
+    }
+    return m_upscalers[index].get();
+}
+
+auto GpuRenderer::upscalerAvailable(Upscaler kind) -> bool
+{
+    return kind == Upscaler::Off || upscaler(kind) != nullptr;
+}
+
+auto GpuRenderer::upscalerError(Upscaler kind) -> std::string
+{
+    return upscalerAvailable(kind) ? std::string()
+                                   : m_upscalerErrors[static_cast<std::size_t>(kind)];
 }
 
 auto GpuRenderer::needsReset(const RenderScene& scene, const Camera& camera,
@@ -333,8 +429,8 @@ void GpuRenderer::recordPathTracing(VkCommandBuffer commandBuffer, std::uint32_t
     m_pathTracing->bind(commandBuffer);
     m_pathTracing->pushDescriptors(commandBuffer, writes.writes());
     m_pathTracing->pushConstants(commandBuffer, &params, sizeof(params));
-    vkCmdDispatch(commandBuffer, (m_output.width() + kWorkgroupSize - 1) / kWorkgroupSize,
-                  (m_output.height() + kWorkgroupSize - 1) / kWorkgroupSize, 1);
+    vkCmdDispatch(commandBuffer, (m_radiance.width() + kWorkgroupSize - 1) / kWorkgroupSize,
+                  (m_radiance.height() + kWorkgroupSize - 1) / kWorkgroupSize, 1);
     if (m_queryPool != VK_NULL_HANDLE) {
         vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, m_queryPool,
                             kQueriesPerSlot * slotIndex + kQueryTraceEnd);
@@ -356,8 +452,68 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
     m_scene.collectGarbage(m_frameNumber);
     FrameSlot& slot = m_slots[slotIndex];
 
-    // Pipelines are created when first used.
     const GpuPipeline pipeline = options.pipeline;
+    const UVec2 outputSize{m_output.width(), m_output.height()};
+
+    // Upscaled (the rasterizing pipelines): fewer pixels rendered. The hybrid pipeline's
+    // debug images are stretched (TAAU without its history), not reconstructed.
+    const bool finalImage = pipeline != GpuPipeline::Hybrid || options.view == HybridView::Final;
+    Upscaler upscaling = Upscaler::Off;
+    gpu::TemporalUpscaler* upscaler = nullptr;
+    UVec2 renderSize = outputSize;
+    bool upscalerResized = false;
+    if (pipeline != GpuPipeline::PathTracing && options.upscaling.upscaler != Upscaler::Off) {
+        renderSize = scaledSize(outputSize.x, outputSize.y, options.upscaling.quality);
+        // The one asked for; where it cannot run (on this device, or between these sizes),
+        // FSR, then TAAU.
+        const Upscaler requested = finalImage ? options.upscaling.upscaler : Upscaler::Taau;
+        for (const Upscaler kind : {requested, Upscaler::Fsr, Upscaler::Taau}) {
+            gpu::TemporalUpscaler* candidate =
+                std::to_underlying(kind) <= std::to_underlying(requested) ? this->upscaler(kind)
+                                                                          : nullptr;
+            if (candidate == nullptr) {
+                continue;
+            }
+            const auto index = static_cast<std::size_t>(std::to_underlying(kind));
+            if (m_upscalerRenderSizes[index] != renderSize ||
+                m_upscalerOutputSizes[index] != outputSize) {
+                m_context->waitIdle();
+                waitIdle();
+                m_upscalerReady[index] = candidate->resize(renderSize, outputSize);
+                m_upscalerRenderSizes[index] = renderSize;
+                m_upscalerOutputSizes[index] = outputSize;
+                upscalerResized = true;
+            }
+            if (m_upscalerReady[index]) {
+                upscaler = candidate;
+                upscaling = kind;
+                break;
+            }
+        }
+        if (upscaler == nullptr) {
+            renderSize = outputSize;
+        }
+    }
+    const bool resized = renderSize.x != m_radiance.width() || renderSize.y != m_radiance.height();
+    resizeRender(renderSize.x, renderSize.y);
+    if (upscaler != nullptr) {
+        if (!m_upscaled.isValid()) {
+            // DLSS clears it (transfer).
+            m_upscaled = vulkan::Image(*m_context, outputSize.x, outputSize.y,
+                                       VK_FORMAT_R32G32B32A32_SFLOAT,
+                                       VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+            m_context->submitAndWait([&](VkCommandBuffer commandBuffer) {
+                vulkan::transitionImage(commandBuffer, m_upscaled.handle(),
+                                        VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                                        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                                        VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                                        VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT);
+            });
+        }
+    }
+    m_activeUpscaler = upscaling;
+
+    // Pipelines are created when first used, at the rendered size.
     if (pipeline == GpuPipeline::PathTracing && !m_pathTracing) {
         m_pathTracing = std::make_unique<vulkan::ComputePipeline>(
             *m_context, path_trace_comp_spv, kBindings,
@@ -365,21 +521,33 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
     }
     if (pipeline != GpuPipeline::PathTracing && !m_visibility) {
         m_visibility = std::make_unique<gpu::VisibilityPass>(*m_context);
-        m_visibility->resize(m_output.width(), m_output.height());
+        m_visibility->resize(renderSize.x, renderSize.y);
     }
     if (pipeline == GpuPipeline::Hybrid && !m_hybrid) {
         m_hybrid = std::make_unique<gpu::HybridRenderer>(*m_context);
-        m_hybrid->resize(m_output.width(), m_output.height());
+        m_hybrid->resize(renderSize.x, renderSize.y);
     }
     if (pipeline == GpuPipeline::Raster && !m_raster) {
         m_raster = std::make_unique<gpu::RasterRenderer>(*m_context);
-        m_raster->resize(m_output.width(), m_output.height());
+        m_raster->resize(renderSize.x, renderSize.y);
     }
 
     bool still = false;
     if (needsReset(scene, camera, settings, options, still)) {
         m_frameIndex = 0;
     }
+    // What the upscaler cannot reproject: new content (the hybrid pipeline: whatever
+    // restarts its accumulation), another pipeline, upscaler or size. (The raster
+    // pipeline restarts its own whenever the camera moves.)
+    const bool upscalerReset =
+        m_frameNumber == 0 || pipeline != m_lastPipeline || upscaling != m_lastUpscaler ||
+        resized || upscalerResized || scene.contentVersion != m_lastContentVersion ||
+        (pipeline == GpuPipeline::Hybrid && m_frameIndex == 0);
+    const double now = secondsNow();
+    const auto frameMs = static_cast<float>(
+        m_lastFrameTime > 0.0 ? std::clamp((now - m_lastFrameTime) * 1000.0, 1.0, 100.0)
+                              : 1000.0 / 60.0);
+    m_lastFrameTime = now;
 
     const VkCommandBuffer commandBuffer = slot.commandBuffer;
     check(vkResetCommandBuffer(commandBuffer, 0));
@@ -411,6 +579,7 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
         .settings = settings,
         .effects = options.effects,
         .particles = particles,
+        .renderScale = Vec2(renderSize) / Vec2(outputSize),
         .frameSlot = slotIndex,
     };
     switch (pipeline) {
@@ -430,6 +599,7 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
             .reset = m_frameIndex == 0,
             .still = still,
             .writeIds = !still,
+            .upscaled = upscaler != nullptr,
             .queryPool = m_queryPool,
             .traceQuery = kQueriesPerSlot * slotIndex + kQueryTraceStart,
         };
@@ -462,6 +632,8 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
             .frameSlot = slotIndex,
             .accumulated = m_frameIndex,
             .writeIds = m_frameIndex == 0,
+            .jittered = upscaler != nullptr,
+            .frameIndex = static_cast<std::uint32_t>(m_frameNumber),
         };
         m_raster->record(commandBuffer, frame, m_scene, *m_visibility, m_accumulation,
                          m_radiance, m_entityIds);
@@ -470,7 +642,24 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
         break;
     }
     }
-    m_post->record(commandBuffer, post, m_radiance, m_output);
+    if (upscaler != nullptr) {
+        const gpu::UpscaleFrame frame{
+            .color = &m_radiance,
+            .depth = &m_visibility->depth(),
+            .motion = pipeline == GpuPipeline::Hybrid ? &m_hybrid->motion() : &m_raster->motion(),
+            .output = &m_upscaled,
+            // The pipelines' (hybrid: HybridFrame::frameIndex).
+            .jitter = gpu::jitter(static_cast<std::uint32_t>(m_frameNumber)),
+            .reset = upscalerReset || !finalImage,
+            .frameMs = frameMs,
+            .verticalFov = glm::radians(camera.verticalFov()),
+            .nearPlane = gpu::kNearPlane,
+            .sharpness = options.upscaling.sharpness,
+            .frameSlot = slotIndex,
+        };
+        upscaler->record(commandBuffer, frame);
+    }
+    m_post->record(commandBuffer, post, upscaler != nullptr ? m_upscaled : m_radiance, m_output);
 
     // The output is sampled by the UI pass or copied by readImage() later on the queue.
     vulkan::memoryBarrier(commandBuffer, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
@@ -503,6 +692,7 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
     m_lastTemporal = options.denoiser.temporal;
     m_lastShadows = options.shadows;
     m_lastTraceResolution = options.traceResolution;
+    m_lastUpscaler = upscaling;
     m_lastCamera = camera;
     ++m_frameNumber;
     ++m_frameIndex;
@@ -538,11 +728,27 @@ auto GpuRenderer::readImage() -> ColorImage
 
 auto GpuRenderer::readEntityIds() -> IdImage
 {
-    IdImage ids(width(), height(), kNoEntityId);
+    IdImage ids(m_entityIds.width(), m_entityIds.height(), kNoEntityId);
     if (!ids.empty()) {
         readBack(m_entityIds, std::as_writable_bytes(ids.pixels()));
     }
-    return ids;
+    if (ids.width() == width() && ids.height() == height()) {
+        return ids;
+    }
+    // Rendered at a lower resolution: each output pixel takes the rendered pixel it is in.
+    IdImage stretched(width(), height(), kNoEntityId);
+    for (std::uint32_t y = 0; y < stretched.height() && !ids.empty(); ++y) {
+        const std::uint32_t sourceY = std::min(
+            static_cast<std::uint32_t>(std::uint64_t{y} * ids.height() / stretched.height()),
+            ids.height() - 1);
+        for (std::uint32_t x = 0; x < stretched.width(); ++x) {
+            const std::uint32_t sourceX = std::min(
+                static_cast<std::uint32_t>(std::uint64_t{x} * ids.width() / stretched.width()),
+                ids.width() - 1);
+            stretched.at(x, y) = ids.at(sourceX, sourceY);
+        }
+    }
+    return stretched;
 }
 
 }  // namespace starcore

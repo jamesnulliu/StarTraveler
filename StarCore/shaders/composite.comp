@@ -30,6 +30,9 @@ layout(set = 0, binding = 17, rgba32f) uniform readonly image2D noisySpecular;
 layout(set = 0, binding = 18, rgba16f) uniform readonly image2D directVisibility;
 layout(set = 0, binding = 19, rgba16f) uniform readonly image2D recentUnshadowed;
 layout(set = 0, binding = 20, rgba32f) uniform readonly image2D noisyDirect;
+// This frame's albedo and unshadowed light (kFlagUpscaled).
+layout(set = 0, binding = 21, rgba16f) uniform readonly image2D frameAlbedo;
+layout(set = 0, binding = 22, rgba16f) uniform readonly image2D frameUnshadowed;
 
 // HybridView.
 const uint kViewFinal = 0u;
@@ -51,18 +54,24 @@ void main()
         return;
     }
     vec4 lighting = imageLoad(primaryLighting, pixel);
-    vec3 surfaceAlbedo = imageLoad(albedo, pixel).rgb;
     vec3 specular = imageLoad(specularLighting, pixel).rgb;
     vec3 glass = imageLoad(glassLighting, pixel).rgb;
-    // The unshadowed light of the last few frames (it follows the lights, and edges stay
-    // anti-aliased: as many positions of the jitter; still, of all of them), times how
-    // much of it arrives: that is a share, whatever the history holds of light that was
-    // brighter or dimmer then.
     vec3 visibility = imageLoad(directVisibility, pixel).rgb;
-    vec3 unshadowed = imageLoad(recentUnshadowed, pixel).rgb;
+    // The filtered lighting times the albedo and the unshadowed light of the last few
+    // frames (they follow the lights, and edges stay anti-aliased: as many positions of
+    // the jitter; still, of all of them) -- how much of the latter arrives is a share,
+    // whatever the history holds of light that was brighter or dimmer then. Upscaled,
+    // this frame's: the upscaler gathers its samples into the output's pixels.
+    bool upscaled = (frameData.options.x & kFlagUpscaled) != 0u;
+    vec3 surfaceAlbedo =
+        upscaled ? imageLoad(frameAlbedo, pixel).rgb : imageLoad(albedo, pixel).rgb;
+    vec3 unshadowed = upscaled ? imageLoad(frameUnshadowed, pixel).rgb
+                               : imageLoad(recentUnshadowed, pixel).rgb;
+    vec3 surfaceEmission =
+        upscaled ? imageLoad(frameEmission, pixel).rgb : imageLoad(emission, pixel).rgb;
     vec3 direct = demodulationUnshadowed(unshadowed) * visibility;
-    vec3 radiance = direct + demodulationAlbedo(surfaceAlbedo) * lighting.rgb +
-                    imageLoad(emission, pixel).rgb + specular + glass;
+    vec3 radiance = direct + demodulationAlbedo(surfaceAlbedo) * lighting.rgb + surfaceEmission +
+                    specular + glass;
 
     switch (frameData.history.z) {
     case kViewNoisy:

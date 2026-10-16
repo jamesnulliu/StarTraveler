@@ -28,6 +28,16 @@ struct ContextConfig
     // Enable acceleration structures + ray queries (the GPU renderer's
     // ray-traced pipelines) when the device supports them.
     bool enableRayQuery = true;
+    // Device extensions enabled when the GPU has them; by default what the
+    // vendors' upscalers need besides the GPU renderer's
+    // (GpuRenderOptions::upscaling).
+    std::vector<std::string> optionalDeviceExtensions = {
+        // NVIDIA's DLSS.
+        "VK_NVX_binary_import", "VK_NVX_image_view_handle", "VK_KHR_buffer_device_address",
+        // AMD's FSR: core since Vulkan 1.1 to 1.3, but it calls their functions by the
+        // extensions' names whenever the GPU lists them.
+        "VK_KHR_get_memory_requirements2", "VK_KHR_dedicated_allocation",
+        "VK_KHR_synchronization2"};
     // Use the GPU whose name contains this (case-insensitive) instead of the
     // default (discrete first). The environment variable STARCORE_VULKAN_DEVICE
     // overrides it, e.g. "Intel" or "RTX" on a laptop with two GPUs.
@@ -49,6 +59,8 @@ struct DeviceInfo
     std::uint32_t scratchAlignment = 0;
     // Nanoseconds per timestamp tick; 0 if the queue has no timestamps.
     float timestampPeriod = 0.0F;
+    // The device extensions enabled.
+    std::vector<std::string> extensions;
 };
 
 /** @brief Device functions of extensions (the loader does not export them). */

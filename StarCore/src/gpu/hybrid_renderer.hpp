@@ -46,6 +46,11 @@ struct HybridFrame
     bool reset = false;            // Discard earlier samples.
     bool still = false;            // Nothing moved since the previous frame.
     bool writeIds = false;
+    // An upscaler takes the result (GpuRenderOptions::upscaling): each frame's own
+    // albedo, emission and unshadowed light at its sample positions, not their
+    // averages over the last frames (the upscaler averages them, with the detail of the
+    // output's pixels).
+    bool upscaled = false;
     // Timestamps around the trace pass (queries traceQuery, traceQuery + 1).
     VkQueryPool queryPool = VK_NULL_HANDLE;
     std::uint32_t traceQuery = 0;
@@ -67,7 +72,10 @@ public:
                 VisibilityPass& visibility, const vulkan::Image& radiance,
                 const vulkan::Image& entityIds);
 
-    /** @brief RGBA32F, xy: previous minus current pixel position of the primary surfaces. */
+    /**
+     * @brief RGBA32F, xy: previous minus current pixel position of the primary
+     *        surfaces, w: their view depth (sampled by the vendors' upscalers).
+     */
     [[nodiscard]] auto motion() const -> const vulkan::Image&;
 
 private:

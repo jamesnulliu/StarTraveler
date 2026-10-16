@@ -137,6 +137,7 @@ void GameLayer::onAttach()
         m_gpuRenderer != nullptr && m_gpuRenderer->rayTracing() && !m_gameOptions.cpuRenderer;
     m_options.rayTracing = !m_gameOptions.raster;
     m_options.gpuRender.view = m_gameOptions.view;
+    m_options.gpuRender.upscaling = m_gameOptions.upscaling;
     resetCamera();
     if (!m_scenePath.empty()) {
         openScene(m_scenePath);
@@ -1036,6 +1037,46 @@ void GameLayer::drawRenderPanel()
             if (ImGui::SliderInt("Resolution", &resolution, 256, 2048)) {
                 shadows.resolution = std::bit_ceil(static_cast<std::uint32_t>(resolution));
             }
+        }
+    }
+
+    if (usingGpu() && gpuPipeline() != GpuPipeline::PathTracing) {
+        ImGui::SeparatorText("Upscaling");
+        UpscalerSettings& upscaling = m_options.gpuRender.upscaling;
+        if (ImGui::BeginCombo("Upscaler", enumToString(upscaling.upscaler).data())) {
+            for (const Upscaler upscaler :
+                 {Upscaler::Off, Upscaler::Taau, Upscaler::Fsr, Upscaler::Dlss}) {
+                const bool available = m_gpuRenderer->upscalerAvailable(upscaler);
+                ImGui::BeginDisabled(!available);
+                if (ImGui::Selectable(enumToString(upscaler).data(),
+                                      upscaler == upscaling.upscaler)) {
+                    upscaling.upscaler = upscaler;
+                }
+                ImGui::EndDisabled();
+                if (!available && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) {
+                    ImGui::SetTooltip("%s", m_gpuRenderer->upscalerError(upscaler).c_str());
+                }
+            }
+            ImGui::EndCombo();
+        }
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Render fewer pixels, each frame at another position in them, and "
+                              "reconstruct the view's from the frames.\nTAAU: StarCore's own. FSR: "
+                              "AMD's, any GPU. DLSS: NVIDIA's, RTX GPUs.");
+        }
+        if (upscaling.upscaler != Upscaler::Off) {
+            enumCombo("Quality", upscaling.quality);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Rendered: %.0f%% of each side",
+                                  100.0F * renderScale(upscaling.quality));
+            }
+            if (m_gpuRenderer->activeUpscaler() == Upscaler::Fsr) {
+                ImGui::SliderFloat("Sharpness", &upscaling.sharpness, 0.0F, 1.0F, "%.2f");
+            }
+            ImGui::Text("%s: %ux%u -> %ux%u",
+                        enumToString(m_gpuRenderer->activeUpscaler()).data(),
+                        m_gpuRenderer->renderWidth(), m_gpuRenderer->renderHeight(),
+                        m_gpuRenderer->width(), m_gpuRenderer->height());
         }
     }
 

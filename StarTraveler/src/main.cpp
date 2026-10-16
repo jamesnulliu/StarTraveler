@@ -66,12 +66,24 @@ auto main(int argc, char** argv) -> int
     cli.add_option("--view", view,
                    "Hybrid pipeline: Final, Noisy, Albedo, Lighting, Specular, Glass, Variance, "
                    "Motion, History");
+    std::string upscaler = "DLSS";
+    cli.add_option("--upscaler", upscaler,
+                   "Off, TAAU, FSR, DLSS (default; falls back to FSR, then TAAU)");
+    std::string quality = "Quality";
+    cli.add_option("--quality", quality,
+                   "Upscaler: Native, Quality, Balanced, Performance, \"Ultra performance\"");
     CLI11_PARSE(cli, argc, argv);
 
     starcore::log::init({.level = spdlog::level::debug});
     SC_INFO("StarTraveler (StarCore {})", starcore::kVersionString);
     if (!starcore::enumFromString(view, options.view)) {
         SC_CRITICAL("Unknown view \"{}\"", view);
+        starcore::log::shutdown();
+        return EXIT_FAILURE;
+    }
+    if (!starcore::enumFromString(upscaler, options.upscaling.upscaler) ||
+        !starcore::enumFromString(quality, options.upscaling.quality)) {
+        SC_CRITICAL("Unknown upscaler \"{}\" or quality \"{}\"", upscaler, quality);
         starcore::log::shutdown();
         return EXIT_FAILURE;
     }

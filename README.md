@@ -64,6 +64,14 @@ validation layers (with synchronization validation); the GPU tests and
 `StarTraveler.exe --validation` then use them. `STARCORE_VULKAN_DEVICE=Intel`
 (any part of a device name) picks a specific GPU.
 
+The vendors' upscalers come from their SDKs, downloaded on configure into
+`build/<preset>/_deps/upscalers` (checked against fixed hashes, not part of the
+repository): AMD FSR 3.1 (FidelityFX SDK 1.1.4, MIT; its prebuilt Vulkan DLL,
+Windows, any compiler) and NVIDIA DLSS (DLSS SDK 310.9.1, NVIDIA's RTX SDK
+license; its NGX library links with MSVC only, so the MinGW build has FSR and
+the engine's own TAAU). `-DSTARCORE_FSR=OFF` / `-DSTARCORE_DLSS=OFF` leave them
+out; without network access they are left out too.
+
 ### Python
 
 The `starcore` package wraps `StarCore::Core` with nanobind and is built by
@@ -121,6 +129,12 @@ The viewport is rendered on the GPU in real time by the hybrid pipeline
 (rasterized first hits, paths from a quarter of the pixels per frame, samples
 reused across frames and denoised; see below), with samples per frame
 following a GPU time budget (8 ms by default; less for a higher frame rate).
+As games do, it renders 2/3 of the view's width and height and DLSS
+reconstructs the rest (FSR where DLSS cannot run, else the engine's TAAU): about
+half the GPU time at 1080p. The Render panel's "Upscaling" picks the upscaler
+(or Off) and how much is rendered, from Native (anti-aliasing only) to Ultra
+performance (1/3); `--upscaler Off|TAAU|FSR|DLSS` and `--quality` set them at
+start.
 The Render panel switches to plain path tracing (the reference, which restarts
 whenever anything moves), traces every pixel every frame (Trace resolution
 Full: less noise while moving, almost twice the GPU time), tunes the denoiser
@@ -137,7 +151,7 @@ to any entity in the inspector or with Create > Particle emitter).
 Layers (panel "Layers") control visibility, locking and which layers collide;
 the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
 
-`StarTraveler.exe [scene.yaml] [--cpu] [--raster] [--cruise] [--frames N --screenshot out.png] [--validation]`
+`StarTraveler.exe [scene.yaml] [--cpu] [--raster] [--cruise] [--upscaler NAME] [--quality NAME] [--frames N --screenshot out.png] [--validation]`
 (`--cruise` flies forward at full thrust, for screenshots of the effects).
 
 ## Engine overview
@@ -205,15 +219,33 @@ the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
     slope), softened over the penumbra the light's size and the occluders'
     distance make (percentage-closer soft shadows). Their shadows match the
     path tracer's shadow rays (checked by the tests).
-  Every pipeline writes linear radiance; a last stage draws particles over it
-  (additive sprites, streaked along their screen motion, tested against the
-  rasterized depth), adds bloom (a downsampled chain of blurs, Jimenez's
-  filters), motion blur (McGuire et al.'s reconstruction filter over the
-  motion vectors and depths) and a vignette, and tone maps. With every effect
-  off the image is exactly the tone-mapped one, as the CPU's.
+  Every pipeline writes linear radiance. Hybrid and Raster may render fewer
+  pixels than the output has (`GpuRenderOptions::upscaling`): each frame at
+  another position in its pixels (the jitter, a Halton sequence), from which a
+  temporal upscaler reconstructs the output's pixels, reprojecting the earlier
+  frames with the motion vectors (which leave the jitter out) -- how games make
+  ray tracing affordable at high resolutions. Three of them: *TAAU*, the
+  engine's own (each output pixel blends the rendered samples near it into its
+  history, reprojected with the motion of the nearest surface around and
+  clipped to the colors around it, Salvi's variance clipping), and the
+  vendors' *FSR 3.1* (AMD, any GPU) and *DLSS* (NVIDIA RTX GPUs); one that
+  cannot run falls back to FSR, then TAAU. Upscaled, the hybrid pipeline
+  composes each frame with that frame's albedo, emission and unshadowed light
+  (the filtered lighting stays as it is), so the upscaler gets every frame's
+  own samples. In the cockpit at 1920x1080 (an RTX 4060 laptop GPU, Quality:
+  2/3 of each side) a frame takes 9.2 ms with TAAU, 9.9 with FSR, 11.2 with
+  DLSS instead of 19.6, with the same noise and error against the path tracer
+  while turning and cruising; DLSS looks cleanest, TAAU the softest.
+  A last stage, at the output's size, draws particles over it (additive
+  sprites, streaked along their screen motion, tested against the rasterized
+  depth), adds bloom (a downsampled chain of blurs, Jimenez's filters), motion
+  blur (McGuire et al.'s reconstruction filter over the motion vectors and
+  depths) and a vignette, and tone maps. With every effect off the image is
+  exactly the tone-mapped one, as the CPU's.
   `starcore-render scene.yaml --gpu` (or `--hybrid`, with `--move`,
   `--turn-entity`, `--view`, `--half`, or `--raster`, `--no-shadows`;
-  `--bloom`, `--motion-blur`, `--vignette`) renders offscreen.
+  `--bloom`, `--motion-blur`, `--vignette`; `--upscaler`, `--quality`,
+  `--sharpness`) renders offscreen.
 - **Particles**: a CPU particle system (emitter components spreading their
   particles along the path they moved, bursts), drawn by the GPU renderer.
 - **2D raster**: Bresenham/midpoint/DDA lines, midpoint ellipses, Bezier and

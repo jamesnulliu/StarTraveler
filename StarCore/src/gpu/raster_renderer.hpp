@@ -34,6 +34,10 @@ struct RasterFrame
     // Frames averaged before this one (0: start over, sampling pixel centers).
     std::uint32_t accumulated = 0;
     bool writeIds = false;
+    // An upscaler takes the result (GpuRenderOptions::upscaling): every frame on its
+    // own, at the jitter of frameIndex (the upscaler averages them).
+    bool jittered = false;
+    std::uint32_t frameIndex = 0;
 };
 
 class RasterRenderer

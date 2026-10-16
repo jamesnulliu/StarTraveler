@@ -10,6 +10,21 @@
 
 const int kMotionTile = 16;  // Pixels; the largest blur radius should not exceed ~1.5 tiles.
 
+/**
+ * The motion of an output pixel from a motion image of the rendered size
+ * (`scale`: its size over the output's, less than 1 when the frame was
+ * upscaled): that of the rendered pixel it is in, in output pixels.
+ */
+vec4 outputMotion(vec4 rendered, vec2 scale)
+{
+    return vec4(rendered.xy / scale, rendered.zw);
+}
+
+ivec2 renderedPixel(ivec2 pixel, vec2 scale)
+{
+    return ivec2((vec2(pixel) + 0.5) * scale);
+}
+
 /** Half the screen motion during the exposure (the blur's radius as a vector), clamped. */
 vec2 halfBlur(vec4 motion, float shutter, float maxRadius)
 {

@@ -10,6 +10,7 @@
 #define STARCORE_SHADOWS_GLSL
 
 #include "common.glsl"
+#include "light_part.glsl"
 
 #ifndef STARCORE_SHADOW_RECORDS
 #define STARCORE_SHADOW_RECORDS 13
@@ -129,13 +130,16 @@ ShadowView shadowViewOf(ShadowLight light, vec3 direction, uint level)
 }
 
 /**
- * Shadow test of a receiver plane (point, unit normal facing the light) along
- * `direction` (unit, from the light) against the four texels of `view` around
- * it, each along its own direction (exact for planes, whatever their slope):
- * x the bilinear weight of the texels whose occluder is nearer the light, y
- * the same sum weighting the occluders' distances from it.
+ * Shadow test of a receiver plane (point, unit normal on the side lit, `distance`
+ * from the light) along `direction` (unit, from the light) against the four texels
+ * of `view` around it, each along its own direction (exact for planes, whatever
+ * their slope, and on whichever side of them the light's center is): x the
+ * bilinear weight of the texels whose occluder is between the light and the
+ * plane (only those can shade its lit side), y the same sum weighting the
+ * occluders' distances from the light.
  */
-vec2 shadowTexels(ShadowView view, vec3 direction, vec3 point, vec3 normal, float bias)
+vec2 shadowTexels(ShadowView view, vec3 direction, vec3 point, vec3 normal, float distance,
+                  float bias)
 {
     float z = dot(direction, view.forward.xyz);
     vec2 t = vec2(dot(direction, view.right.xyz), dot(direction, view.up.xyz)) / z -
@@ -148,17 +152,25 @@ vec2 shadowTexels(ShadowView view, vec3 direction, vec3 point, vec3 normal, floa
     vec4 depths = textureGather(shadowAtlas, (view.tile.xy + local) * view.tile.w, 0);
     vec4 weights = vec4((1.0 - f.x) * f.y, f.x * f.y, f.x * (1.0 - f.y), (1.0 - f.x) * (1.0 - f.y));
     // Along a texel's direction w (of unit view depth) the occluder is at view
-    // depth near / depth, the receiver's plane at plane / dot(w, normal), and
-    // dot(w, normal) is linear in the texel's offset.
+    // depth near / depth (0: none), dot(w, normal) is linear in the texel's
+    // offset, and a point at view depth z is height + z * dot(w, normal) above
+    // the plane: the occluder counts if it is above it by more than the bias
+    // (along w), and nearer the light than the point (where the light's center
+    // is below the plane, what is above it is also beyond the point: the ground
+    // behind a ball, seen from its far side). (The surface itself, below its
+    // plane where it curves away, as a planet's, does not shade it: the closed
+    // forms took its horizon.)
     vec3 w = shadowDirection(view, corner + 0.5);
     vec2 slope = vec2(dot(view.right.xyz, normal), -dot(view.up.xyz, normal)) * shadowTexel(view);
     vec4 cosines = dot(w, normal) + vec4(slope.y, slope.x + slope.y, slope.x, 0.0);
-    float plane = dot(point - view.position.xyz, normal);  // < 0: the light is in front.
-    vec4 receivers = mix(vec4(kFar), plane / cosines, lessThan(cosines, vec4(-1e-6)));
+    float height = dot(view.position.xyz - point, normal);  // The light's center.
     vec4 occluders = view.position.w / max(depths, vec4(1e-30));
-    vec4 occluded = weights * vec4(lessThan(occluders, receivers - bias));
     // Distances from the light: view depth times |w|.
-    return vec2(dot(occluded, vec4(1.0)), dot(occluded, occluders) * length(w));
+    float stretch = length(w);
+    vec4 occluded = weights * vec4(greaterThan(height + occluders * cosines, bias * abs(cosines))) *
+                    vec4(lessThan(occluders * stretch, vec4(distance - bias))) *
+                    vec4(greaterThan(depths, vec4(0.0)));
+    return vec2(dot(occluded, vec4(1.0)), dot(occluded, occluders) * stretch);
 }
 
 /** Point i of n on a unit disk, evenly spread (Vogel's spiral), turned by `rotation`. */
@@ -169,17 +181,24 @@ vec2 vogelDisk(uint i, uint n, float rotation)
     return r * vec2(cos(angle), sin(angle));
 }
 
-/** Shadow tests on `taps` points of a disk of `radius` (tangent) around `direction`. */
-vec2 shadowDisk(ShadowLight light, uint level, vec3 direction, Frame frame, float radius,
-                uint taps, vec3 position, vec3 facing, float bias, float rotation)
+/**
+ * Shadow tests on `taps` points of a disk of `radius` (tangent) around `direction`, the
+ * light's disk as seen past the occluders, over the light's part above the receiver's
+ * plane, each weighted as onLightPart weighs it (z: the weights' sum).
+ */
+vec3 shadowDisk(ShadowLight light, uint level, vec3 direction, Frame frame, LightPart part,
+                float radius, uint taps, vec3 position, vec3 normal, float distance, float bias,
+                float rotation)
 {
     ShadowView nested = shadowViews[light.firstView + level];  // Cubes: per tap.
-    vec2 result = vec2(0.0);
+    vec3 result = vec3(0.0);
     for (uint i = 0u; i < taps; ++i) {
-        vec2 offset = vogelDisk(i, taps, rotation) * radius;
+        vec3 onPart = onLightPart(part, vogelDisk(i, taps, rotation));
+        vec2 offset = onPart.xy * radius;
         vec3 tap = normalize(direction + frame.tangent * offset.x + frame.bitangent * offset.y);
         ShadowView view = light.cube != 0u ? shadowViewOf(light, tap, 0u) : nested;
-        result += shadowTexels(view, tap, position, facing, bias);
+        result +=
+            onPart.z * vec3(shadowTexels(view, tap, position, normal, distance, bias), 1.0);
     }
     return result;
 }
@@ -197,8 +216,11 @@ bool hasShadowMaps(uint lightIndex)
 
 /**
  * How much of a sphere light (center, radius) reaches a surface point past
- * the occluders its shadow maps saw: 1 for all of it (or no maps), 0 none.
- * `normal`: the surface's geometric normal; `rotation`: of the taps' pattern.
+ * the occluders its shadow maps saw, of its part above the surface's plane
+ * (light_part.glsl; where its center is below that, the point is out of its
+ * center's sight, but not its occluders): 1 for all of it (or no maps), 0 none.
+ * `normal`: the surface's geometric normal, on the side lit; `rotation`: of the
+ * taps' pattern.
  */
 float shadowVisibility(uint lightIndex, vec3 center, float radius, vec3 position, vec3 normal,
                        float rotation)
@@ -216,8 +238,8 @@ float shadowVisibility(uint lightIndex, vec3 center, float radius, vec3 position
     vec3 toPoint = position - center;
     float distance = length(toPoint);
     vec3 direction = toPoint / distance;
-    vec3 facing = dot(normal, direction) <= 0.0 ? normal : -normal;
     Frame frame = makeFrame(direction);
+    LightPart part = lightPartAbove(center, radius, position, normal, frame);
     // Occluders may shade the point from as far as this around it (tangents
     // from the light's center): those nearer the point than the light.
     float lightTangent = radius / distance;
@@ -237,29 +259,41 @@ float shadowVisibility(uint lightIndex, vec3 center, float radius, vec3 position
     }
 
     // Occluders: searched over a few texels of the finest view first (thin
-    // ones), then as wide as they may be in the coarsest (big lights' wide
-    // penumbras).
+    // ones), then of each coarser one (as many of its texels: some times as
+    // wide; the farther an occluder from the point, the wider around it it is
+    // seen from the light), then as wide as they may be in the coarsest (big
+    // lights' wide penumbras). Searching the coarsest's width at once, its
+    // taps were too far apart to find much: a ball's shadow ended where it
+    // was not found any more.
     uint level = first;
-    ShadowView view = shadowViewOf(light, direction, level);
-    float texel = shadowTexel(view);
-    float search = min(min(lightTangent, kMaxSearchTexels * texel),
-                       light.cube != 0u ? kFar : shadowReach(view, direction));
-    vec2 blockers = shadowDisk(light, level, direction, frame, search, kBlockerTaps, position,
-                               facing, kShadowBiasTexels * texel * distance, rotation);
-    if (blockers.x <= 0.0 && search < lightTangent) {
-        uint coarsest = levels - 1u;
-        if (light.cube == 0u &&
-            shadowReach(shadowViews[light.firstView + coarsest], direction) <= 0.0) {
-            coarsest = level;
-        }
-        view = shadowViewOf(light, direction, coarsest);
-        float wider =
-            min(lightTangent, light.cube != 0u ? kFar : shadowReach(view, direction));
-        if (wider > search) {
-            level = coarsest;
+    float texel = 0.0;
+    float searched = 0.0;
+    vec3 blockers = vec3(0.0);
+    for (uint i = first; i < levels; ++i) {
+        ShadowView view = shadowViewOf(light, direction, i);
+        float reach = light.cube != 0u ? kFar : shadowReach(view, direction);
+        float search = min(min(lightTangent, kMaxSearchTexels * shadowTexel(view)), reach);
+        if (search > searched) {
+            level = i;
             texel = shadowTexel(view);
-            blockers = shadowDisk(light, level, direction, frame, wider, kBlockerTaps, position,
-                                  facing, kShadowBiasTexels * texel * distance, rotation);
+            searched = search;
+            blockers = shadowDisk(light, level, direction, frame, part, search, kBlockerTaps,
+                                  position, normal, distance,
+                                  kShadowBiasTexels * texel * distance, rotation);
+            if (blockers.x > 0.0) {
+                break;
+            }
+        }
+    }
+    if (blockers.x <= 0.0 && searched < lightTangent) {
+        ShadowView view = shadowViewOf(light, direction, levels - 1u);
+        float wider = min(lightTangent, light.cube != 0u ? kFar : shadowReach(view, direction));
+        if (wider > searched) {
+            level = levels - 1u;
+            texel = shadowTexel(view);
+            blockers = shadowDisk(light, level, direction, frame, part, wider, kBlockerTaps,
+                                  position, normal, distance,
+                                  kShadowBiasTexels * texel * distance, rotation);
         }
     }
     if (blockers.x <= 0.0) {
@@ -277,13 +311,14 @@ float shadowVisibility(uint lightIndex, vec3 center, float radius, vec3 position
             break;
         }
     }
-    view = shadowViewOf(light, direction, level);
+    ShadowView view = shadowViewOf(light, direction, level);
     texel = shadowTexel(view);
     float reach = light.cube != 0u ? kFar : shadowReach(view, direction);
     penumbra = clamp(penumbra, kMinFilterTexels * texel, max(reach, kMinFilterTexels * texel));
-    vec2 occluded = shadowDisk(light, level, direction, frame, penumbra, kFilterTaps, position,
-                               facing, kShadowBiasTexels * texel * distance, rotation);
-    return 1.0 - occluded.x / float(kFilterTaps);
+    vec3 occluded =
+        shadowDisk(light, level, direction, frame, part, penumbra, kFilterTaps, position, normal,
+                   distance, kShadowBiasTexels * texel * distance, rotation);
+    return 1.0 - occluded.x / occluded.z;
 }
 
 #endif  // STARCORE_SHADOW_PASS

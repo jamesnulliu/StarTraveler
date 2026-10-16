@@ -1397,6 +1397,57 @@ TEST_CASE("GPU hybrid: shadow-mapped direct light follows a moving light at once
     CHECK(mappedLag.mean < 0.3F);
 }
 
+TEST_CASE("GPU hybrid: shadow maps of a big light low over a planet, as traced", "[gpu][hybrid]")
+{
+    // The demo scene's sun, 22 degrees across, at the horizon of a planet's top, and a ball
+    // over it: past the terminator of the sun's center its upper part still lights the
+    // ground, and the ball's shadow there is long and soft. (A ray to the middle of that
+    // part drew it hard and black, and the shadow maps, seeing the ground itself from the
+    // sun's center, could not be used there.)
+    const GpuTest gpu;
+    Scene scene;
+    scene.environment().skyColor = Vec3(0.01F);
+    Entity planet = scene.createEntity("Planet");
+    planet.get<TransformComponent>().translation = {0.0F, -21.0F, 0.0F};
+    planet.add<SphereComponent>(20.0F);
+    planet.add<MaterialComponent>(MaterialComponent{.albedo = Vec3(0.7F), .roughness = 1.0F});
+    Entity sun = scene.createEntity("Sun");
+    sun.get<TransformComponent>().translation = {50.0F, 0.0F, -120.0F};
+    sun.add<SphereComponent>(50.0F);
+    sun.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(1.0F), .emissionColor = Vec3(1.0F), .emissionPower = 50.0F});
+    Entity ball = scene.createEntity("Ball");
+    ball.get<TransformComponent>().translation = {-2.0F, 0.0F, 0.0F};
+    ball.add<SphereComponent>(1.0F);
+    ball.add<MaterialComponent>(MaterialComponent{.albedo = Vec3(0.5F), .roughness = 1.0F});
+    const RenderScene renderScene = buildRenderScene(scene);
+    constexpr std::uint32_t kWidth = 128;
+    constexpr std::uint32_t kHeight = 72;
+    // Down at the ground behind the ball (the planet's edge, out of view, differs at its
+    // pixels).
+    Camera camera = makeCamera(kWidth, kHeight);
+    camera.setPosition({-3.0F, 6.0F, 8.0F});
+    camera.lookAt({-1.5F, -3.0F, 4.0F});
+    // Against the path tracer, both still for long.
+    const PathTracerSettings settings{.samplesPerPixel = 8};
+    auto reference = gpu.makeRenderer(kWidth, kHeight);
+    auto mapped = gpu.makeRenderer(kWidth, kHeight);
+    GpuRenderOptions options = shadowOptions(DirectShadows::ShadowMaps);
+    options.view = HybridView::Final;
+    for (int i = 0; i < 128; ++i) {
+        reference->render(renderScene, camera, settings);
+        mapped->render(renderScene, camera, settings, options);
+    }
+    const ColorImage expected = reference->readImage();
+    const ColorImage image = mapped->readImage();
+    // Measured on an RTX 4060: worst block 4.2 (the reference's noise, and the soft shadow
+    // approximated); 9.3 with a ray to the middle of the sun's visible part.
+    const BlockDifference difference = blockDifference(image, expected);
+    INFO("worst block " << difference.worst << ", mean " << difference.mean);
+    CHECK(difference.worst < 6.5F);
+    CHECK(difference.mean < 1.0F);
+}
+
 TEST_CASE("GPU hybrid: what moves with the camera keeps its history", "[gpu][hybrid]")
 {
     // A deck under a lamp, both moving with the camera (like a cockpit), past still

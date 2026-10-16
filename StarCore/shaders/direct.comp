@@ -38,10 +38,11 @@
 // With shadow maps (DirectShadows::ShadowMaps, specialization constant 0), as
 // engines light with their lights: every pixel, every frame, each light's closed
 // form times how much of it arrives, looked up in its shadow maps (soft:
-// percentage-closer, shadows.glsl), or for a light without them a ray to its
-// center (hard). Nothing of it is kept across frames but the recent mean that
-// anti-aliases it (temporal.comp, "unshadowed": now the shadowed light) -- no noise,
-// no lag -- and how much arrives is 1 everywhere.
+// percentage-closer, shadows.glsl), or for a light without them a ray to a
+// point of it (soft in the mean), both of its part above the surface's plane.
+// Nothing of it is kept across frames but the recent mean that anti-aliases it
+// (temporal.comp, "unshadowed": now the shadowed light) -- no noise, no lag --
+// and how much arrives is 1 everywhere.
 
 #extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_control_flow_attributes : require
@@ -193,34 +194,40 @@ vec3 analyticLight(Material material, vec3 wo, SurfaceHit hit)
 }
 
 /**
- * The direction to the middle (in elevation) of the part of a sphere light (`l`: unit,
- * to its center; `sinSigma`: of its angular radius) above a surface's horizon (its
- * normal), the part the closed form keeps. Along the light's center a shadow test would
- * find the surface itself where the center is below the horizon (a big light low over a
- * planet: lit by its upper part).
+ * How much of a sphere light arrives at a surface point along a ray to a point of its
+ * part above the surface's plane (light_part.glsl; `u`: where, uniform over it): in
+ * expectation, the share of it past what is in the way (soft shadows, sampled).
  */
-vec3 visiblePart(vec3 l, float sinSigma, vec3 normal)
+vec3 sphereTransmittance(Light light, SurfaceHit hit, vec2 u)
 {
-    float sigma = asin(min(sinSigma, 1.0));
-    float elevation = asin(clamp(dot(l, normal), -1.0, 1.0));
-    if (elevation - sigma >= 0.0) {
-        return l;  // All of it above the horizon.
+    Frame frame = makeFrame(normalize(hit.position - light.center));
+    LightPart part =
+        lightPartAbove(light.center, light.radius, hit.position, hit.geometricNormal, frame);
+    float angle = kTwoPi * u.x;
+    vec2 offset = onLightPart(part, sqrt(u.y) * vec2(cos(angle), sin(angle))).xy * light.radius;
+    vec3 direction = normalize(light.center + frame.tangent * offset.x +
+                               frame.bitangent * offset.y - hit.position);
+    if (dot(direction, hit.geometricNormal) <= 0.0) {
+        return vec3(1.0);  // All of it set (as the maps: not shaded by the surface itself).
     }
-    float middle = 0.5 * (max(elevation - sigma, 0.0) + max(elevation + sigma, 0.0));
-    vec3 horizontal = l - dot(l, normal) * normal;
-    float length2 = dot(horizontal, horizontal);
-    horizontal = length2 > 1e-12 ? horizontal * inversesqrt(length2) : makeFrame(normal).tangent;
-    return cos(middle) * horizontal + sin(middle) * normal;
+    // To the light's surface: the point of its disk is inside it.
+    vec3 toCenter = light.center - hit.position;
+    float along = dot(direction, toCenter);
+    float distance =
+        along - sqrt(max(along * along - dot(toCenter, toCenter) + light.radius * light.radius,
+                         0.0));
+    return shadowTransmittance(offsetOrigin(hit.position, hit.geometricNormal, direction),
+                               direction, distance);
 }
 
 /**
- * analyticLight, each light's share shadowed: by its shadow maps (soft), else (or where
- * its center is below the surface's horizon: the maps' receiver test needs it above) by
- * a ray to the middle of its part above the horizon (hard); a faint one not at all.
- * `rotation`: of the shadow maps' taps (turned every frame: the recent mean, or the
- * upscaler, averages them).
+ * analyticLight, each light's share shadowed: by its shadow maps (soft), else by a ray to
+ * a point of it (sphereTransmittance: soft in expectation); a faint one not at all. Both
+ * of its part above the surface's plane, as the closed form. `u`: uniform, of the maps'
+ * taps' rotation (x) and of the point of the ray (turned every frame: the recent mean, or
+ * the upscaler, averages them).
  */
-vec3 shadowedLight(Material material, vec3 wo, SurfaceHit hit, float rotation)
+vec3 shadowedLight(Material material, vec3 wo, SurfaceHit hit, vec2 u)
 {
     vec3 total = vec3(0.0);
     for (uint i = 0u; visitLight(i, kLightSpheres); ++i) {
@@ -232,17 +239,11 @@ vec3 shadowedLight(Material material, vec3 wo, SurfaceHit hit, float rotation)
         vec3 irradiance = sphereIrradiance(i, hit);
         if (luminance(irradiance) > faint) {
             Light light = lights[i];
-            vec3 toCenter = light.center - hit.position;
-            float distance = length(toCenter);
-            if (hasShadowMaps(i) && dot(toCenter, hit.geometricNormal) > 0.0) {
+            if (hasShadowMaps(i)) {
                 irradiance *= shadowVisibility(i, light.center, light.radius, hit.position,
-                                               hit.geometricNormal, rotation);
+                                               hit.geometricNormal, kTwoPi * u.x);
             } else {
-                vec3 direction =
-                    visiblePart(toCenter / distance, light.radius / distance, hit.geometricNormal);
-                irradiance *= shadowTransmittance(
-                    offsetOrigin(hit.position, hit.geometricNormal, direction), direction,
-                    distance - light.radius);
+                irradiance *= sphereTransmittance(light, hit, u);
             }
         }
         sum += irradiance;
@@ -454,10 +455,14 @@ void main()
     if (kShadowMaps) {
         // Shadowed now, as it is: all of it arrives (the ratio is 1, without noise).
         if (lit) {
-            float rotation = kTwoPi * fract(52.9829189 * fract(dot(vec2(pixel),
-                                                                   vec2(0.06711056, 0.00583715))) +
-                                            0.618034 * float(frameData.frame.x));
-            unshadowed = albedo.rgb * shadowedLight(material, wo, primary, rotation);
+            // Interleaved gradient noise (Jimenez 2014), of two pixels apart for y: the
+            // maps' taps turned, the rays' points moved, from pixel to pixel and frame to
+            // frame.
+            const vec2 ign = vec2(0.06711056, 0.00583715);
+            vec2 noise = fract(52.9829189 * fract(vec2(dot(vec2(pixel), ign),
+                                                       dot(vec2(pixel.yx) + 17.0, ign))) +
+                               vec2(0.618034, 0.7548777) * float(frameData.frame.x));
+            unshadowed = albedo.rgb * shadowedLight(material, wo, primary, noise);
         }
         imageStore(frameUnshadowed, pixel, vec4(unshadowed, 0.0));
         if (traced) {
@@ -577,7 +582,8 @@ void main()
             lightRecord = uvec4(pickedLight, packHalf2x16(lightPoint.xy),
                                 packHalf2x16(vec2(lightPoint.z, luminance(arrives))), 0u);
         }
-    }    imageStore(frameUnshadowed, pixel, vec4(unshadowed, 0.0));
+    }
+    imageStore(frameUnshadowed, pixel, vec4(unshadowed, 0.0));
     if (traced) {
         float scale = luminance(shadowed) / luminance(demodulationUnshadowed(unshadowed));
         imageStore(noisyDirect, pixel, vec4(shadowed, scale * scale));

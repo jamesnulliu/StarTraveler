@@ -204,15 +204,18 @@ the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
     accumulates. Or (`DirectShadows::ShadowMaps`, the game's, as engines light
     with their lights) nothing of it accumulates: each light's closed form is
     shadowed every frame with the raster pipeline's shadow maps (below), a
-    light without them with a ray to its center; where a big light's center is
-    below a surface's horizon, a ray to the middle of its part above it (the
-    maps' receiver test needs the center above). No noise, no lag behind moving
-    shadows (a test sweeping a light: 9x less), the same error against the
-    path tracer in the cockpit and 22% less noise while turning, at the same
-    cost; the soft shadows are approximated. Native, a recent mean anti-aliases
-    it, clipped to this frame's around each pixel (mean +- a standard
-    deviation, so smooth light moving does not lag); upscaled, the upscaler
-    does.
+    light without them with a ray to a point of it (another every frame and
+    pixel: soft in the mean). Both look at the part of a light above the
+    surface's plane, as the closed form does: the demo's sun, 22 degrees
+    across, low over the planet, still lights the ground past its center's
+    terminator with its upper part, and a ball's shadow there is long and soft
+    (a ray to the middle of that part drew it hard and black). No noise, no
+    lag behind moving shadows (a test sweeping a light: 9x less), the same
+    error against the path tracer in the cockpit and 22% less noise while
+    turning, at the same cost; the soft shadows are approximated. Native, a
+    recent mean anti-aliases it, clipped to this frame's around each pixel
+    (mean +- a standard deviation, so smooth light moving does not lag);
+    upscaled, the upscaler does.
     At half trace resolution (the game's) paths start from one pixel of each
     2x2 per frame, each in turn; the others borrow their neighbors' samples on
     the same surface: only those until they have their own (just uncovered),
@@ -230,9 +233,14 @@ the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
     views nested around the camera for a far one (cascades, moved by whole
     texels so edges do not crawl) -- and shading compares each surface's
     distance with them, per texel against the surface's plane (no acne at any
-    slope), softened over the penumbra the light's size and the occluders'
-    distance make (percentage-closer soft shadows). Their shadows match the
-    path tracer's shadow rays (checked by the tests).
+    slope): what is above the plane and nearer the light shades it, softened
+    over the penumbra the light's size and the occluders' distance make
+    (percentage-closer soft shadows: occluders searched a few texels around in
+    each view in turn, finest first, then filtered over the part of the light
+    above the plane). Spheres are written at the middle of their chord (Woo's
+    midpoint shadow maps), where their silhouette is: from their near side the
+    penumbra came out too wide, a ball's shadow too light, without its umbra.
+    Their shadows match the path tracer's shadow rays (checked by the tests).
   Every pipeline writes linear radiance. Hybrid and Raster may render fewer
   pixels than the output has (`GpuRenderOptions::upscaling`): each frame at
   another position in its pixels (the jitter, a Halton sequence), from which a

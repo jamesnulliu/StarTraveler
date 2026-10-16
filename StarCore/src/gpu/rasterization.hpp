@@ -43,6 +43,7 @@ inline constexpr std::uint32_t kFlagNextEvent = 2U;
 inline constexpr std::uint32_t kFlagSrgb = 4U;
 inline constexpr std::uint32_t kFlagWriteIds = 8U;
 inline constexpr std::uint32_t kFlagUpscaled = 16U;
+inline constexpr std::uint32_t kFlagDirectShadowMaps = 32U;
 inline constexpr std::uint32_t kHistoryReset = 1U;
 inline constexpr std::uint32_t kHistoryStill = 2U;
 

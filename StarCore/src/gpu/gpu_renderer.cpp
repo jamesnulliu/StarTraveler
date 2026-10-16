@@ -379,6 +379,7 @@ auto GpuRenderer::needsReset(const RenderScene& scene, const Camera& camera,
         if (estimatorSettings(settings) != estimatorSettings(m_lastSettings) ||
             !options.denoiser.temporal || !m_lastTemporal ||
             options.traceResolution != m_lastTraceResolution ||
+            options.directShadows != m_lastDirectShadows ||
             scene.contentVersion != m_lastContentVersion) {
             return true;
         }
@@ -692,6 +693,7 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
     m_lastTemporal = options.denoiser.temporal;
     m_lastShadows = options.shadows;
     m_lastTraceResolution = options.traceResolution;
+    m_lastDirectShadows = options.directShadows;
     m_lastUpscaler = upscaling;
     m_lastCamera = camera;
     ++m_frameNumber;

@@ -36,6 +36,8 @@ const uint kFlagWriteIds = 8u;
 // An upscaler takes the result: this frame's albedo, emission and unshadowed light, at its
 // sample positions (composite.comp).
 const uint kFlagUpscaled = 16u;
+// The direct layer is shadowed with shadow maps (direct.comp): all of its light arrives.
+const uint kFlagDirectShadowMaps = 32u;
 // history.y
 const uint kHistoryReset = 1u;   // Ignore earlier frames.
 const uint kHistoryStatic = 2u;  // Nothing moved since the last frame.

@@ -997,6 +997,13 @@ void GameLayer::drawRenderPanel()
                                   "third less GPU time in the cockpit, more noise while moving; "
                                   "still images converge alike)");
             }
+            enumCombo("Direct shadows", gpu.directShadows);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Of the sphere lights' direct light.\nShadow maps: as games, "
+                                  "looked up every frame (no noise, no lag; soft shadows "
+                                  "approximated).\nTraced: shadow rays accumulated over frames "
+                                  "(converges to the path tracer's image).");
+            }
             DenoiserSettings& denoiser = gpu.denoiser;
             ImGui::Checkbox("Reuse samples", &denoiser.temporal);
             ImGui::SameLine();
@@ -1018,7 +1025,10 @@ void GameLayer::drawRenderPanel()
         }
     }
 
-    if (usingGpu() && !m_options.rayTracing) {
+    const bool shadowMaps =
+        !m_options.rayTracing || (gpuPipeline() == GpuPipeline::Hybrid &&
+                                  m_options.gpuRender.directShadows == DirectShadows::ShadowMaps);
+    if (usingGpu() && shadowMaps) {
         ImGui::SeparatorText("Shadow maps");
         ShadowSettings& shadows = m_options.gpuRender.shadows;
         ImGui::Checkbox("Shadows", &shadows.enabled);

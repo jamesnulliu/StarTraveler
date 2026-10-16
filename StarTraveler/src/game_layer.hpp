@@ -67,11 +67,13 @@ struct RenderOptions
     float gpuBudgetMs = 8.0F;
     // GPU: the hybrid pipeline (rasterized first hits, reprojection and
     // denoising) by default, paths from a quarter of the pixels per frame
-    // (each in turn); plain path tracing converges to the reference. Bloom,
-    // motion blur and a vignette.
+    // (each in turn), the sphere lights' direct light shadowed with shadow
+    // maps; plain path tracing converges to the reference. Bloom, motion blur
+    // and a vignette.
     starcore::GpuRenderOptions gpuRender{
         .pipeline = starcore::GpuPipeline::Hybrid,
         .traceResolution = starcore::TraceResolution::Half,
+        .directShadows = starcore::DirectShadows::ShadowMaps,
         .effects = {.bloom = true,
                     .bloomStrength = 0.05F,
                     .motionBlur = true,

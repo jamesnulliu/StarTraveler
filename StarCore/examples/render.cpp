@@ -48,6 +48,7 @@ struct GpuOptions
     bool spatial = true;
     bool temporal = true;
     bool half = false;  // TraceResolution::Half
+    bool shadowMaps = false;  // DirectShadows::ShadowMaps
     starcore::Vec3 move{0.0F};  // Camera translation per frame.
     starcore::Entity movedEntity;
     starcore::Vec3 entityMove{0.0F};  // Its translation per frame.
@@ -84,6 +85,8 @@ auto renderOnGpu([[maybe_unused]] starcore::Scene& scene,
         options.denoiser.temporal = gpuOptions.temporal;
         options.traceResolution =
             gpuOptions.half ? starcore::TraceResolution::Half : starcore::TraceResolution::Full;
+        options.directShadows = gpuOptions.shadowMaps ? starcore::DirectShadows::ShadowMaps
+                                                      : starcore::DirectShadows::Traced;
         if (!starcore::enumFromString(gpuOptions.view, options.view)) {
             SC_ERROR("Unknown view \"{}\"", gpuOptions.view);
             return std::nullopt;
@@ -235,6 +238,8 @@ auto main(int argc, char** argv) -> int
     app.add_flag("--no-temporal", noTemporal, "Hybrid: no reprojection");
     app.add_flag("--half", gpuOptions.half,
                  "Hybrid: paths from one pixel of each 2x2 per frame, in turn");
+    app.add_flag("--shadow-maps", gpuOptions.shadowMaps,
+                 "Hybrid: the sphere lights' direct light shadowed with shadow maps");
     app.add_option("--move", move, "GPU: camera translation per frame x y z")->expected(3);
     app.add_option("--move-entity", moveEntity,
                    "GPU: translation per frame of an entity (by name): name x y z")

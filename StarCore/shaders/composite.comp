@@ -56,7 +56,10 @@ void main()
     vec4 lighting = imageLoad(primaryLighting, pixel);
     vec3 specular = imageLoad(specularLighting, pixel).rgb;
     vec3 glass = imageLoad(glassLighting, pixel).rgb;
-    vec3 visibility = imageLoad(directVisibility, pixel).rgb;
+    // With shadow maps the direct layer's light is shadowed already (its filter skipped).
+    vec3 visibility = (frameData.options.x & kFlagDirectShadowMaps) != 0u
+                          ? vec3(1.0)
+                          : imageLoad(directVisibility, pixel).rgb;
     // The filtered lighting times the albedo and the unshadowed light of the last few
     // frames (they follow the lights, and edges stay anti-aliased: as many positions of
     // the jitter; still, of all of them) -- how much of the latter arrives is a share,

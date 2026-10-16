@@ -561,6 +561,14 @@ auto hybridOptions(bool spatial = true, TraceResolution resolution = TraceResolu
     return options;
 }
 
+/** @brief Options of a pipeline upscaled at a quality. */
+auto upscaled(GpuRenderOptions options, Upscaler upscaler, UpscalerQuality quality)
+    -> GpuRenderOptions
+{
+    options.upscaling = {.upscaler = upscaler, .quality = quality};
+    return options;
+}
+
 }  // namespace
 
 TEST_CASE("GPU hybrid: emissive sphere, sky and white furnace", "[gpu][hybrid]")
@@ -1214,9 +1222,14 @@ TEST_CASE("GPU hybrid: moving shadows leave no trail", "[gpu][hybrid]")
         return &builder.update(scene);
     };
 
+    // Shadows traced and accumulated, or looked up in shadow maps every frame.
+    const DirectShadows shadows = GENERATE(DirectShadows::Traced, DirectShadows::ShadowMaps);
+    INFO(enumToString(shadows));
+    GpuRenderOptions options = hybridOptions();
+    options.directShadows = shadows;
     auto hybrid = gpu.makeRenderer(kWidth, kHeight);
     for (int i = 0; i < kFrames; ++i) {
-        hybrid->render(*ballAt(i), camera, settings, hybridOptions());
+        hybrid->render(*ballAt(i), camera, settings, options);
     }
     REQUIRE(hybrid->accumulatedFrames() == kFrames);  // Reprojected, not restarted.
     auto reference = gpu.makeRenderer(kWidth, kHeight);
@@ -1256,6 +1269,132 @@ TEST_CASE("GPU hybrid: moving shadows leave no trail", "[gpu][hybrid]")
                    << " pixels of trails");
     CHECK(shadow < 1.5);
     CHECK(trail < 20);
+}
+
+namespace
+{
+
+/** @brief A ball on a floor under a sphere light, seen from above (soft shadows). */
+struct ShadowedFloor
+{
+    Scene scene;
+    Entity floor;
+    Entity light;
+
+    ShadowedFloor()
+    {
+        scene.environment().skyColor = Vec3(0.01F);
+        floor = scene.createEntity("Floor");
+        floor.add<MeshComponent>(MeshComponent{.mesh = primitives::plane(Vec2(20.0F)).build()});
+        floor.add<MaterialComponent>(MaterialComponent{.albedo = Vec3(0.7F)});
+        light = scene.createEntity("Light");
+        light.get<TransformComponent>().translation = {0.0F, 4.0F, 0.0F};
+        light.add<SphereComponent>(0.5F);
+        light.add<MaterialComponent>(MaterialComponent{
+            .albedo = Vec3(1.0F), .emissionColor = Vec3(1.0F), .emissionPower = 60.0F});
+        Entity ball = scene.createEntity("Ball");
+        ball.get<TransformComponent>().translation = {0.0F, 1.0F, 0.0F};
+        ball.add<SphereComponent>(0.5F);
+        ball.add<MaterialComponent>(MaterialComponent{.albedo = {0.8F, 0.3F, 0.2F}});
+    }
+
+    [[nodiscard]] static auto camera(std::uint32_t width, std::uint32_t height) -> Camera
+    {
+        Camera camera = makeCamera(width, height);
+        camera.setPosition({0.0F, 6.0F, 3.0F});
+        camera.lookAt({0.0F, 0.0F, 0.0F});
+        return camera;
+    }
+};
+
+auto shadowOptions(DirectShadows shadows) -> GpuRenderOptions
+{
+    GpuRenderOptions options = hybridOptions();
+    options.directShadows = shadows;
+    options.view = HybridView::Direct;
+    return options;
+}
+
+}  // namespace
+
+TEST_CASE("GPU hybrid: shadow-mapped direct light has no noise", "[gpu][hybrid]")
+{
+    const GpuTest gpu;
+    ShadowedFloor test;
+    const RenderScene renderScene = buildRenderScene(test.scene);
+    const Camera camera = ShadowedFloor::camera(96, 72);
+    // One frame each, of two random streams: the direct light (soft shadows included).
+    auto frame = [&](DirectShadows shadows, std::uint32_t seed) {
+        auto renderer = gpu.makeRenderer(96, 72);
+        renderer->render(renderScene, camera, PathTracerSettings{.seed = seed},
+                         shadowOptions(shadows));
+        return renderer->readImage();
+    };
+    const float traced = meanDifference(frame(DirectShadows::Traced, 1),
+                                        frame(DirectShadows::Traced, 2));
+    const float mapped = meanDifference(frame(DirectShadows::ShadowMaps, 1),
+                                        frame(DirectShadows::ShadowMaps, 2));
+    INFO("seed 1 against seed 2: traced " << traced << ", shadow maps " << mapped);
+    CHECK(traced > 1.0F);
+    CHECK(mapped == 0.0F);
+}
+
+TEST_CASE("GPU hybrid: shadow-mapped direct light follows a moving light at once",
+          "[gpu][hybrid]")
+{
+    const GpuTest gpu;
+    ShadowedFloor test;
+    RenderSceneBuilder builder;
+    constexpr std::uint32_t kWidth = 96;
+    constexpr std::uint32_t kHeight = 72;
+    const Camera camera = ShadowedFloor::camera(kWidth, kHeight);
+    // The light swings across, the ball's shadow sweeping the floor about its own width
+    // every few frames.
+    auto lightAt = [&](int frame) {
+        test.light.patch<TransformComponent>([&](auto& t) {
+            t.translation = {-3.0F + 0.25F * static_cast<float>(frame), 4.0F, 0.0F};
+        });
+        return &builder.update(test.scene);
+    };
+    constexpr int kFrames = 24;
+    const PathTracerSettings settings{.samplesPerPixel = 2, .fireflyClamp = 8.0F};
+    // Anti-aliased by the hybrid pipeline, or by an upscaler (each frame's direct light).
+    const Upscaler upscaler = GENERATE(Upscaler::Off, Upscaler::Taau);
+    INFO("upscaler " << enumToString(upscaler));
+    auto options = [&](DirectShadows shadows) {
+        GpuRenderOptions final = upscaled(shadowOptions(shadows), upscaler, UpscalerQuality::Native);
+        final.view = HybridView::Final;
+        return final;
+    };
+    auto sweep = [&](DirectShadows shadows) {
+        auto renderer = gpu.makeRenderer(kWidth, kHeight);
+        for (int i = 0; i < kFrames; ++i) {
+            renderer->render(*lightAt(i), camera, settings, options(shadows));
+        }
+        return renderer->readImage();
+    };
+    // Each against itself where the light ended, still for long (no history to lag).
+    auto converged = [&](DirectShadows shadows) {
+        auto renderer = gpu.makeRenderer(kWidth, kHeight);
+        for (int i = 0; i < 128; ++i) {
+            renderer->render(*lightAt(kFrames - 1), camera, settings, options(shadows));
+        }
+        return renderer->readImage();
+    };
+    const ColorImage tracedEnd = converged(DirectShadows::Traced);
+    const ColorImage mappedEnd = converged(DirectShadows::ShadowMaps);
+    // How far each is behind, over the image (what lags besides is the same in both: the
+    // bounced light, the highlights on the ball). Measured on an RTX 4060: traced 0.71,
+    // shadow maps 0.08 (with TAAU 0.57, 0.14); the two still differ by 1.5 (soft shadows
+    // approximated).
+    const BlockDifference tracedLag = blockDifference(sweep(DirectShadows::Traced), tracedEnd);
+    const BlockDifference mappedLag =
+        blockDifference(sweep(DirectShadows::ShadowMaps), mappedEnd);
+    INFO("behind, mean: traced " << tracedLag.mean << ", shadow maps " << mappedLag.mean
+                                 << "; the two still differ by "
+                                 << blockDifference(mappedEnd, tracedEnd).mean);
+    CHECK(mappedLag.mean < 0.5F * tracedLag.mean);
+    CHECK(mappedLag.mean < 0.3F);
 }
 
 TEST_CASE("GPU hybrid: what moves with the camera keeps its history", "[gpu][hybrid]")
@@ -1941,14 +2080,6 @@ TEST_CASE("GPU effects: particles glow, hide behind surfaces and streak", "[gpu]
 
 namespace
 {
-
-/** @brief Options of a pipeline upscaled at a quality. */
-auto upscaled(GpuRenderOptions options, Upscaler upscaler, UpscalerQuality quality)
-    -> GpuRenderOptions
-{
-    options.upscaling = {.upscaler = upscaler, .quality = quality};
-    return options;
-}
 
 /** @brief A renderer, or SKIP if the upscaler cannot run here (the vendors' need their GPUs). */
 auto upscalingRenderer(const GpuTest& gpu, Upscaler upscaler, std::uint32_t width,

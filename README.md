@@ -135,6 +135,9 @@ half the GPU time at 1080p. The Render panel's "Upscaling" picks the upscaler
 (or Off) and how much is rendered, from Native (anti-aliasing only) to Ultra
 performance (1/3); `--upscaler Off|TAAU|FSR|DLSS` and `--quality` set them at
 start.
+The sphere lights' direct light is shadowed with shadow maps every frame, as
+games do ("Direct shadows" in the Render panel; Traced accumulates shadow rays
+instead, converging to the path tracer's image when still).
 The Render panel switches to plain path tracing (the reference, which restarts
 whenever anything moves), traces every pixel every frame (Trace resolution
 Full: less noise while moving, almost twice the GPU time), tunes the denoiser
@@ -198,7 +201,18 @@ the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
     of its own, as a ratio estimator (as engines shade lights and denoise only
     their shadows): what it would be unshadowed is in closed form every frame,
     so it follows the light at once, and only how much of it arrives
-    accumulates.
+    accumulates. Or (`DirectShadows::ShadowMaps`, the game's, as engines light
+    with their lights) nothing of it accumulates: each light's closed form is
+    shadowed every frame with the raster pipeline's shadow maps (below), a
+    light without them with a ray to its center; where a big light's center is
+    below a surface's horizon, a ray to the middle of its part above it (the
+    maps' receiver test needs the center above). No noise, no lag behind moving
+    shadows (a test sweeping a light: 9x less), the same error against the
+    path tracer in the cockpit and 22% less noise while turning, at the same
+    cost; the soft shadows are approximated. Native, a recent mean anti-aliases
+    it, clipped to this frame's around each pixel (mean +- a standard
+    deviation, so smooth light moving does not lag); upscaled, the upscaler
+    does.
     At half trace resolution (the game's) paths start from one pixel of each
     2x2 per frame, each in turn; the others borrow their neighbors' samples on
     the same surface: only those until they have their own (just uncovered),
@@ -243,7 +257,7 @@ the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
   depths) and a vignette, and tone maps. With every effect off the image is
   exactly the tone-mapped one, as the CPU's.
   `starcore-render scene.yaml --gpu` (or `--hybrid`, with `--move`,
-  `--turn-entity`, `--view`, `--half`, or `--raster`, `--no-shadows`;
+  `--turn-entity`, `--view`, `--half`, `--shadow-maps`, or `--raster`, `--no-shadows`;
   `--bloom`, `--motion-blur`, `--vignette`; `--upscaler`, `--quality`,
   `--sharpness`) renders offscreen.
 - **Particles**: a CPU particle system (emitter components spreading their

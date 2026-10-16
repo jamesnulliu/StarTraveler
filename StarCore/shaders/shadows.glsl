@@ -1,13 +1,22 @@
-// Shadow maps of the Raster pipeline (src/gpu/shadow_maps.cpp): the scene's
-// depth as seen from the center of the brightest sphere lights, each view in a
-// tile of one depth atlas, and percentage-closer soft shadows looked up in
-// them. The shadow pass (shadow.vert, shadow_sphere.frag) defines
-// STARCORE_SHADOW_PASS: it renders the views and looks nothing up.
+// Shadow maps (src/gpu/shadow_maps.cpp) of the Raster pipeline and of the
+// Hybrid one's direct light (DirectShadows::ShadowMaps): the scene's depth as
+// seen from the center of the brightest sphere lights, each view in a tile of
+// one depth atlas, and percentage-closer soft shadows looked up in them. The
+// shadow pass (shadow.vert, shadow_sphere.frag) defines STARCORE_SHADOW_PASS:
+// it renders the views and looks nothing up. The bindings are 13 and 14 unless
+// STARCORE_SHADOW_RECORDS / STARCORE_SHADOW_ATLAS say otherwise.
 
 #ifndef STARCORE_SHADOWS_GLSL
 #define STARCORE_SHADOWS_GLSL
 
 #include "common.glsl"
+
+#ifndef STARCORE_SHADOW_RECORDS
+#define STARCORE_SHADOW_RECORDS 13
+#endif
+#ifndef STARCORE_SHADOW_ATLAS
+#define STARCORE_SHADOW_ATLAS 14
+#endif
 
 const uint kMaxShadowLights = 4u;
 const uint kMaxShadowViews = 16u;
@@ -40,7 +49,7 @@ struct ShadowLight
 };
 
 // A uniform buffer: lookups read views from the constant cache.
-layout(set = 0, binding = 13, std140) uniform Shadows
+layout(set = 0, binding = STARCORE_SHADOW_RECORDS, std140) uniform Shadows
 {
     uvec4 shadowCount;  // x: lights with views
     ShadowLight shadowLights[kMaxShadowLights];
@@ -70,7 +79,7 @@ vec3 shadowDirection(ShadowView view, vec2 local)
 
 #ifndef STARCORE_SHADOW_PASS
 
-layout(set = 0, binding = 14) uniform sampler2D shadowAtlas;
+layout(set = 0, binding = STARCORE_SHADOW_ATLAS) uniform sampler2D shadowAtlas;
 
 // Percentage-closer soft shadows: the occluders' mean distance from the light
 // (searched where they could shade the point) and the light's radius make the
@@ -173,6 +182,17 @@ vec2 shadowDisk(ShadowLight light, uint level, vec3 direction, Frame frame, floa
         result += shadowTexels(view, tap, position, facing, bias);
     }
     return result;
+}
+
+/** Whether a light (index into lights) has shadow maps this frame. */
+bool hasShadowMaps(uint lightIndex)
+{
+    for (uint i = 0u; i < shadowCount.x; ++i) {
+        if (shadowLights[i].lightIndex == lightIndex) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /**

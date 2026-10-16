@@ -38,10 +38,13 @@ constexpr VkDescriptorType kAtrousBindings[] = {kBuffer, kUniform, kBuffer, kIma
                                                 kBuffer, kBuffer,  kImage,  kImage, kImage};
 constexpr VkDescriptorType kGradientBindings[] = {kBuffer, kUniform, kBuffer, kImage,
                                                   kBuffer, kBuffer,  kBuffer, kImage};
-constexpr VkDescriptorType kDirectBindings[] = {kTlas,  kUniform, kBuffer, kImage,  kBuffer,
-                                                kBuffer, kBuffer, kImage,  kImage,  kImage,
-                                                kImage,  kImage,  kImage,  kImage,  kImage,
-                                                kBuffer, kImage,  kImage};
+// 18, 19: the shadow maps (shadows.glsl).
+constexpr VkDescriptorType kDirectBindings[] = {
+    kTlas,  kUniform, kBuffer, kImage,  kBuffer, kBuffer, kBuffer, kImage,   kImage, kImage,
+    kImage, kImage,   kImage,  kImage,  kImage,  kBuffer, kImage,  kImage,   kUniform,
+    VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER};
+// direct.comp's specialization constant: shadows traced, looked up in shadow maps.
+constexpr std::uint32_t kShadowMapConstants[] = {0, 1};
 
 /** @brief Stages of hybrid_trace.comp (specialization constant 0, a pipeline each). */
 enum class TraceStage : std::uint32_t
@@ -245,7 +248,11 @@ HybridRenderer::HybridRenderer(vulkan::Context& context)
                                        sizeof(AtrousPass), std::span(&kTiled[0], 1)),
                vulkan::ComputePipeline(context, atrous_comp_spv, kAtrousBindings,
                                        sizeof(AtrousPass), std::span(&kTiled[1], 1))},
-      m_direct(context, direct_comp_spv, kDirectBindings),
+      m_direct{vulkan::ComputePipeline(context, direct_comp_spv, kDirectBindings, 0,
+                                       std::span(&kShadowMapConstants[0], 1)),
+               vulkan::ComputePipeline(context, direct_comp_spv, kDirectBindings, 0,
+                                       std::span(&kShadowMapConstants[1], 1))},
+      m_shadows(context),
       m_gradient(context, gradient_comp_spv, kGradientBindings, sizeof(std::int32_t)),
       m_composite(context, composite_comp_spv, kCompositeBindings)
 {
@@ -372,6 +379,10 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
     if (frame.upscaled) {
         flags |= kFlagUpscaled;
     }
+    const bool shadowMaps = frame.options.directShadows == DirectShadows::ShadowMaps;
+    if (shadowMaps) {
+        flags |= kFlagDirectShadowMaps;
+    }
     const std::uint32_t samples =
         settings.mode == RenderMode::Preview ? 1U : std::max(1U, settings.samplesPerPixel);
     uniforms.frame[0] = frame.frameIndex;
@@ -393,7 +404,11 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
     vulkan::Buffer& uniformBuffer = m_uniforms[frame.frameSlot];
     writeUniforms(*m_context, uniformBuffer, uniforms);
 
-    // 1. Visibility -------------------------------------------------------------------------------
+    // 1. Shadow maps (none unless the direct layer looks its shadows up), visibility ----------
+    ShadowSettings shadowSettings = frame.options.shadows;
+    shadowSettings.enabled = shadowSettings.enabled && shadowMaps;
+    m_shadows.record(commandBuffer, frame.frameSlot, renderScene, scene, *frame.camera,
+                     settings.instanceMask, shadowSettings);
     visibility.record(commandBuffer, uniformBuffer.handle(), scene, renderScene,
                       settings.instanceMask, GlassLayer::SmoothPanes);
 
@@ -472,9 +487,12 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
                 .storageImage(14, images.gradients[std::to_underlying(Layer::Direct)][0].view())
                 .storageBuffer(15, scene.previousTransformBuffer())
                 .storageImage(16, images.frameAlbedo.view())
-                .storageImage(17, images.highlights.view());
-            m_direct.bind(commandBuffer);
-            m_direct.pushDescriptors(commandBuffer, directWrites.writes());
+                .storageImage(17, images.highlights.view())
+                .uniformBuffer(18, m_shadows.records(frame.frameSlot))
+                .sampledImage(19, m_shadows.atlas(), m_shadows.sampler());
+            const vulkan::ComputePipeline& direct = m_direct[shadowMaps ? 1 : 0];
+            direct.bind(commandBuffer);
+            direct.pushDescriptors(commandBuffer, directWrites.writes());
             // Every pixel, and every stratum's pixels (the gradients: the strata may reach
             // past the image).
             const std::uint32_t directWidth = std::max(width, 3 * images.gradients[0][0].width());
@@ -531,6 +549,11 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
     const vulkan::ComputePipeline& temporal = m_temporal[stride > 1 ? 1 : 0];
     temporal.bind(commandBuffer);
     for (const Layer layer : kLayers) {
+        // With shadow maps, all of the direct layer's light arrives: only its recent mean
+        // (anti-aliasing) is kept, unless an upscaler does that.
+        if (layer == Layer::Direct && shadowMaps && frame.upscaled) {
+            continue;
+        }
         const Images::LayerImages layerImages = images.layer(layer);
         // Only the primary layer has albedo and emission: their images are bound, unused, for
         // the others (a barrier between the layers all the same: they count as used). The
@@ -578,7 +601,7 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
         const vulkan::ComputePipeline& atrous = m_atrous[tiled ? 1 : 0];
         atrous.bind(commandBuffer);
         for (const Layer layer : kLayers) {
-            if (layer == Layer::Direct && i >= kDirectIterations) {
+            if (layer == Layer::Direct && (i >= kDirectIterations || shadowMaps)) {
                 continue;
             }
             const AtrousPass pass{.step = static_cast<std::int32_t>(1U << i),

@@ -34,14 +34,31 @@
 // And for the specular layer, every pixel: its surface's highlights of the sphere
 // lights in closed form, now and as they were (sphereHighlights), whose change the
 // layer's history follows (temporal.comp): rough, but without noise.
+//
+// With shadow maps (DirectShadows::ShadowMaps, specialization constant 0), as
+// engines light with their lights: every pixel, every frame, each light's closed
+// form times how much of it arrives, looked up in its shadow maps (soft:
+// percentage-closer, shadows.glsl), or for a light without them a ray to its
+// center (hard). Nothing of it is kept across frames but the recent mean that
+// anti-aliases it (temporal.comp, "unshadowed": now the shadowed light) -- no noise,
+// no lag -- and how much arrives is 1 everywhere.
 
 #extension GL_GOOGLE_include_directive : require
 #extension GL_EXT_control_flow_attributes : require
 
 #include "hybrid.glsl"
 #include "path.glsl"
+#define STARCORE_SHADOW_RECORDS 18
+#define STARCORE_SHADOW_ATLAS 19
+#include "shadows.glsl"
 
 layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(constant_id = 0) const uint kShadowMapsConstant = 0u;
+const bool kShadowMaps = kShadowMapsConstant != 0u;
+// Lights giving less than this share of a point's light are not shadowed (as the
+// raster pipeline's).
+const float kFaintShare = 0.02;
 
 // Bindings 0-2 and 4-6 are the scene's (hybrid.glsl, scene.glsl).
 layout(set = 0, binding = 3, rg32ui) uniform readonly uimage2D visibility;
@@ -121,34 +138,116 @@ float sphereIlluminance(float cosTheta, float sinSigma2)
                0.0);
 }
 
+/** The irradiance of sphere light i at a surface point, unshadowed, in closed form. */
+vec3 sphereIrradiance(uint i, SurfaceHit hit)
+{
+    if (lights[i].instanceIndex == hit.instanceIndex) {
+        return vec3(0.0);  // Its own light (as sampling the lights).
+    }
+    vec3 toCenter = lights[i].center - hit.position;
+    float distance2 = dot(toCenter, toCenter);
+    float radius = lights[i].radius;
+    if (distance2 <= radius * radius) {
+        return vec3(0.0);  // Inside it (as sampling the lights).
+    }
+    float cosTheta = dot(toCenter, hit.normal) * inversesqrt(distance2);
+    return lights[i].emission *
+           sphereIlluminance(cosTheta, min(radius * radius / distance2, 0.9999));
+}
+
 /**
- * The light the diffuse lobe of a surface point would get unshadowed from the
- * sphere lights, in closed form, over its albedo (its Fresnel share as at the
- * normal, the paths average it over microfacets: off by a little, smoothly, which
- * the direct layer's ratio holds).
+ * The diffuse lobe's share of the irradiance, over the albedo: what the microfacets'
+ * Fresnel reflection leaves, averaged over the visible normals as the paths draw them
+ * (diffuseShare) by a fixed quadrature (2 radii x 4 angles), so without noise. (Fresnel
+ * at the normal instead made rough surfaces seen at grazing angles too dark: the
+ * visible normals turn towards the eye.)
  */
-vec3 analyticLight(Material material, vec3 wo, SurfaceHit hit)
+float closedFormShare(Material material, vec3 wo, SurfaceHit hit)
 {
     bool thin = (material.flags & kMaterialThinWalled) != 0u;
     float eta = thin || hit.frontFace ? 1.0 / material.ior : material.ior;
-    float share = diffuseLobe(material) / kPi *
-                  (1.0 - fresnelDielectric(max(dot(wo, hit.normal), 1e-5), eta));
+    vec3 woLocal = toLocal(makeFrame(hit.normal), wo);
+    woLocal.z = max(woLocal.z, 1e-5);
+    woLocal = normalize(woLocal);
+    float alpha = roughnessToAlpha(material.roughness);
+    float transmitted = 0.0;
+    [[unroll]] for (int k = 0; k < 8; ++k) {
+        vec3 h = sampleGgxVisibleNormal(woLocal, alpha, 0.25 + 0.5 * float(k & 1),
+                                        0.125 + 0.25 * float(k >> 1));
+        transmitted += 1.0 - fresnelDielectric(dot(woLocal, h), eta);
+    }
+    return diffuseLobe(material) / kPi * transmitted * 0.125;
+}
+
+/**
+ * The light the diffuse lobe of a surface point would get unshadowed from the
+ * sphere lights, in closed form, over its albedo.
+ */
+vec3 analyticLight(Material material, vec3 wo, SurfaceHit hit)
+{
     vec3 sum = vec3(0.0);
     for (uint i = 0u; visitLight(i, kLightSpheres); ++i) {
-        if (lights[i].instanceIndex == hit.instanceIndex) {
-            continue;  // Its own light (as sampling the lights).
-        }
-        vec3 toCenter = lights[i].center - hit.position;
-        float distance2 = dot(toCenter, toCenter);
-        float radius = lights[i].radius;
-        if (distance2 <= radius * radius) {
-            continue;  // Inside it (as sampling the lights).
-        }
-        float cosTheta = dot(toCenter, hit.normal) * inversesqrt(distance2);
-        sum += lights[i].emission *
-               sphereIlluminance(cosTheta, min(radius * radius / distance2, 0.9999));
+        sum += sphereIrradiance(i, hit);
     }
-    return share * sum;
+    return closedFormShare(material, wo, hit) * sum;
+}
+
+/**
+ * The direction to the middle (in elevation) of the part of a sphere light (`l`: unit,
+ * to its center; `sinSigma`: of its angular radius) above a surface's horizon (its
+ * normal), the part the closed form keeps. Along the light's center a shadow test would
+ * find the surface itself where the center is below the horizon (a big light low over a
+ * planet: lit by its upper part).
+ */
+vec3 visiblePart(vec3 l, float sinSigma, vec3 normal)
+{
+    float sigma = asin(min(sinSigma, 1.0));
+    float elevation = asin(clamp(dot(l, normal), -1.0, 1.0));
+    if (elevation - sigma >= 0.0) {
+        return l;  // All of it above the horizon.
+    }
+    float middle = 0.5 * (max(elevation - sigma, 0.0) + max(elevation + sigma, 0.0));
+    vec3 horizontal = l - dot(l, normal) * normal;
+    float length2 = dot(horizontal, horizontal);
+    horizontal = length2 > 1e-12 ? horizontal * inversesqrt(length2) : makeFrame(normal).tangent;
+    return cos(middle) * horizontal + sin(middle) * normal;
+}
+
+/**
+ * analyticLight, each light's share shadowed: by its shadow maps (soft), else (or where
+ * its center is below the surface's horizon: the maps' receiver test needs it above) by
+ * a ray to the middle of its part above the horizon (hard); a faint one not at all.
+ * `rotation`: of the shadow maps' taps (turned every frame: the recent mean, or the
+ * upscaler, averages them).
+ */
+vec3 shadowedLight(Material material, vec3 wo, SurfaceHit hit, float rotation)
+{
+    vec3 total = vec3(0.0);
+    for (uint i = 0u; visitLight(i, kLightSpheres); ++i) {
+        total += sphereIrradiance(i, hit);
+    }
+    float faint = kFaintShare * luminance(total);
+    vec3 sum = vec3(0.0);
+    for (uint i = 0u; visitLight(i, kLightSpheres); ++i) {
+        vec3 irradiance = sphereIrradiance(i, hit);
+        if (luminance(irradiance) > faint) {
+            Light light = lights[i];
+            vec3 toCenter = light.center - hit.position;
+            float distance = length(toCenter);
+            if (hasShadowMaps(i) && dot(toCenter, hit.geometricNormal) > 0.0) {
+                irradiance *= shadowVisibility(i, light.center, light.radius, hit.position,
+                                               hit.geometricNormal, rotation);
+            } else {
+                vec3 direction =
+                    visiblePart(toCenter / distance, light.radius / distance, hit.geometricNormal);
+                irradiance *= shadowTransmittance(
+                    offsetOrigin(hit.position, hit.geometricNormal, direction), direction,
+                    distance - light.radius);
+            }
+        }
+        sum += irradiance;
+    }
+    return closedFormShare(material, wo, hit) * sum;
 }
 
 /**
@@ -288,7 +387,14 @@ void main()
     bool moving = (frameData.history.y & (kHistoryReset | kHistoryStatic)) == 0u;
     // The gradients first (they read the previous frame's samples): at one pixel of each
     // stratum (another each frame, as hybrid_trace.comp's), outside the image too.
-    if (moving) {
+    // (With shadow maps none: nothing to drop.)
+    if (moving && kShadowMaps) {
+        ivec2 stratum = pixel / kGradientStratum;
+        if (all(equal(pixel, stratum * kGradientStratum)) &&
+            all(lessThan(stratum, imageSize(gradients)))) {
+            imageStore(gradients, stratum, vec4(0.0));
+        }
+    } else if (moving) {
         uint k = pcgHash(frameData.frame.x) % uint(kGradientStratum * kGradientStratum);
         ivec2 stratum = pixel / kGradientStratum;
         if (all(equal(pixel - stratum * kGradientStratum,
@@ -345,6 +451,22 @@ void main()
         }
     }
     imageStore(highlights, pixel, vec4(highlight, 0.0, 0.0));
+    if (kShadowMaps) {
+        // Shadowed now, as it is: all of it arrives (the ratio is 1, without noise).
+        if (lit) {
+            float rotation = kTwoPi * fract(52.9829189 * fract(dot(vec2(pixel),
+                                                                   vec2(0.06711056, 0.00583715))) +
+                                            0.618034 * float(frameData.frame.x));
+            unshadowed = albedo.rgb * shadowedLight(material, wo, primary, rotation);
+        }
+        imageStore(frameUnshadowed, pixel, vec4(unshadowed, 0.0));
+        if (traced) {
+            imageStore(noisyDirect, pixel, vec4(unshadowed, lit ? 1.0 : 0.0));
+            imageStore(sampleOnSurface, pixel, uvec4(0u));
+            imageStore(sampleOnLight, pixel, uvec4(0u));
+        }
+        return;
+    }
     if (lit) {
         unshadowed = albedo.rgb * analyticLight(material, wo, primary);
     }

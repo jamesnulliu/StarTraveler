@@ -102,6 +102,24 @@ struct EnumNames<TraceResolution>
     static constexpr std::array kNames = {"Full", "Half"};
 };
 
+/** @brief How the hybrid pipeline shadows the sphere lights' direct light. */
+enum class DirectShadows : std::uint8_t
+{
+    // A shadow ray per traced pixel and frame, how much of the light arrives
+    // accumulated and filtered: still, the path tracer's image.
+    Traced,
+    // As engines do: every frame, looked up in shadow maps (ShadowSettings;
+    // percentage-closer soft shadows), a ray to the light's center (hard) for
+    // a light without them. No noise, no lag; soft shadows approximated.
+    ShadowMaps,
+};
+
+template <>
+struct EnumNames<DirectShadows>
+{
+    static constexpr std::array kNames = {"Traced", "Shadow maps"};
+};
+
 /** @brief Sample reuse of the hybrid pipeline (SVGF-style). */
 struct DenoiserSettings
 {
@@ -143,7 +161,8 @@ struct EffectSettings
 };
 
 /**
- * @brief Shadows of the Raster pipeline (the others trace shadow rays): the
+ * @brief Shadow maps of the Raster pipeline, and of the Hybrid one's direct
+ *        light (DirectShadows::ShadowMaps; else it traces shadow rays): the
  *        brightest sphere lights render the scene's depth as seen from their
  *        center, and shading looks up whether something is nearer the light,
  *        soft as far as the light's size and the occluder's distance make
@@ -232,8 +251,9 @@ struct GpuRenderOptions
 {
     GpuPipeline pipeline = GpuPipeline::PathTracing;
     TraceResolution traceResolution = TraceResolution::Full;  // Hybrid.
+    DirectShadows directShadows = DirectShadows::Traced;      // Hybrid.
     DenoiserSettings denoiser;
-    ShadowSettings shadows;
+    ShadowSettings shadows;  // Raster, and Hybrid with DirectShadows::ShadowMaps.
     HybridView view = HybridView::Final;
     EffectSettings effects;
     UpscalerSettings upscaling;  // Hybrid and Raster.
@@ -463,6 +483,7 @@ private:
     bool m_lastTemporal = true;
     ShadowSettings m_lastShadows;
     TraceResolution m_lastTraceResolution = TraceResolution::Full;
+    DirectShadows m_lastDirectShadows = DirectShadows::Traced;
     Upscaler m_lastUpscaler = Upscaler::Off;
     Camera m_lastCamera;  // For the hybrid pipeline's motion vectors.
 };

@@ -6,7 +6,8 @@
 //   2. trace (hybrid_trace.comp, direct.comp): rebuild the hits of both from
 //      those ids, write their guides and motion vectors; the light the primary
 //      surfaces' diffuse lobe gets from the sphere lights, unshadowed in closed
-//      form and (pixels traced) shadowed (the direct layer); trace paths from
+//      form and (pixels traced) shadowed (the direct layer; or every pixel
+//      shadowed with shadow maps, rendered first: DirectShadows); trace paths from
 //      them (every pixel, or one of each 2x2 in turn, TraceResolution) into
 //      three more layers: the rest of the primary surfaces' lighting, what they
 //      reflect (specular) and what the panes reflect (glass); while things move,
@@ -25,6 +26,7 @@
 #include <vulkan/vulkan.h>
 
 #include "rasterization.hpp"
+#include "shadow_maps.hpp"
 #include "starcore/gpu/gpu_renderer.hpp"
 #include "starcore/gpu/gpu_scene.hpp"
 #include "starcore/vulkan/pipeline.hpp"
@@ -88,7 +90,9 @@ private:
     std::array<vulkan::ComputePipeline, 2> m_temporal;
     // atrous.comp: reading the taps from the images, and tiled.
     std::array<vulkan::ComputePipeline, 2> m_atrous;
-    vulkan::ComputePipeline m_direct;  // direct.comp
+    // direct.comp: shadows traced, and looked up in shadow maps (DirectShadows).
+    std::array<vulkan::ComputePipeline, 2> m_direct;
+    ShadowMaps m_shadows;
     vulkan::ComputePipeline m_gradient;
     vulkan::ComputePipeline m_composite;
     std::array<vulkan::Buffer, kFramesInFlight> m_uniforms;

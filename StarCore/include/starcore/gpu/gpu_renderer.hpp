@@ -132,7 +132,10 @@ struct DenoiserSettings
     // smoother, fewer follows changing light faster. Frames, not samples:
     // more samples per frame make it smoother, not shorter.
     std::uint32_t historyFrames = 64;
-    std::uint32_t iterations = 5;  // Filter radius: 2^iterations pixels.
+    // Filter radius: 2^iterations pixels. In the cockpit at 1920x1080 a fifth iteration
+    // took 1.6 ms (0.6 with DLSS) for 2-4% less noise (with DLSS: 0-2%), and no less error
+    // against the path tracer.
+    std::uint32_t iterations = 4;
     float colorSigma = 4.0F;       // Luminance tolerance, in standard deviations.
     float normalPower = 128.0F;
     float depthSigma = 1.0F;

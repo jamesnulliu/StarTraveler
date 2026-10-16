@@ -34,8 +34,9 @@ constexpr VkDescriptorType kTemporalBindings[] = {
     kBuffer, kUniform, kBuffer, kImage, kBuffer, kBuffer, kBuffer, kImage, kImage, kImage, kImage,
     kImage,  kImage,   kImage,  kImage, kImage,  kImage,  kImage,  kImage, kImage, kImage, kImage,
     kImage,  kImage,   kImage,  kImage};
-constexpr VkDescriptorType kAtrousBindings[] = {kBuffer, kUniform, kBuffer, kImage, kBuffer,
-                                                kBuffer, kBuffer,  kImage,  kImage, kImage};
+constexpr VkDescriptorType kAtrousBindings[] = {kBuffer, kUniform, kBuffer, kImage,
+                                                kBuffer, kBuffer,  kBuffer, kImage,
+                                                kImage,  kImage,   kImage,  kImage};
 constexpr VkDescriptorType kGradientBindings[] = {kBuffer, kUniform, kBuffer, kImage,
                                                   kBuffer, kBuffer,  kBuffer, kImage};
 // 18, 19: the shadow maps (shadows.glsl).
@@ -84,8 +85,10 @@ constexpr std::uint32_t kDirectIterations = 3;
 // temporal.comp's specialization constant: no pixels borrow (every one traced), some do.
 constexpr std::uint32_t kBorrowing[] = {0, 1};
 
-// atrous.comp's specialization constant: taps read from the images, tiled.
-constexpr std::uint32_t kTiled[] = {0, 1};
+// atrous.comp's specialization constants (m_atrous[tiled + 2 * joint]): taps read from the
+// images or tiled; one layer, or the primary and specular layers at once (joint: they share
+// the primary surfaces' guides, read and weighed once).
+constexpr std::uint32_t kAtrousConstants[4][2] = {{0, 0}, {1, 0}, {0, 1}, {1, 1}};
 // A-trous steps (pixels) up to this are tiled (the first iteration must be: its variance
 // is blurred over the tile). Longer ones read the taps from the images: faster (an RTX
 // 4060 laptop GPU) than tiles of pixels that far apart, even of 2x2 pixels each.
@@ -249,9 +252,13 @@ HybridRenderer::HybridRenderer(vulkan::Context& context)
                  vulkan::ComputePipeline(context, temporal_comp_spv, kTemporalBindings,
                                          sizeof(std::uint32_t), std::span(&kBorrowing[1], 1))},
       m_atrous{vulkan::ComputePipeline(context, atrous_comp_spv, kAtrousBindings,
-                                       sizeof(AtrousPass), std::span(&kTiled[0], 1)),
+                                       sizeof(AtrousPass), kAtrousConstants[0]),
                vulkan::ComputePipeline(context, atrous_comp_spv, kAtrousBindings,
-                                       sizeof(AtrousPass), std::span(&kTiled[1], 1))},
+                                       sizeof(AtrousPass), kAtrousConstants[1]),
+               vulkan::ComputePipeline(context, atrous_comp_spv, kAtrousBindings,
+                                       sizeof(AtrousPass), kAtrousConstants[2]),
+               vulkan::ComputePipeline(context, atrous_comp_spv, kAtrousBindings,
+                                       sizeof(AtrousPass), kAtrousConstants[3])},
       m_direct{vulkan::ComputePipeline(context, direct_comp_spv, kDirectBindings, 0,
                                        std::span(&kShadowMapConstants[0], 1)),
                vulkan::ComputePipeline(context, direct_comp_spv, kDirectBindings, 0,
@@ -622,25 +629,35 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
         const auto grids = static_cast<std::uint32_t>(step);
         return grids * (((size + grids - 1) / grids + kWorkgroupSize - 1) / kWorkgroupSize);
     };
+    std::uint32_t& specularLatest = filtered[std::to_underlying(Layer::Specular)];
+    const std::array<vulkan::Image, 2>& specularFilter = *images.layer(Layer::Specular).filter;
     for (std::uint32_t i = 0; i < iterations; ++i) {
         const bool tiled = (1U << i) <= kTiledSteps;
-        const vulkan::ComputePipeline& atrous = m_atrous[tiled ? 1 : 0];
-        atrous.bind(commandBuffer);
         for (const Layer layer : kLayers) {
-            if (layer == Layer::Direct && (i >= kDirectIterations || shadowMaps)) {
+            // The specular layer is filtered with the primary one (joint).
+            if (layer == Layer::Specular ||
+                (layer == Layer::Direct && (i >= kDirectIterations || shadowMaps))) {
                 continue;
             }
+            const bool joint = layer == Layer::Primary;
+            const vulkan::ComputePipeline& atrous = m_atrous[(tiled ? 1 : 0) + (joint ? 2 : 0)];
+            atrous.bind(commandBuffer);
             const AtrousPass pass{.step = static_cast<std::int32_t>(1U << i),
                                   .firstIteration = i == 0 ? 1U : 0U,
                                   .layer = layer};
             const Images::LayerImages layerImages = images.layer(layer);
             std::uint32_t& latest = filtered[static_cast<std::size_t>(layer)];
+            // Not joint: the layer's own images in the specular one's place (declared, unused).
+            const std::array<vulkan::Image, 2>& second = joint ? specularFilter : *layerImages.filter;
+            const std::uint32_t secondLatest = joint ? specularLatest : latest;
             vulkan::DescriptorWrites writes;
             writes.uniformBuffer(1, uniformBuffer.handle())
                 .storageImage(3, (*layerImages.guide)[current].view())
                 .storageImage(7, (*layerImages.filter)[latest].view())
                 .storageImage(8, (*layerImages.filter)[1 - latest].view())
-                .storageImage(9, layerImages.filterGuide->view());
+                .storageImage(9, layerImages.filterGuide->view())
+                .storageImage(10, second[secondLatest].view())
+                .storageImage(11, second[1 - secondLatest].view());
             atrous.pushDescriptors(commandBuffer, writes.writes());
             atrous.pushConstants(commandBuffer, &pass, sizeof(pass));
             if (tiled) {
@@ -650,6 +667,9 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
                 vkCmdDispatch(commandBuffer, groupsX, groupsY, 1);
             }
             latest = 1 - latest;
+            if (joint) {
+                specularLatest = 1 - specularLatest;
+            }
         }
         computeBarrier(commandBuffer);
     }

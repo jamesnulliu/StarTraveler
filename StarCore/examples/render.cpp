@@ -47,6 +47,7 @@ struct GpuOptions
     std::string view = "Final";
     bool spatial = true;
     bool temporal = true;
+    std::uint32_t filterPasses = starcore::DenoiserSettings{}.iterations;
     bool half = false;  // TraceResolution::Half
     bool shadowMaps = false;  // DirectShadows::ShadowMaps
     bool radianceCache = false;
@@ -84,6 +85,7 @@ auto renderOnGpu([[maybe_unused]] starcore::Scene& scene,
         options.pipeline = starcore::GpuPipeline::Hybrid;
         options.denoiser.spatial = gpuOptions.spatial;
         options.denoiser.temporal = gpuOptions.temporal;
+        options.denoiser.iterations = gpuOptions.filterPasses;
         options.traceResolution =
             gpuOptions.half ? starcore::TraceResolution::Half : starcore::TraceResolution::Full;
         options.directShadows = gpuOptions.shadowMaps ? starcore::DirectShadows::ShadowMaps
@@ -238,6 +240,9 @@ auto main(int argc, char** argv) -> int
                    "History");
     app.add_flag("--no-spatial", noSpatial, "Hybrid: no spatial filter");
     app.add_flag("--no-temporal", noTemporal, "Hybrid: no reprojection");
+    app.add_option("--filter-passes", gpuOptions.filterPasses,
+                   "Hybrid: a-trous iterations of the spatial filter (radius 2^N pixels)")
+        ->check(CLI::Range(1U, 8U));
     app.add_flag("--half", gpuOptions.half,
                  "Hybrid: paths from one pixel of each 2x2 per frame, in turn");
     app.add_flag("--shadow-maps", gpuOptions.shadowMaps,

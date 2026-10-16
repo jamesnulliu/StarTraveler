@@ -192,7 +192,11 @@ the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
     reflections move with their reflected image) and the lighting, divided by
     the albedo, goes through SVGF's edge-avoiding a-trous filter, which fades
     out as samples accumulate: a still image converges to the path tracer's
-    (also checked by the tests). Where the light changed, the history is
+    (also checked by the tests). Four iterations (a fifth took 1.6 ms in the
+    cockpit at 1080p, 0.6 with DLSS, for 2-4% less noise and no less error);
+    the primary and specular layers in one pass, as engines filter diffuse and
+    specular light together: both are of the primary surfaces, whose guides
+    are read and weighed once (0.25 ms less). Where the light changed, the history is
     dropped (A-SVGF's temporal gradients: each frame re-traces some of the
     previous frame's samples with their random numbers; of the sphere lights'
     highlights on glossy surfaces, their closed forms then and now, without
@@ -278,7 +282,8 @@ the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
   depths) and a vignette, and tone maps. With every effect off the image is
   exactly the tone-mapped one, as the CPU's.
   `starcore-render scene.yaml --gpu` (or `--hybrid`, with `--move`,
-  `--turn-entity`, `--view`, `--half`, `--shadow-maps`, `--cache`, or `--raster`, `--no-shadows`;
+  `--turn-entity`, `--view`, `--half`, `--shadow-maps`, `--cache`, `--filter-passes`, or
+  `--raster`, `--no-shadows`;
   `--bloom`, `--motion-blur`, `--vignette`; `--upscaler`, `--quality`,
   `--sharpness`) renders offscreen.
 - **Particles**: a CPU particle system (emitter components spreading their

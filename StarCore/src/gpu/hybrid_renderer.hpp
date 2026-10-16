@@ -17,7 +17,8 @@
 //      .hpp), and the other paths end at their first vertex it knows;
 //   3. temporal (temporal.comp, per layer): reproject and accumulate (the
 //      pixels not traced borrow from the traced ones around them);
-//   4. a-trous (atrous.comp): the SVGF spatial filter, a few iterations;
+//   4. a-trous (atrous.comp): the SVGF spatial filter, a few iterations (the primary
+//      and specular layers together: they share the primary surfaces' guides);
 //   5. composite (composite.comp): the direct light (unshadowed x how much of it
 //      arrives) + lighting x albedo + emission + specular + glass into
 //      GpuRenderer's radiance image.
@@ -93,8 +94,9 @@ private:
     std::unique_ptr<RadianceCache> m_cache;  // Created when first used.
     // temporal.comp: every pixel traced, and some borrowing (TraceResolution::Half).
     std::array<vulkan::ComputePipeline, 2> m_temporal;
-    // atrous.comp: reading the taps from the images, and tiled.
-    std::array<vulkan::ComputePipeline, 2> m_atrous;
+    // atrous.comp: reading the taps from the images, and tiled; each of one layer, and of
+    // the primary and specular layers at once.
+    std::array<vulkan::ComputePipeline, 4> m_atrous;
     // direct.comp: shadows traced, and looked up in shadow maps (DirectShadows).
     std::array<vulkan::ComputePipeline, 2> m_direct;
     ShadowMaps m_shadows;

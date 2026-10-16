@@ -12,6 +12,12 @@
 // (one of step x step interleaved grids), so the taps of all of them are a
 // 12x12 tile of that grid, read once into shared memory, not 25 times. Long
 // steps read the taps from the images: the tile's pixels would be scattered.
+//
+// Joint (kJoint): the specular layer with the primary one, as engines' denoisers
+// filter diffuse and specular light together (NRD's REBLUR): both are of the
+// primary surfaces, so their guides and the taps' weights by them (instance,
+// normal, depth) are read and computed once for both; only the luminance
+// stopping and the guide's strength are each layer's own.
 
 #extension GL_EXT_control_flow_attributes : require
 #extension GL_GOOGLE_include_directive : require
@@ -25,6 +31,9 @@ layout(local_size_x = 8, local_size_y = 8) in;
 // shared memory would cost it workgroups running at once).
 layout(constant_id = 0) const int kTiledConstant = 1;
 const bool kTiled = kTiledConstant != 0;
+// Specialization constant 1: joint (the primary layer's pass also filters the specular one).
+layout(constant_id = 1) const int kJointConstant = 0;
+const bool kJoint = kJointConstant != 0;
 
 layout(push_constant) uniform Pass
 {
@@ -39,18 +48,23 @@ layout(set = 0, binding = 3, rgba32ui) uniform readonly uimage2D guide;
 layout(set = 0, binding = 7, rgba16f) uniform readonly image2D inputImage;
 layout(set = 0, binding = 8, rgba16f) uniform writeonly image2D outputImage;
 layout(set = 0, binding = 9, rg32ui) uniform readonly uimage2D filterGuide;
+// Joint: the specular layer's.
+layout(set = 0, binding = 10, rgba16f) uniform readonly image2D specularInput;
+layout(set = 0, binding = 11, rgba16f) uniform writeonly image2D specularOutput;
 
 const int kGroup = 8;  // Pixels per side of a workgroup (the local size).
 const int kApron = 2;  // Taps beyond them, each side.
 const int kTile = kGroup + 2 * kApron;
 // Untiled: one entry (shared memory is allocated whether used or not).
 const int kTileSize = kTiledConstant * (kTile * kTile - 1) + 1;
+const int kSpecularTileSize = kJointConstant * (kTileSize - 1) + 1;
 
 // The tile: the filter guides (decoded: the taps' weights cost more than the
 // shared memory; 0 key: no surface, or outside the image) and the input.
 shared uint tileKey[kTileSize];
 shared vec4 tileGeometry[kTileSize];  // xyz: normal, w: view depth
 shared vec4 tileValue[kTileSize];
+shared vec4 tileSpecular[kSpecularTileSize];
 
 bool inside(ivec2 pixel)
 {
@@ -77,8 +91,11 @@ Tap imageTap(ivec2 pixel)
     return tap;
 }
 
-/** Variance blurred over the 3x3 neighbors on the same surface (steadier edge stopping; step 1). */
-float blurredVariance(int center, uint key)
+/**
+ * Variance blurred over the 3x3 neighbors on the same surface (steadier edge stopping; step
+ * 1), of the tile's layer or (`specular`) the specular one.
+ */
+float blurredVariance(int center, uint key, bool specular)
 {
     const float kernel[2] = float[](0.25, 0.125);
     float sum = 0.0;
@@ -90,11 +107,60 @@ float blurredVariance(int center, uint key)
                 continue;
             }
             float w = kernel[abs(dx)] * kernel[abs(dy)];
-            sum += w * tileValue[tap].a;
+            sum += w * (specular ? tileSpecular[tap].a : tileValue[tap].a);
             weights += w;
         }
     }
     return sum / weights;
+}
+
+/** What a layer's taps are weighed by, besides the guides: its center and luminance stopping. */
+struct Stopping
+{
+    vec4 center;
+    float strength;  // The guide's for the layer (0: not filtered).
+    float luminance;
+    float factor;  // log2(e) over the luminance difference tolerated.
+};
+
+Stopping stoppingOf(vec4 center, float strength, float variance)
+{
+    Stopping stopping;
+    stopping.center = center;
+    stopping.strength = strength;
+    stopping.luminance = luminance(center.rgb);
+    float tolerance = frameData.denoiser.x * sqrt(max(0.0, variance)) + 1e-10;
+    const float kLog2e = 1.4426950408889634;
+    stopping.factor = kLog2e / tolerance;
+    return stopping;
+}
+
+/** A layer's weighted sums over the taps. */
+struct Sums
+{
+    vec3 color;
+    float variance;
+    float weights;
+};
+
+/**
+ * Add a tap's `value` to a layer's sums: weighed by the kernel, the guide's strength, and
+ * exp2 of what the guides make of it (`geometric`: log2 of the normal's and depth's
+ * weights) less the luminance difference over the tolerance -- one exp2 (the filter is
+ * bound by such functions).
+ */
+void addTap(inout Sums sums, Stopping stopping, vec4 value, float kernelWeight, float geometric)
+{
+    float w = kernelWeight * stopping.strength *
+              exp2(geometric - abs(luminance(value.rgb) - stopping.luminance) * stopping.factor);
+    sums.color += w * value.rgb;
+    sums.variance += w * w * value.a;
+    sums.weights += w;
+}
+
+vec4 filteredValue(Sums sums)
+{
+    return vec4(sums.color / sums.weights, sums.variance / (sums.weights * sums.weights));
 }
 
 void main()
@@ -113,6 +179,9 @@ void main()
             tileKey[i] = tap.key;
             tileGeometry[i] = tap.geometry;
             tileValue[i] = inside(tapPixel) ? imageLoad(inputImage, tapPixel) : vec4(0.0);
+            if (kJoint) {
+                tileSpecular[i] = inside(tapPixel) ? imageLoad(specularInput, tapPixel) : vec4(0.0);
+            }
         }
         barrier();
         ivec2 cell = ivec2(gl_LocalInvocationID.xy);
@@ -124,14 +193,21 @@ void main()
     }
     Tap centerGuide = kTiled ? Tap(tileKey[centerTap], tileGeometry[centerTap]) : imageTap(pixel);
     vec4 center = kTiled ? tileValue[centerTap] : imageLoad(inputImage, pixel);
+    vec4 specularCenter = !kJoint ? vec4(0.0)
+                          : kTiled ? tileSpecular[centerTap]
+                                   : imageLoad(specularInput, pixel);
     uint key = centerGuide.key;
-    float strength = key != 0u ? guideStrength(imageLoad(guide, pixel), pass.layer) : 0.0;
-    if (strength <= 0.0) {
+    uvec4 surface = key != 0u ? imageLoad(guide, pixel) : uvec4(0u);
+    float strength = key != 0u ? guideStrength(surface, pass.layer) : 0.0;
+    float specularStrength = kJoint && key != 0u ? guideStrength(surface, kLayerSpecular) : 0.0;
+    if (strength <= 0.0 && specularStrength <= 0.0) {
         imageStore(outputImage, pixel, center);
+        if (kJoint) {
+            imageStore(specularOutput, pixel, specularCenter);
+        }
         return;
     }
 
-    float colorSigma = frameData.denoiser.x;
     float normalPower = frameData.denoiser.y;
     float depthSigma = frameData.denoiser.z;
     vec3 normal = centerGuide.geometry.xyz;
@@ -153,22 +229,24 @@ void main()
     float pixelSize = depth * 2.0 * length(frameData.cameraUp.xyz) / size.y;
     float depthScale = depthSigma * pixelSize / max(abs(c) / length(ray), 0.05);
 
-    float variance =
-        kTiled && pass.firstIteration != 0u ? blurredVariance(centerTap, key) : center.a;
-    float centerLuminance = luminance(center.rgb);
-    float luminanceTolerance = colorSigma * sqrt(max(0.0, variance)) + 1e-10;
+    bool blurVariance = kTiled && pass.firstIteration != 0u;
+    Stopping primary = stoppingOf(
+        center, strength,
+        strength > 0.0 && blurVariance ? blurredVariance(centerTap, key, false) : center.a);
+    Stopping specular = stoppingOf(specularCenter, specularStrength,
+                                   specularStrength > 0.0 && blurVariance
+                                       ? blurredVariance(centerTap, key, true)
+                                       : specularCenter.a);
 
     // A tap's weight is kernel * strength * normal^normalPower * exp(-depth error /
-    // (depthScale * distance) - luminance difference / tolerance), as one exp2 (the
-    // filter is bound by such functions): the divisions by what the taps share are
-    // factors here, the kernel and 1 / distance (pixels) constants of each tap.
+    // (depthScale * distance) - luminance difference / tolerance), as one exp2: the
+    // divisions by what the taps share are factors here, the kernel and 1 / distance
+    // (pixels) constants of each tap.
     const float kLog2e = 1.4426950408889634;
     float depthFactor = kLog2e / (depthScale * float(step));
-    float luminanceFactor = kLog2e / luminanceTolerance;
     const float kernel[3] = float[](1.0, 2.0 / 3.0, 1.0 / 6.0);
-    vec3 sum = center.rgb;
-    float varianceSum = center.a;
-    float weights = 1.0;
+    Sums primarySums = Sums(center.rgb, center.a, 1.0);
+    Sums specularSums = Sums(specularCenter.rgb, specularCenter.a, 1.0);
     [[unroll]] for (int dy = -2; dy <= 2; ++dy) {
         [[unroll]] for (int dx = -2; dx <= 2; ++dx) {
             if (dx == 0 && dy == 0) {
@@ -181,18 +259,27 @@ void main()
             if (tap.key != key || denominator * c <= 0.0) {
                 continue;  // Another surface (or outside the image), or behind the camera.
             }
-            vec4 value = kTiled ? tileValue[index] : imageLoad(inputImage, tapPixel);
             float depthError = abs(tap.geometry.w - planeDepth / denominator);
             // log2 of 0 is -inf (a weight of 0); of 1e-30, normalPower 0 still weighs 1.
             float normalTerm = normalPower * log2(max(dot(normal, tap.geometry.xyz), 1e-30));
-            float w = kernel[abs(dx)] * kernel[abs(dy)] * strength *
-                      exp2(normalTerm -
-                           depthError * depthFactor * inversesqrt(float(dx * dx + dy * dy)) -
-                           abs(luminance(value.rgb) - centerLuminance) * luminanceFactor);
-            sum += w * value.rgb;
-            varianceSum += w * w * value.a;
-            weights += w;
+            float geometric =
+                normalTerm - depthError * depthFactor * inversesqrt(float(dx * dx + dy * dy));
+            float kernelWeight = kernel[abs(dx)] * kernel[abs(dy)];
+            if (strength > 0.0) {
+                addTap(primarySums, primary,
+                       kTiled ? tileValue[index] : imageLoad(inputImage, tapPixel), kernelWeight,
+                       geometric);
+            }
+            if (specularStrength > 0.0) {
+                addTap(specularSums, specular,
+                       kTiled ? tileSpecular[index] : imageLoad(specularInput, tapPixel),
+                       kernelWeight, geometric);
+            }
         }
     }
-    imageStore(outputImage, pixel, vec4(sum / weights, varianceSum / (weights * weights)));
+    imageStore(outputImage, pixel, strength > 0.0 ? filteredValue(primarySums) : center);
+    if (kJoint) {
+        imageStore(specularOutput, pixel,
+                   specularStrength > 0.0 ? filteredValue(specularSums) : specularCenter);
+    }
 }

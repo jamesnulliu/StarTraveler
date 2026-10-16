@@ -1,0 +1,57 @@
+#version 460
+// Radiance cache, resolve (radiance_cache.glsl, src/gpu/radiance_cache.cpp): per
+// entry, this frame's samples averaged into its light, the older ones weighing as many
+// samples as it holds at most (maxSamples: where the light changes, it follows within
+// a frame or two where many paths pass, more slowly where few do); an entry that got no
+// samples for maxAge frames is given up.
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 0, std430) buffer Keys
+{
+    uvec2 keys[];  // x: checksum (0: none), y: frames since its last samples
+};
+layout(set = 0, binding = 1, std430) buffer Sums
+{
+    ivec4 sums[];  // Fixed point; w: how many.
+};
+layout(set = 0, binding = 2, std430) buffer Values
+{
+    vec4 values[];  // w: the samples it averages.
+};
+
+layout(push_constant) uniform Params
+{
+    uint capacity;
+    float maxSamples;
+    uint maxAge;
+}
+params;
+
+const float kCacheFixedPoint = 1024.0;  // radiance_cache.glsl's.
+
+void main()
+{
+    uint i = gl_GlobalInvocationID.x;
+    if (i >= params.capacity) {
+        return;
+    }
+    uvec2 key = keys[i];
+    if (key.x == 0u) {
+        return;
+    }
+    ivec4 sum = sums[i];
+    if (sum.w > 0) {
+        vec3 mean = vec3(sum.xyz) / (kCacheFixedPoint * float(sum.w));
+        vec4 value = values[i];
+        float samples = min(value.w + float(sum.w), params.maxSamples);
+        values[i] = vec4(value.rgb + (mean - value.rgb) * (float(sum.w) / samples), samples);
+        keys[i].y = 0u;
+        sums[i] = ivec4(0);
+    } else if (key.y >= params.maxAge) {
+        keys[i] = uvec2(0u);
+        values[i] = vec4(0.0);
+    } else {
+        keys[i].y = key.y + 1u;
+    }
+}

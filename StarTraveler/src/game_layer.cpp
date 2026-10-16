@@ -1004,6 +1004,12 @@ void GameLayer::drawRenderPanel()
                                   "approximated).\nTraced: shadow rays accumulated over frames "
                                   "(converges to the path tracer's image).");
             }
+            ImGui::Checkbox("Radiance cache", &gpu.radianceCache);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Bounced light learnt over the frames in cells of the surfaces: "
+                                  "paths end at the first surface the cache knows (less noise, "
+                                  "about 2 ms more at 1080p)");
+            }
             DenoiserSettings& denoiser = gpu.denoiser;
             ImGui::Checkbox("Reuse samples", &denoiser.temporal);
             ImGui::SameLine();

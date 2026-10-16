@@ -34,8 +34,11 @@ struct FrameUniforms
     std::uint32_t options[4];    // flags, instance mask, light count, tone mapper
     std::uint32_t history[4];    // cap (0 = none), reset/still bits, view, traced pixels
     Vec4 denoiser;               // color sigma, normal power, depth sigma, -
+    // The radiance cache: buffer addresses of its keys and sums; of its values, capacity.
+    std::uint32_t cacheBuffers[4];
+    std::uint32_t cacheValues[4];
 };
-static_assert(sizeof(FrameUniforms) == 240, "std140 layout of FrameUniforms");
+static_assert(sizeof(FrameUniforms) == 272, "std140 layout of FrameUniforms");
 
 // hybrid.glsl: options[0] and history[1] bits.
 inline constexpr std::uint32_t kFlagPreview = 1U;
@@ -44,6 +47,7 @@ inline constexpr std::uint32_t kFlagSrgb = 4U;
 inline constexpr std::uint32_t kFlagWriteIds = 8U;
 inline constexpr std::uint32_t kFlagUpscaled = 16U;
 inline constexpr std::uint32_t kFlagDirectShadowMaps = 32U;
+inline constexpr std::uint32_t kFlagRadianceCache = 64U;
 inline constexpr std::uint32_t kHistoryReset = 1U;
 inline constexpr std::uint32_t kHistoryStill = 2U;
 

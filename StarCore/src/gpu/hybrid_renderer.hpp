@@ -12,6 +12,9 @@
 //      three more layers: the rest of the primary surfaces' lighting, what they
 //      reflect (specular) and what the panes reflect (glass); while things move,
 //      the temporal gradients of each layer (filtered by gradient.comp);
+//      With the radiance cache (GpuRenderOptions::radianceCache), first the paths
+//      of a few pixels teach it the light their vertices reflect (radiance_cache
+//      .hpp), and the other paths end at their first vertex it knows;
 //   3. temporal (temporal.comp, per layer): reproject and accumulate (the
 //      pixels not traced borrow from the traced ones around them);
 //   4. a-trous (atrous.comp): the SVGF spatial filter, a few iterations;
@@ -25,6 +28,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include "radiance_cache.hpp"
 #include "rasterization.hpp"
 #include "shadow_maps.hpp"
 #include "starcore/gpu/gpu_renderer.hpp"
@@ -85,7 +89,8 @@ private:
 
     vulkan::Context* m_context;
     // hybrid_trace.comp, a pipeline per stage (TraceStage).
-    std::array<vulkan::ComputePipeline, 4> m_trace;
+    std::array<vulkan::ComputePipeline, 5> m_trace;
+    std::unique_ptr<RadianceCache> m_cache;  // Created when first used.
     // temporal.comp: every pixel traced, and some borrowing (TraceResolution::Half).
     std::array<vulkan::ComputePipeline, 2> m_temporal;
     // atrous.comp: reading the taps from the images, and tiled.

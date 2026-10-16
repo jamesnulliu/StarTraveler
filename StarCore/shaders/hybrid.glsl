@@ -25,6 +25,10 @@ layout(set = 0, binding = 1, std140) uniform FrameUniforms
     uvec4 options;   // flags, instance mask, light count, tone mapper
     uvec4 history;   // cap (frames while things move; 0 = none), kHistory* bits, view, traced pixels
     vec4 denoiser;   // color sigma, normal power, depth sigma, -
+    // The radiance cache (radiance_cache.glsl, kFlagRadianceCache): buffer addresses of its
+    // keys (xy) and sums (zw); of its values (xy), its capacity (z, entries).
+    uvec4 cacheBuffers;
+    uvec4 cacheValues;
 }
 frameData;
 
@@ -38,6 +42,9 @@ const uint kFlagWriteIds = 8u;
 const uint kFlagUpscaled = 16u;
 // The direct layer is shadowed with shadow maps (direct.comp): all of its light arrives.
 const uint kFlagDirectShadowMaps = 32u;
+// Paths end at their first vertex past the surface they start from where the radiance
+// cache knows the light it reflects (radiance_cache.glsl).
+const uint kFlagRadianceCache = 64u;
 // history.y
 const uint kHistoryReset = 1u;   // Ignore earlier frames.
 const uint kHistoryStatic = 2u;  // Nothing moved since the last frame.

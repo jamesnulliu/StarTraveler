@@ -34,7 +34,10 @@
 #extension GL_EXT_control_flow_attributes : require
 
 #include "hybrid.glsl"
+#define STARCORE_HYBRID_PATHS
 #include "path.glsl"
+#include "sphere_light.glsl"
+#include "radiance_cache.glsl"
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -42,6 +45,13 @@ const uint kStageSamples = 0u;      // The traced pixels: the primary layer's pa
 const uint kStageReflections = 1u;  // The traced pixels: the reflected paths.
 const uint kStageGradients = 2u;    // One invocation per gradient stratum.
 const uint kStageSurfaces = 3u;     // Every pixel: guides, motion, albedo, emission, ids.
+// One pixel of each kCacheBlock^2 (another each frame): a path whose vertices teach the
+// radiance cache (radiance_cache.glsl) the light they reflect.
+const uint kStageCache = 4u;
+const int kCacheBlock = 4;
+// Vertices of such a path that teach the cache (the first ones: the light found past
+// them takes in more of the path).
+const uint kCacheVertices = 4u;
 
 // A pipeline per stage: each holds only its stage's code (as one shader, all
 // stages would get the registers of the most demanding: many paths inlined).
@@ -617,9 +627,88 @@ void traceSamples(ivec2 pixel, vec3 origin, vec3 direction)
     imageStore(primaryFound, pixel, uvec4(found));
 }
 
+/**
+ * A path of the radiance cache from a pixel of a block: from its primary surface, all of
+ * its lobes and lights (the reference's estimator), each of its first cacheable vertices
+ * given the light it reflects -- what the path found past it over the path's throughput
+ * there -- less what the sphere lights give its diffuse lobe straight (added where looked
+ * up, radiance_cache.glsl).
+ */
+void updateCache(ivec2 block)
+{
+    uint k = pcgHash(frameData.frame.x ^ pcgHash(uint(block.x) * 0x9E3779B9u + uint(block.y))) &
+             uint(kCacheBlock * kCacheBlock - 1);
+    ivec2 pixel = block * kCacheBlock + ivec2(k % uint(kCacheBlock), k / uint(kCacheBlock));
+    if (any(greaterThanEqual(vec2(pixel), viewportSize()))) {
+        return;
+    }
+    vec3 origin = frameData.cameraPosition.xyz;
+    vec3 direction = cameraDirection(vec2(pixel) + frameData.viewport.zw);
+    uvec2 seen = imageLoad(visibility, pixel).xy;
+    SurfaceHit hit;
+    vec3 objectPoint;
+    if (seen.x == 0u || !reconstructHit(seen.x - 1u, seen.y, origin, direction, hit, objectPoint)) {
+        return;
+    }
+    uint rng = rngForPixel(uint(pixel.x), uint(pixel.y), frameData.frame.x,
+                           pcgHash(frameData.frame.y ^ 0x1b873593u));
+    PathState path = newPath();
+    uint entries[kCacheVertices];
+    vec3 before[kCacheVertices];      // The path's radiance when it left the vertex...
+    vec3 throughputs[kCacheVertices];  // ... and its throughput there.
+    vec3 uncached[kCacheVertices];
+    bool diffuse[kCacheVertices];  // Whether the path went on through its diffuse lobe.
+    uint recorded = 0u;
+    for (uint bounce = 0u; bounce < maxBounces(); ++bounce) {
+        if (bounce > 0u && !traceClosestHit(origin, direction, instanceMask(), hit)) {
+            path.radiance +=
+                clampContribution(path.throughput * skyColor(), path.scatterings, path.scale);
+            break;
+        }
+        Instance instance = instances[hit.instanceIndex];
+        Material material = materials[instance.materialIndex];
+        addVertexEmission(hit, material, instance.lightIndex, path);
+        bool record = false;
+        if (recorded < kCacheVertices && cacheable(material)) {
+            float cellSize;
+            uint entry = cacheInsert(cacheKey(hit, cellSize));
+            if (entry != kNoCacheEntry) {
+                entries[recorded] = entry;
+                before[recorded] = path.radiance;
+                throughputs[recorded] = path.throughput;
+                uncached[recorded] = closedFormHitLight(
+                    hit, material, -direction, vec2(nextFloat(rng), nextFloat(rng)));
+                ++recorded;
+                record = true;
+            }
+        }
+        bool more = pathVertex(hit, material, instance.lightIndex, direction, bounce,
+                               kVertexSkipEmission, path, rng, origin, direction);
+        if (record) {
+            diffuse[recorded - 1u] = path.lobe == kLobeDiffuse;
+        }
+        if (!more) {
+            break;
+        }
+    }
+    // Of the light reflected, the diffuse lobe's (seen alike from anywhere; the other lobes'
+    // depends on where from): what was found past a vertex when the path went on through
+    // that lobe, else nothing -- in expectation, that lobe's share.
+    for (uint i = 0u; i < recorded; ++i) {
+        vec3 reflected = diffuse[i]
+                             ? (path.radiance - before[i]) / max(throughputs[i], vec3(1e-4))
+                             : vec3(0.0);
+        cacheAdd(entries[i], reflected - uncached[i]);
+    }
+}
+
 void main()
 {
     ivec2 thread = ivec2(gl_GlobalInvocationID.xy);
+    if (kStage == kStageCache) {
+        updateCache(thread);
+        return;
+    }
     if (kStage == kStageGradients) {
         if (all(lessThan(thread, imageSize(gradients)))) {
             traceGradient(thread);

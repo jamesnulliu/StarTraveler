@@ -53,8 +53,10 @@ enum class TraceStage : std::uint32_t
     Reflections = 1,  // Per traced pixel: the reflected paths.
     Gradients = 2,    // Per stratum: the temporal gradients of each layer.
     Surfaces = 3,     // Per pixel: guides, motion, albedo, emission, ids.
+    Cache = 4,        // Per kCacheBlock^2 pixels: a path teaching the radiance cache.
 };
-constexpr std::uint32_t kStageConstants[] = {0, 1, 2, 3};
+constexpr std::uint32_t kStageConstants[] = {0, 1, 2, 3, 4};
+constexpr std::uint32_t kCacheBlock = 4;  // hybrid_trace.comp's.
 
 // Pixels per side of a temporal gradient's stratum (kGradientStratum in hybrid.glsl).
 constexpr std::uint32_t kGradientStratum = 3;
@@ -239,7 +241,9 @@ HybridRenderer::HybridRenderer(vulkan::Context& context)
               vulkan::ComputePipeline(context, hybrid_trace_comp_spv, kTraceBindings, 0,
                                       std::span(&kStageConstants[2], 1)),
               vulkan::ComputePipeline(context, hybrid_trace_comp_spv, kTraceBindings, 0,
-                                      std::span(&kStageConstants[3], 1))},
+                                      std::span(&kStageConstants[3], 1)),
+              vulkan::ComputePipeline(context, hybrid_trace_comp_spv, kTraceBindings, 0,
+                                      std::span(&kStageConstants[4], 1))},
       m_temporal{vulkan::ComputePipeline(context, temporal_comp_spv, kTemporalBindings,
                                          sizeof(std::uint32_t), std::span(&kBorrowing[0], 1)),
                  vulkan::ComputePipeline(context, temporal_comp_spv, kTemporalBindings,
@@ -383,6 +387,14 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
     if (shadowMaps) {
         flags |= kFlagDirectShadowMaps;
     }
+    const bool cached = frame.options.radianceCache && settings.mode != RenderMode::Preview;
+    if (cached) {
+        flags |= kFlagRadianceCache;
+        if (!m_cache) {
+            m_cache = std::make_unique<RadianceCache>(*m_context);
+        }
+        m_cache->describe(uniforms);
+    }
     const std::uint32_t samples =
         settings.mode == RenderMode::Preview ? 1U : std::max(1U, settings.samplesPerPixel);
     uniforms.frame[0] = frame.frameIndex;
@@ -403,6 +415,9 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
     uniforms.denoiser = Vec4(denoiser.colorSigma, denoiser.normalPower, denoiser.depthSigma, 0.0F);
     vulkan::Buffer& uniformBuffer = m_uniforms[frame.frameSlot];
     writeUniforms(*m_context, uniformBuffer, uniforms);
+    if (cached && frame.reset) {
+        m_cache->clear(commandBuffer);  // New content: what it learnt is wrong.
+    }
 
     // 1. Shadow maps (none unless the direct layer looks its shadows up), visibility ----------
     ShadowSettings shadowSettings = frame.options.shadows;
@@ -500,6 +515,17 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
                 std::max(height, 3 * images.gradients[0][0].height());
             vkCmdDispatch(commandBuffer, (directWidth + kWorkgroupSize - 1) / kWorkgroupSize,
                           (directHeight + kWorkgroupSize - 1) / kWorkgroupSize, 1);
+        }
+        if (cached) {
+            // The radiance cache learns from the paths of a few pixels (a fixed cost, not
+            // timed with the samples), then the paths look it up.
+            bindStage(TraceStage::Cache);
+            const std::uint32_t cacheX = (width + kCacheBlock - 1) / kCacheBlock;
+            const std::uint32_t cacheY = (height + kCacheBlock - 1) / kCacheBlock;
+            vkCmdDispatch(commandBuffer, (cacheX + kWorkgroupSize - 1) / kWorkgroupSize,
+                          (cacheY + kWorkgroupSize - 1) / kWorkgroupSize, 1);
+            computeBarrier(commandBuffer);
+            m_cache->resolve(commandBuffer);
         }
         if (frame.queryPool != VK_NULL_HANDLE) {
             vkCmdWriteTimestamp(commandBuffer, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,

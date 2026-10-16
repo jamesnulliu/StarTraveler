@@ -252,6 +252,14 @@ struct GpuRenderOptions
     GpuPipeline pipeline = GpuPipeline::PathTracing;
     TraceResolution traceResolution = TraceResolution::Full;  // Hybrid.
     DirectShadows directShadows = DirectShadows::Traced;      // Hybrid.
+    // Hybrid: a radiance cache, as engines gather light (Lumen's surface cache, DDGI,
+    // NVIDIA's SHaRC): the paths of a few pixels per frame teach a hash table of the
+    // surfaces' cells the light they reflect; the others end at their first vertex
+    // past their surface whose cell knows it (lit there by the sphere lights in closed
+    // form, shadowed, plus the cell's light). As many bounces as the cache learns over
+    // frames; the light bounced around lags a little. In the cockpit at 1080p some 6 %
+    // less noise for some 2 ms more (as much time spent on samples does as well): off.
+    bool radianceCache = false;
     DenoiserSettings denoiser;
     ShadowSettings shadows;  // Raster, and Hybrid with DirectShadows::ShadowMaps.
     HybridView view = HybridView::Final;
@@ -484,6 +492,7 @@ private:
     ShadowSettings m_lastShadows;
     TraceResolution m_lastTraceResolution = TraceResolution::Full;
     DirectShadows m_lastDirectShadows = DirectShadows::Traced;
+    bool m_lastRadianceCache = false;
     Upscaler m_lastUpscaler = Upscaler::Off;
     Camera m_lastCamera;  // For the hybrid pipeline's motion vectors.
 };

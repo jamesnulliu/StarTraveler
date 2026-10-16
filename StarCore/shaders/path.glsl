@@ -642,7 +642,14 @@ struct PathState
     // The kinds of lights whose light the last vertex left to someone else
     // (kVertexSkipLights): those its lobe finds are not the path's.
     uint skipLights;
+    // How far the directions the path may have taken spread (radians, roughly: a diffuse
+    // lobe 1, a glossy one its alpha): the width of its footprint per unit of distance
+    // (the radiance cache is looked up where it is as wide as the cache's cells).
+    float spread;
+    uint lobe;  // The lobe the last vertex sampled (kNoLobe: none, absorbed).
 };
+
+const uint kNoLobe = 0xFFu;
 
 PathState newPath()
 {
@@ -658,6 +665,8 @@ PathState newPath()
     path.misLights = kLightsAll;
     path.scale = 1.0;
     path.skipLights = 0u;
+    path.spread = 0.0;
+    path.lobe = kNoLobe;
     return path;
 }
 
@@ -683,6 +692,28 @@ const uint kVertexSkipEmission = 1u;  // The caller accounts for the vertex's em
 const uint kVertexSkipLights = 16u;
 
 /**
+ * The emission of a vertex a path reached, MIS-weighted against the lights sampled at
+ * the vertex before (pathVertex adds it, unless kVertexSkipEmission).
+ */
+void addVertexEmission(SurfaceHit hit, Material material, int lightIndex, inout PathState path)
+{
+    bool nextEvent = nextEventEnabled() && lightCount() > 0u;
+    vec3 emission = material.emission.rgb;
+    if (maxComponent(emission) > 0.0 &&
+        !(lightIndex >= 0 && (lightKind(uint(lightIndex)) & path.skipLights) != 0u)) {
+        float weight = 1.0;
+        if (nextEvent && path.mis && lightIndex >= 0) {
+            weight = powerHeuristic(path.misPdf,
+                                    directLightPdf(uint(lightIndex), path.misPosition,
+                                                   path.misNormal, path.misInstance,
+                                                   path.misLights, hit));
+        }
+        path.radiance +=
+            clampContribution(path.throughput * emission * weight, path.scatterings, path.scale);
+    }
+}
+
+/**
  * One vertex of a path reached along `direction`: emission (MIS-weighted),
  * BSDF sampling, next event estimation and Russian roulette. Returns false
  * when the path ends, else the next ray.
@@ -695,18 +726,8 @@ bool pathVertex(SurfaceHit hit, Material material, int lightIndex, vec3 directio
     nextDirection = vec3(0.0);
     bool nextEvent = nextEventEnabled() && lightCount() > 0u;
 
-    vec3 emission = material.emission.rgb;
-    if ((flags & kVertexSkipEmission) == 0u && maxComponent(emission) > 0.0 &&
-        !(lightIndex >= 0 && (lightKind(uint(lightIndex)) & path.skipLights) != 0u)) {
-        float weight = 1.0;
-        if (nextEvent && path.mis && lightIndex >= 0) {
-            weight = powerHeuristic(path.misPdf,
-                                    directLightPdf(uint(lightIndex), path.misPosition,
-                                                   path.misNormal, path.misInstance,
-                                                   path.misLights, hit));
-        }
-        path.radiance +=
-            clampContribution(path.throughput * emission * weight, path.scatterings, path.scale);
+    if ((flags & kVertexSkipEmission) == 0u) {
+        addVertexEmission(hit, material, lightIndex, path);
     }
 
     vec3 wo = -normalize(direction);
@@ -714,6 +735,7 @@ bool pathVertex(SurfaceHit hit, Material material, int lightIndex, vec3 directio
     uint lobes = flags & kLobesAll;
     bool scattered = lobes != 0u ? sampleLobes(material, wo, hit, lobes, rng, scatter)
                                  : sampleBsdf(material, wo, hit, rng, scatter);
+    path.lobe = scattered ? scatter.lobe : kNoLobe;
     if (!scattered) {
         return false;  // Absorbed.
     }
@@ -743,6 +765,9 @@ bool pathVertex(SurfaceHit hit, Material material, int lightIndex, vec3 directio
     path.scale *= scatter.scale;
     if (!scatter.passThrough) {
         ++path.scatterings;
+        path.spread = scatter.lobe == kLobeDiffuse
+                          ? 1.0
+                          : path.spread + roughnessToAlpha(material.roughness);
     }
     if (scatter.lobe == kLobeDiffuse || glossy) {
         path.mis = true;
@@ -793,10 +818,22 @@ void continuePath(vec3 origin, vec3 direction, uint bounce, uint end, inout Path
     }
 }
 
+#ifdef STARCORE_HYBRID_PATHS
+// The hybrid pipeline's (sphere_light.glsl, radiance_cache.glsl).
+bool closedFormHitLights();
+vec3 closedFormHitLight(SurfaceHit hit, Material material, vec3 wo, vec2 u);
+bool radianceCacheEnabled();
+bool cachedReflection(SurfaceHit hit, Material material, vec3 wo, float footprint, vec2 u,
+                      out vec3 reflected);
+#endif
+
 /**
  * A path from a vertex already found (`hit`, reached along `direction`;
  * `flags` for it): that vertex, then further ones, traced, until `end` (see
- * continuePath). One call of pathVertex for all of them: shaders inline every
+ * continuePath). In the hybrid pipeline (STARCORE_HYBRID_PATHS), with the radiance cache,
+ * until a vertex past the first whose light the cache knows; with DirectShadows::
+ * ShadowMaps, its second vertex lit by the sphere lights in closed form. One call of
+ * pathVertex for all of them: shaders inline every
  * call, and each copy of a vertex (light sampling, shadow rays) takes
  * registers. `firstRadiance`: the path's radiance after the first vertex;
  * `firstDirection`: the ray it continued with (0: none); `secondRadiance`:
@@ -831,6 +868,37 @@ void tracePathFrom(SurfaceHit hit, vec3 direction, uint bounce, uint end, uint f
             instance = instances[hit.instanceIndex];
             flags = 0u;
             rng = pcgHash(stream + vertex * 0x9E3779B9u);
+#ifdef STARCORE_HYBRID_PATHS
+            Material material = materials[instance.materialIndex];
+            vec3 reflected;
+            // Of the sphere lights' shadow rays (sphere_light.glsl): numbers of a stream of
+            // their own, the vertex's as it was.
+            uint lightStream = pcgHash(rng ^ 0x85EBCA6Bu);
+            vec2 u = vec2(nextFloat(lightStream), nextFloat(lightStream));
+            if (radianceCacheEnabled() &&
+                cachedReflection(hit, material, -direction, path.spread * hit.t, u, reflected)) {
+                // Its emission, and the light it reflects as the cache knows it.
+                addVertexEmission(hit, material, instance.lightIndex, path);
+                path.radiance += clampContribution(path.throughput * reflected,
+                                                   path.scatterings + 1u, path.scale);
+                if (vertex < 2u) {
+                    secondRadiance = path.radiance;
+                }
+                return;
+            }
+            // The first vertex past the path's start (where reflections find what they show,
+            // where bounced light comes from), as engines light it: the light the sphere
+            // lights give its diffuse lobe in closed form, shadowed, its lights sampled only
+            // the meshes there -- without the noise of a sun found at random (as the direct
+            // layer's primary surfaces). Not deeper: little of the light, each a few rays.
+            if (vertex == 1u && closedFormHitLights() && material.metallic < 1.0 &&
+                material.transmission < 1.0) {
+                path.radiance += clampContribution(
+                    path.throughput * closedFormHitLight(hit, material, -direction, u),
+                    path.scatterings + 1u, path.scale);
+                flags = kVertexSkipLights;
+            }
+#endif
         }
         bool more = pathVertex(hit, materials[instance.materialIndex], instance.lightIndex,
                                direction, bounce, flags, path, rng, origin, direction);

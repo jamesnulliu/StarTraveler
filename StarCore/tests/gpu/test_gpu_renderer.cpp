@@ -1317,6 +1317,52 @@ auto shadowOptions(DirectShadows shadows) -> GpuRenderOptions
 
 }  // namespace
 
+TEST_CASE("GPU hybrid: the radiance cache's light", "[gpu][hybrid][cache]")
+{
+    const GpuTest gpu;
+    GpuRenderOptions options = hybridOptions();
+    options.radianceCache = true;
+    {
+        // Every path from the white ball reaches the sky: 0.5 everywhere, cached or not.
+        Scene scene;
+        scene.environment().skyColor = Vec3(0.5F);
+        Entity ball = scene.createEntity("Ball");
+        ball.add<SphereComponent>(3.0F);
+        ball.add<MaterialComponent>(MaterialComponent{.albedo = Vec3(1.0F)});
+        auto renderer = gpu.makeRenderer(32, 32);
+        const RenderScene renderScene = buildRenderScene(scene);
+        const PathTracerSettings settings{.maxBounces = 16, .srgbOutput = false};
+        for (int i = 0; i < 32; ++i) {
+            renderer->render(renderScene, makeCamera(32, 32), settings, options);
+        }
+        const ColorImage image = renderer->readImage();
+        int worst = 0;
+        for (const std::uint32_t pixel : image.pixels()) {
+            for (int c = 0; c < 3; ++c) {
+                worst = std::max(worst, std::abs(channel(pixel, c) - 128));
+            }
+        }
+        CHECK(worst <= 1);
+    }
+    // A room: still, close to the path tracer's image.
+    TestScene test;
+    const RenderScene renderScene = buildRenderScene(test.scene);
+    constexpr std::uint32_t kWidth = 96;
+    constexpr std::uint32_t kHeight = 72;
+    const Camera camera = makeCamera(kWidth, kHeight);
+    const PathTracerSettings settings{.samplesPerPixel = 8, .fireflyClamp = 8.0F};
+    auto reference = gpu.makeRenderer(kWidth, kHeight);
+    auto cached = gpu.makeRenderer(kWidth, kHeight);
+    for (int i = 0; i < 128; ++i) {
+        reference->render(renderScene, camera, settings);
+        cached->render(renderScene, camera, settings, options);
+    }
+    const BlockDifference difference = blockDifference(cached->readImage(), reference->readImage());
+    INFO("worst block " << difference.worst << ", mean " << difference.mean);
+    CHECK(difference.worst < 16.0F);
+    CHECK(difference.mean < 2.0F);
+}
+
 TEST_CASE("GPU hybrid: shadow-mapped direct light has no noise", "[gpu][hybrid]")
 {
     const GpuTest gpu;

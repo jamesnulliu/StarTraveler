@@ -6,7 +6,8 @@
 #   AMD FSR 3.1       FidelityFX SDK 1.1.4 (MIT): the FFX API headers and its prebuilt, signed
 #                     Vulkan DLL, loaded at run time (any compiler, any GPU; Windows only).
 #   NVIDIA DLSS       DLSS SDK 310.9.1 (NVIDIA RTX SDK license): the NGX headers, the static NGX
-#                     library (MSVC only) and the DLSS DLL (NVIDIA RTX GPUs; Windows x64).
+#                     library (MSVC only) and the DLLs of DLSS Super Resolution and Ray
+#                     Reconstruction (NVIDIA RTX GPUs; Windows x64).
 #
 # Their files are downloaded at configure time into the build tree (not part of the repository),
 # checked against the hashes below. Without network access, or with -DSTARCORE_FSR=OFF /
@@ -115,12 +116,20 @@ elseif(STARCORE_DLSS)
         2D364CE7132881EB669E9498FD570D74CBA563B1FBEBC82C235F8E1AD2DD8B6D
         include/nvsdk_ngx_helpers_vk.h
         C192BFF72138F12F770DB48E12C1D8F712DFC81EA0E8E055EBB27D8DD1B31623
+        include/nvsdk_ngx_defs_dlssd.h
+        2E97FE1595B1334F71B51724F2CB67496E8C296A7A2EEC5606DA53055882E716
+        include/nvsdk_ngx_params_dlssd.h
+        D41E3BA8F1D72583B55273092C99BF426DC4A0D46DE827229E25D5B1325A370E
+        include/nvsdk_ngx_helpers_dlssd_vk.h
+        11DF8FBDA532A97FE867C8EF2B40058B49B7898183710F3468E55B1EEDB8F40B
         lib/Windows_x86_64/x64/nvsdk_ngx_d.lib
         4B6CECAD7F1906571C94010241F650E4A5457E64FAD49DDACCB82DE79F6C2999
         lib/Windows_x86_64/x64/nvsdk_ngx_d_dbg.lib
         712F18162C8C8766C92C98031B52D2BA34EE0AD027BA79731278EE6B63CD3E02
         lib/Windows_x86_64/rel/nvngx_dlss.dll
         3975567B8943C53ACCE397F2B72380092F84F162D00B0D2C7D08A1025C563983
+        lib/Windows_x86_64/rel/nvngx_dlssd.dll
+        4BC7EA5FCB2F32CF86BC2CB072E8D2860914A0BE511CBDCB2FC206C1D9D83B80
     )
     if(DLSS_OK)
         add_library(starcore_dlss INTERFACE)

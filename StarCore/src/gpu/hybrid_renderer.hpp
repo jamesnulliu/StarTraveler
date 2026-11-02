@@ -22,6 +22,9 @@
 //   5. composite (composite.comp): the direct light (unshadowed x how much of it
 //      arrives) + lighting x albedo + emission + specular + glass into
 //      GpuRenderer's radiance image.
+// With an upscaler that denoises (HybridFrame::rayReconstruction), every pixel is
+// traced, only the glass layer goes through 3 and 4, and the composite writes this
+// frame's samples of the others instead (with guides(): the upscaler's).
 
 #include <array>
 #include <cstdint>
@@ -58,6 +61,8 @@ struct HybridFrame
     // averages over the last frames (the upscaler averages them, with the detail of the
     // output's pixels).
     bool upscaled = false;
+    // And denoises it (DLSS-RR): see guides().
+    bool rayReconstruction = false;
     // Timestamps around the trace pass (queries traceQuery, traceQuery + 1).
     VkQueryPool queryPool = VK_NULL_HANDLE;
     std::uint32_t traceQuery = 0;
@@ -84,6 +89,21 @@ public:
      *        surfaces, w: their view depth (sampled by the vendors' upscalers).
      */
     [[nodiscard]] auto motion() const -> const vulkan::Image&;
+
+    /**
+     * @brief For an upscaler that denoises (UpscaleFrame), of a frame recorded with
+     *        HybridFrame::rayReconstruction: the radiance image then holds its samples of
+     *        all but the glass layer, which (filtered) is the overlay.
+     */
+    struct Guides
+    {
+        const vulkan::Image* diffuseAlbedo = nullptr;
+        const vulkan::Image* specularAlbedo = nullptr;
+        const vulkan::Image* normalRoughness = nullptr;
+        const vulkan::Image* reflectionMotion = nullptr;
+        const vulkan::Image* overlay = nullptr;
+    };
+    [[nodiscard]] auto guides() const -> Guides;
 
 private:
     struct Images;

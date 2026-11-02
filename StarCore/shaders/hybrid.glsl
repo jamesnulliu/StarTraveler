@@ -45,6 +45,9 @@ const uint kFlagDirectShadowMaps = 32u;
 // Paths end at their first vertex past the surface they start from where the radiance
 // cache knows the light it reflects (radiance_cache.glsl).
 const uint kFlagRadianceCache = 64u;
+// An upscaler denoises the result (DLSS-RR): every pixel traced, the guides it takes written,
+// this frame's samples of all but the glass layer composited.
+const uint kFlagRayReconstruction = 128u;
 // history.y
 const uint kHistoryReset = 1u;   // Ignore earlier frames.
 const uint kHistoryStatic = 2u;  // Nothing moved since the last frame.

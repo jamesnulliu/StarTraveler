@@ -995,7 +995,7 @@ void GameLayer::drawRenderPanel()
             if (ImGui::IsItemHovered()) {
                 ImGui::SetTooltip("Half: paths from one pixel of each 2x2 per frame, in turn (a "
                                   "third less GPU time in the cockpit, more noise while moving; "
-                                  "still images converge alike)");
+                                  "still images converge alike). DLSS-RR traces every pixel.");
             }
             enumCombo("Direct shadows", gpu.directShadows);
             if (ImGui::IsItemHovered()) {
@@ -1061,7 +1061,7 @@ void GameLayer::drawRenderPanel()
         UpscalerSettings& upscaling = m_options.gpuRender.upscaling;
         if (ImGui::BeginCombo("Upscaler", enumToString(upscaling.upscaler).data())) {
             for (const Upscaler upscaler :
-                 {Upscaler::Off, Upscaler::Taau, Upscaler::Fsr, Upscaler::Dlss}) {
+                 {Upscaler::Off, Upscaler::Taau, Upscaler::Fsr, Upscaler::Dlss, Upscaler::DlssRr}) {
                 const bool available = m_gpuRenderer->upscalerAvailable(upscaler);
                 ImGui::BeginDisabled(!available);
                 if (ImGui::Selectable(enumToString(upscaler).data(),
@@ -1078,7 +1078,8 @@ void GameLayer::drawRenderPanel()
         if (ImGui::IsItemHovered()) {
             ImGui::SetTooltip("Render fewer pixels, each frame at another position in them, and "
                               "reconstruct the view's from the frames.\nTAAU: StarCore's own. FSR: "
-                              "AMD's, any GPU. DLSS: NVIDIA's, RTX GPUs.");
+                              "AMD's, any GPU. DLSS: NVIDIA's, RTX GPUs. DLSS-RR: DLSS that also "
+                              "denoises the hybrid pipeline's paths (DLSS for raster).");
         }
         if (upscaling.upscaler != Upscaler::Off) {
             enumCombo("Quality", upscaling.quality);

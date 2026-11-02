@@ -267,7 +267,8 @@ auto main(int argc, char** argv) -> int
                  "GPU (hybrid, raster): blur along the motion, see --move");
     app.add_option("--vignette", gpuOptions.vignette, "GPU: darker corners, 0-1");
     app.add_option("--upscaler", gpuOptions.upscaler,
-                   "GPU (hybrid, raster): Off, TAAU, FSR, DLSS (falls back to FSR, then TAAU)");
+                   "GPU (hybrid, raster): Off, TAAU, FSR, DLSS (falls back to FSR, then TAAU), "
+                   "DLSS-RR (also denoises the hybrid pipeline; falls back to DLSS)");
     app.add_option("--quality", gpuOptions.quality,
                    "Upscaler: Native, Quality, Balanced, Performance, \"Ultra performance\"");
     app.add_option("--sharpness", gpuOptions.sharpness, "Upscaler: FSR's sharpening, 0-1");

@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <format>
 #include <optional>
+#include <string_view>
 
 #include <VkBootstrap.h>
 #include <vk_mem_alloc.h>
@@ -65,6 +66,26 @@ struct Context::Impl
 namespace
 {
 
+/**
+ * @brief Whether a message is a synchronization hazard on an image of NVIDIA's NGX (named
+ *        nv.ngx.*): DLSS-RR (v310.9) clears its own images in an evaluation without waiting
+ *        for the layout transitions of the previous one. Not ours to fix.
+ */
+auto ngxImageHazard(std::string_view id, const VkDebugUtilsMessengerCallbackDataEXT& data) -> bool
+{
+    if (!id.starts_with("SYNC-HAZARD")) {
+        return false;
+    }
+    for (std::uint32_t i = 0; i < data.objectCount; ++i) {
+        const VkDebugUtilsObjectNameInfoEXT& object = data.pObjects[i];
+        if (object.objectType == VK_OBJECT_TYPE_IMAGE && object.pObjectName != nullptr &&
+            std::string_view(object.pObjectName).starts_with("nv.ngx.")) {
+            return true;
+        }
+    }
+    return false;
+}
+
 VKAPI_ATTR auto VKAPI_CALL debugCallback(
     VkDebugUtilsMessageSeverityFlagBitsEXT severity,
     VkDebugUtilsMessageTypeFlagsEXT /*types*/,
@@ -75,7 +96,7 @@ VKAPI_ATTR auto VKAPI_CALL debugCallback(
     // Dear ImGui's ImGui_ImplVulkanH_CreateOrResizeWindow (v1.92) moves all
     // swapchain images to PRESENT_SRC without acquiring them; harmless, and
     // not ours to fix.
-    if (id == "UNASSIGNED-non-acquired-swapchain-image-used") {
+    if (id == "UNASSIGNED-non-acquired-swapchain-image-used" || ngxImageHazard(id, *data)) {
         return VK_FALSE;
     }
     if ((severity & VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) != 0) {

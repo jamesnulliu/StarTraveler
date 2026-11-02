@@ -196,12 +196,17 @@ enum class Upscaler : std::uint8_t
     Taau,  // StarCore's temporal upsampling: any GPU.
     Fsr,   // AMD FidelityFX Super Resolution 3.1: any GPU (Windows).
     Dlss,  // NVIDIA DLSS Super Resolution: NVIDIA RTX GPUs (Windows, MSVC builds).
+    // NVIDIA DLSS Ray Reconstruction (the hybrid pipeline's Final view; the raster
+    // pipeline's DLSS): it denoises the paths' samples as it upscales, in place of the
+    // pipeline's own denoiser (the panes' reflections excepted), and traces every
+    // pixel (TraceResolution::Full: it wants independent samples in all of them).
+    DlssRr,
 };
 
 template <>
 struct EnumNames<Upscaler>
 {
-    static constexpr std::array kNames = {"Off", "TAAU", "FSR", "DLSS"};
+    static constexpr std::array kNames = {"Off", "TAAU", "FSR", "DLSS", "DLSS-RR"};
 };
 
 /** @brief How much of the output's width and height is rendered (the upscalers' modes). */
@@ -467,13 +472,14 @@ private:
     vulkan::Image m_output;    // RGBA8, tone mapped.
 
     // Per Upscaler: created when first used (null if it cannot run), why not.
-    std::array<std::unique_ptr<gpu::TemporalUpscaler>, 4> m_upscalers;
-    std::array<std::string, 4> m_upscalerErrors;
-    std::array<bool, 4> m_upscalerTried{};
+    static constexpr std::size_t kUpscalers = EnumNames<Upscaler>::kNames.size();
+    std::array<std::unique_ptr<gpu::TemporalUpscaler>, kUpscalers> m_upscalers;
+    std::array<std::string, kUpscalers> m_upscalerErrors;
+    std::array<bool, kUpscalers> m_upscalerTried{};
     // The sizes each was resized to (rendered, output), and whether it can upscale so.
-    std::array<UVec2, 4> m_upscalerRenderSizes{};
-    std::array<UVec2, 4> m_upscalerOutputSizes{};
-    std::array<bool, 4> m_upscalerReady{};
+    std::array<UVec2, kUpscalers> m_upscalerRenderSizes{};
+    std::array<UVec2, kUpscalers> m_upscalerOutputSizes{};
+    std::array<bool, kUpscalers> m_upscalerReady{};
     Upscaler m_activeUpscaler = Upscaler::Off;
     double m_lastFrameTime = 0.0;  // Seconds (steady clock) of the last render().
 
@@ -497,6 +503,9 @@ private:
     DirectShadows m_lastDirectShadows = DirectShadows::Traced;
     bool m_lastRadianceCache = false;
     Upscaler m_lastUpscaler = Upscaler::Off;
+    // An upscaler denoised the hybrid pipeline's samples (its own denoiser's history then
+    // holds nothing).
+    bool m_lastRayReconstruction = false;
     Camera m_lastCamera;  // For the hybrid pipeline's motion vectors.
 };
 

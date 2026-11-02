@@ -133,8 +133,10 @@ As games do, it renders 2/3 of the view's width and height and DLSS
 reconstructs the rest (FSR where DLSS cannot run, else the engine's TAAU): about
 half the GPU time at 1080p. The Render panel's "Upscaling" picks the upscaler
 (or Off) and how much is rendered, from Native (anti-aliasing only) to Ultra
-performance (1/3); `--upscaler Off|TAAU|FSR|DLSS` and `--quality` set them at
-start.
+performance (1/3); `--upscaler Off|TAAU|FSR|DLSS|DLSS-RR` and `--quality` set them
+at start. DLSS-RR (NVIDIA's Ray Reconstruction) also denoises: less noise and lag
+while flying than the engine's denoiser, for more GPU time (every pixel traced);
+with Balanced or Performance it costs about as much as DLSS at Quality.
 The sphere lights' direct light is shadowed with shadow maps every frame, as
 games do ("Direct shadows" in the Render panel; Traced accumulates shadow rays
 instead, converging to the path tracer's image when still); "Radiance cache"
@@ -275,6 +277,15 @@ the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
   2/3 of each side) a frame takes 9.2 ms with TAAU, 9.9 with FSR, 11.2 with
   DLSS instead of 19.6, with the same noise and error against the path tracer
   while turning and cruising; DLSS looks cleanest, TAAU the softest.
+  A fourth, *DLSS-RR* (NVIDIA's Ray Reconstruction), denoises as it upscales,
+  in place of the hybrid pipeline's own filters: the pipeline traces every pixel
+  and gives it each frame's samples with the guides it takes (diffuse and
+  specular albedo, normals and roughness, the reflections' motion); the panes'
+  reflections, filtered by the pipeline, are an overlay it only upscales (the
+  raster pipeline, which has no samples to denoise, gets DLSS). Cruising in the
+  cockpit (1280x720 output) its frames are a third less noisy than DLSS's at
+  Quality and nearer the path tracer (even at Performance); at 2560x1440 a frame
+  takes 36.7 ms at Quality, 22.1 at Performance, against DLSS's 19.5 at Quality.
   A last stage, at the output's size, draws particles over it (additive
   sprites, streaked along their screen motion, tested against the rasterized
   depth), adds bloom (a downsampled chain of blurs, Jimenez's filters), motion

@@ -68,7 +68,8 @@ auto main(int argc, char** argv) -> int
                    "Motion, History");
     std::string upscaler = "DLSS";
     cli.add_option("--upscaler", upscaler,
-                   "Off, TAAU, FSR, DLSS (default; falls back to FSR, then TAAU)");
+                   "Off, TAAU, FSR, DLSS (default; falls back to FSR, then TAAU), DLSS-RR (also "
+                   "denoises the hybrid pipeline; falls back to DLSS)");
     std::string quality = "Quality";
     cli.add_option("--quality", quality,
                    "Upscaler: Native, Quality, Balanced, Performance, \"Ultra performance\"");

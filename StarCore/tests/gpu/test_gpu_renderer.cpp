@@ -2435,6 +2435,13 @@ TEST_CASE("GPU upscaling: falls back where the upscaler cannot run", "[gpu][upsc
         renderer->render(renderScene, makeCamera(160, 120), {}, options);
         CHECK(renderer->activeUpscaler() == Upscaler::Dlss);
     }
+    // Ray reconstruction denoises the hybrid pipeline's paths: DLSS for the raster pipeline.
+    if (renderer->upscalerAvailable(Upscaler::DlssRr)) {
+        renderer->resize(160, 120);
+        renderer->render(renderScene, makeCamera(160, 120), {},
+                         upscaled(kRaster, Upscaler::DlssRr, UpscalerQuality::Quality));
+        CHECK(renderer->activeUpscaler() == Upscaler::Dlss);
+    }
     // TAAU runs everywhere.
     CHECK(renderer->upscalerAvailable(Upscaler::Taau));
     CHECK(renderer->upscalerError(Upscaler::Taau).empty());
@@ -2456,13 +2463,15 @@ TEST_CASE("GPU upscaling: the hybrid pipeline's image", "[gpu][upscaling][hybrid
     }
     const ColorImage expected = native->readImage();
 
-    const Upscaler upscaler = GENERATE(Upscaler::Taau, Upscaler::Fsr, Upscaler::Dlss);
+    const Upscaler upscaler =
+        GENERATE(Upscaler::Taau, Upscaler::Fsr, Upscaler::Dlss, Upscaler::DlssRr);
     INFO(enumToString(upscaler));
     auto renderer = upscalingRenderer(gpu, upscaler, kWidth, kHeight);
     for (int i = 0; i < 64; ++i) {
         renderer->render(renderScene, camera, settings,
                          upscaled(options, upscaler, UpscalerQuality::Quality));
     }
+    REQUIRE(renderer->activeUpscaler() == upscaler);
     REQUIRE(renderer->renderWidth() == 96);
     const BlockDifference difference = blockDifference(renderer->readImage(), expected);
     INFO("worst block " << difference.worst << ", mean " << difference.mean);

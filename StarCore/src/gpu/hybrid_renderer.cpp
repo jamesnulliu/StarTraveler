@@ -104,7 +104,8 @@ struct AtrousPass
 constexpr VkDescriptorType kCompositeBindings[] = {
     kBuffer, kUniform, kBuffer, kImage, kBuffer, kBuffer, kBuffer, kImage,
     kImage,  kImage,   kImage,  kImage, kImage,  kImage,  kImage,  kImage,
-    kImage,  kImage,   kImage,  kImage, kImage,  kImage,  kImage};
+    kImage,  kImage,   kImage,  kImage, kImage,  kImage,  kImage,  kImage,
+    kImage,  kImage,   kImage,  kImage};
 
 void computeBarrier(VkCommandBuffer commandBuffer)
 {
@@ -173,6 +174,12 @@ struct HybridRenderer::Images
     // Temporal gradients of each layer (Layer), one per stratum: the trace's ([0]) and
     // the filter's ping-pong.
     std::array<std::array<vulkan::Image, 2>, std::size(kLayers)> gradients;
+    // Ray reconstruction's (HybridFrame::rayReconstruction, composite.comp): the guides of
+    // the primary surfaces and the glass layer filtered, premultiplied.
+    vulkan::Image diffuseAlbedo;
+    vulkan::Image specularAlbedo;
+    vulkan::Image normalRoughness;
+    vulkan::Image overlay;
 
     template <typename F>
     void forEach(F&& function)
@@ -181,7 +188,7 @@ struct HybridRenderer::Images
              {&noisyPrimary, &noisyGlass, &noisySpecular, &frameAlbedo, &frameEmission,
               &primaryMotion, &glassMotion, &reflectionMotion, &reflectionGuide,
               &primaryFilterGuide, &glassFilterGuide, &noisyDirect, &frameUnshadowed,
-              &highlights}) {
+              &highlights, &diffuseAlbedo, &specularAlbedo, &normalRoughness, &overlay}) {
             function(*image);
         }
         for (auto* pair :
@@ -281,6 +288,15 @@ auto HybridRenderer::motion() const -> const vulkan::Image&
     return m_images->primaryMotion;
 }
 
+auto HybridRenderer::guides() const -> Guides
+{
+    return {.diffuseAlbedo = &m_images->diffuseAlbedo,
+            .specularAlbedo = &m_images->specularAlbedo,
+            .normalRoughness = &m_images->normalRoughness,
+            .reflectionMotion = &m_images->reflectionMotion,
+            .overlay = &m_images->overlay};
+}
+
 void HybridRenderer::resize(std::uint32_t width, std::uint32_t height)
 {
     m_images.reset();
@@ -300,7 +316,16 @@ void HybridRenderer::resize(std::uint32_t width, std::uint32_t height)
         vulkan::Image(*m_context, width, height, VK_FORMAT_R32G32B32A32_SFLOAT,
                       VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
     images->glassMotion = storage(VK_FORMAT_R32G32B32A32_SFLOAT);
-    images->reflectionMotion = storage(VK_FORMAT_R32G32B32A32_SFLOAT);
+    // Sampled: the upscalers that denoise read these.
+    auto sampled = [&](VkFormat format) {
+        return vulkan::Image(*m_context, width, height, format,
+                             VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
+    };
+    images->reflectionMotion = sampled(VK_FORMAT_R32G32B32A32_SFLOAT);
+    images->diffuseAlbedo = sampled(VK_FORMAT_R16G16B16A16_SFLOAT);
+    images->specularAlbedo = sampled(VK_FORMAT_R16G16B16A16_SFLOAT);
+    images->normalRoughness = sampled(VK_FORMAT_R16G16B16A16_SFLOAT);
+    images->overlay = sampled(VK_FORMAT_R16G16B16A16_SFLOAT);
     images->reflectionGuide = storage(VK_FORMAT_R32G32B32A32_UINT);
     images->primaryFilterGuide = storage(VK_FORMAT_R32G32_UINT);
     images->glassFilterGuide = storage(VK_FORMAT_R32G32_UINT);
@@ -397,6 +422,9 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
     if (frame.upscaled) {
         flags |= kFlagUpscaled;
     }
+    if (frame.rayReconstruction) {
+        flags |= kFlagRayReconstruction;
+    }
     const bool shadowMaps = frame.options.directShadows == DirectShadows::ShadowMaps;
     if (shadowMaps) {
         flags |= kFlagDirectShadowMaps;
@@ -422,8 +450,10 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
     uniforms.history[0] = frame.still ? 0U : std::max(1U, denoiser.historyFrames);
     uniforms.history[1] = (frame.reset ? kHistoryReset : 0U) | (frame.still ? kHistoryStill : 0U);
     uniforms.history[2] = static_cast<std::uint32_t>(frame.options.view);
-    // Traced pixels: one of each stride x stride block per frame, in turn.
-    const std::uint32_t stride = frame.options.traceResolution == TraceResolution::Half ? 2 : 1;
+    // Traced pixels: one of each stride x stride block per frame, in turn (all of them for
+    // ray reconstruction: it wants independent samples in every pixel).
+    const std::uint32_t stride =
+        frame.options.traceResolution == TraceResolution::Half && !frame.rayReconstruction ? 2 : 1;
     uniforms.history[3] =
         stride | ((frame.frameIndex % 4) << 8) | (((frame.frameIndex - 1) % 4) << 16);
     uniforms.denoiser = Vec4(denoiser.colorSigma, denoiser.normalPower, denoiser.depthSigma, 0.0F);
@@ -594,6 +624,10 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
         if (layer == Layer::Direct && shadowMaps && frame.upscaled) {
             continue;
         }
+        // Ray reconstruction denoises all but the panes' reflections.
+        if (frame.rayReconstruction && layer != Layer::Glass) {
+            continue;
+        }
         const Images::LayerImages layerImages = images.layer(layer);
         // Only the primary layer has albedo and emission: their images are bound, unused, for
         // the others (a barrier between the layers all the same: they count as used). The
@@ -647,7 +681,8 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
         for (const Layer layer : kLayers) {
             // The specular layer is filtered with the primary one (joint).
             if (layer == Layer::Specular ||
-                (layer == Layer::Direct && (i >= kDirectIterations || shadowMaps))) {
+                (layer == Layer::Direct && (i >= kDirectIterations || shadowMaps)) ||
+                (frame.rayReconstruction && layer != Layer::Glass)) {
                 continue;
             }
             const bool joint = layer == Layer::Primary;
@@ -693,6 +728,8 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
         vulkan::DescriptorWrites writes;
         writes.uniformBuffer(1, uniformBuffer.handle())
             .storageImage(3, latest(Layer::Primary).view())
+            .storageBuffer(4, scene.instanceBuffer())  // Ray reconstruction's guides.
+            .storageBuffer(5, scene.materialBuffer())
             .storageImage(7, latest(Layer::Glass).view())
             .storageImage(8, images.primaryAlbedo[current].view())
             .storageImage(9, images.primaryEmission[current].view())
@@ -708,7 +745,12 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
             .storageImage(19, images.directRecent[current].view())
             .storageImage(20, images.noisyDirect.view())
             .storageImage(21, images.frameAlbedo.view())
-            .storageImage(22, images.frameUnshadowed.view());
+            .storageImage(22, images.frameUnshadowed.view())
+            .storageImage(23, images.overlay.view())
+            .storageImage(24, images.primaryGuide[current].view())
+            .storageImage(25, images.diffuseAlbedo.view())
+            .storageImage(26, images.specularAlbedo.view())
+            .storageImage(27, images.normalRoughness.view());
         m_composite.bind(commandBuffer);
         m_composite.pushDescriptors(commandBuffer, writes.writes());
         vkCmdDispatch(commandBuffer, groupsX, groupsY, 1);

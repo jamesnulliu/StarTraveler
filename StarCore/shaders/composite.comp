@@ -4,6 +4,8 @@
 // emission + what the primary surfaces and the panes reflect (specular and glass
 // layers) into the radiance image (tone mapped by post.comp), or a debug view of
 // one of the intermediate images (raw ones: post.comp only clamps them).
+// For ray reconstruction (kFlagRayReconstruction), this frame's samples but the glass
+// layer's, which (filtered) is the overlay it adds, and the guides it takes.
 
 #extension GL_GOOGLE_include_directive : require
 
@@ -33,6 +35,14 @@ layout(set = 0, binding = 20, rgba32f) uniform readonly image2D noisyDirect;
 // This frame's albedo and unshadowed light (kFlagUpscaled).
 layout(set = 0, binding = 21, rgba16f) uniform readonly image2D frameAlbedo;
 layout(set = 0, binding = 22, rgba16f) uniform readonly image2D frameUnshadowed;
+// kFlagRayReconstruction: premultiplied, added to the result after denoising.
+layout(set = 0, binding = 23, rgba16f) uniform writeonly image2D overlay;
+// And its guides, of the primary surfaces (encodeGuide) past the panes in front (whose
+// reflections it does not denoise): diffuse and specular albedo, world normal and roughness.
+layout(set = 0, binding = 24, rgba32ui) uniform readonly uimage2D primaryGuide;
+layout(set = 0, binding = 25, rgba16f) uniform writeonly image2D diffuseAlbedo;
+layout(set = 0, binding = 26, rgba16f) uniform writeonly image2D specularAlbedo;
+layout(set = 0, binding = 27, rgba16f) uniform writeonly image2D normalRoughness;
 
 // HybridView.
 const uint kViewFinal = 0u;
@@ -46,6 +56,63 @@ const uint kViewGlass = 7u;
 const uint kViewVariance = 8u;
 const uint kViewMotion = 9u;
 const uint kViewHistory = 10u;
+
+/**
+ * The mean reflectance of a GGX lobe over its directions (the DLSS-RR guide's fit, Ray Tracing
+ * Gems chapter 32) of a surface whose reflectance head on is `f0`, `alpha` its roughness
+ * squared.
+ */
+vec3 lobeAlbedo(vec3 f0, float alpha, float cosine)
+{
+    float c = abs(cosine);
+    vec4 x = vec4(1.0, c, c * c, c * c * c);
+    vec4 y = vec4(1.0, alpha, alpha * alpha, alpha * alpha * alpha);
+    // Row vectors times the guide's (row major) matrices.
+    float bias = dot(x.xy * mat2(0.99044, -1.28514, 1.29678, -0.755907), y.xy) /
+                 dot(x.xyw * mat3(1.0, 2.92338, 59.4188, 20.3225, -27.0302, 222.592, 121.563,
+                                  626.13, 316.627),
+                     y.xyw);
+    float scale = dot(x.xy * mat2(0.0365463, 3.32707, 9.0632, -9.04756), y.xy) /
+                  dot(x.xzw * mat3(1.0, 3.59685, -1.36772, 9.04401, -16.3174, 9.22949, 5.56589,
+                                   19.7886, -20.2123),
+                      y.xyw);
+    bias *= clamp(f0.g * 50.0, 0.0, 1.0);  // The guide's: none for no reflectance.
+    return f0 * max(scale, 0.0) + max(bias, 0.0);
+}
+
+/**
+ * Ray reconstruction's guides of a pixel: what its noisy light is made of. The light a
+ * see-through surface lets through counts as diffuse, a blurred image of what is behind it.
+ */
+void writeReconstructionGuides(ivec2 pixel)
+{
+    uvec4 guide = imageLoad(primaryGuide, pixel);
+    if (guide.z == 0u) {
+        // The guide's defaults for the sky.
+        imageStore(diffuseAlbedo, pixel, vec4(0.5, 0.5, 0.5, 0.0));
+        imageStore(specularAlbedo, pixel, vec4(0.0));
+        imageStore(normalRoughness, pixel, vec4(0.0));
+        return;
+    }
+    Material surface = materialOf(guide.z - 1u);
+    vec3 normal = guideNormal(guide);
+    // This frame's albedo is past the panes in front (hybrid_trace.comp): their transmittance,
+    // where the surface's albedo tells it, else their mean.
+    vec3 seen = imageLoad(frameAlbedo, pixel).rgb;
+    float meanTransmittance = imageLoad(frameEmission, pixel).a;
+    vec3 transmittance;
+    for (int c = 0; c < 3; ++c) {
+        transmittance[c] =
+            surface.albedo[c] > 0.01 ? seen[c] / surface.albedo[c] : meanTransmittance;
+    }
+    float f = (surface.ior - 1.0) / (surface.ior + 1.0);
+    vec3 f0 = mix(vec3(f * f), surface.albedo.rgb, surface.metallic);
+    vec3 direction = cameraDirection(vec2(pixel) + frameData.viewport.zw);
+    vec3 specular = lobeAlbedo(f0, roughnessToAlpha(surface.roughness), dot(normal, -direction));
+    imageStore(diffuseAlbedo, pixel, vec4((1.0 - surface.metallic) * seen, 0.0));
+    imageStore(specularAlbedo, pixel, vec4(transmittance * specular, 0.0));
+    imageStore(normalRoughness, pixel, vec4(normal, surface.roughness));
+}
 
 void main()
 {
@@ -75,6 +142,13 @@ void main()
     vec3 direct = demodulationUnshadowed(unshadowed) * visibility;
     vec3 radiance = direct + demodulationAlbedo(surfaceAlbedo) * lighting.rgb + surfaceEmission +
                     specular + glass;
+    if ((frameData.options.x & kFlagRayReconstruction) != 0u) {
+        // Every pixel traced (traceStride 1).
+        radiance = imageLoad(frameEmission, pixel).rgb + imageLoad(noisyDirect, pixel).rgb +
+                   imageLoad(noisyPrimary, pixel).rgb + imageLoad(noisySpecular, pixel).rgb;
+        imageStore(overlay, pixel, vec4(glass, 0.0));
+        writeReconstructionGuides(pixel);
+    }
 
     switch (frameData.history.z) {
     case kViewNoisy:

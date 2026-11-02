@@ -331,6 +331,9 @@ auto GpuRenderer::upscaler(Upscaler kind) -> gpu::TemporalUpscaler*
         case Upscaler::Dlss:
             created = gpu::createDlss(*m_context);
             break;
+        case Upscaler::DlssRr:
+            created = gpu::createDlssRr(*m_context);
+            break;
         case Upscaler::Off:
             break;
         }
@@ -467,9 +470,13 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
     if (pipeline != GpuPipeline::PathTracing && options.upscaling.upscaler != Upscaler::Off) {
         renderSize = scaledSize(outputSize.x, outputSize.y, options.upscaling.quality);
         // The one asked for; where it cannot run (on this device, or between these sizes),
-        // FSR, then TAAU.
-        const Upscaler requested = finalImage ? options.upscaling.upscaler : Upscaler::Taau;
-        for (const Upscaler kind : {requested, Upscaler::Fsr, Upscaler::Taau}) {
+        // DLSS (for DLSS-RR), FSR, then TAAU. Ray reconstruction denoises the hybrid
+        // pipeline's samples: the raster pipeline has none.
+        Upscaler requested = finalImage ? options.upscaling.upscaler : Upscaler::Taau;
+        if (requested == Upscaler::DlssRr && pipeline != GpuPipeline::Hybrid) {
+            requested = Upscaler::Dlss;
+        }
+        for (const Upscaler kind : {requested, Upscaler::Dlss, Upscaler::Fsr, Upscaler::Taau}) {
             gpu::TemporalUpscaler* candidate =
                 std::to_underlying(kind) <= std::to_underlying(requested) ? this->upscaler(kind)
                                                                           : nullptr;
@@ -534,8 +541,13 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
         m_raster->resize(renderSize.x, renderSize.y);
     }
 
+    // The hybrid pipeline's samples denoised by the upscaler (its own denoiser's history
+    // not kept meanwhile).
+    const bool rayReconstruction =
+        pipeline == GpuPipeline::Hybrid && upscaler != nullptr && upscaler->denoises();
     bool still = false;
-    if (needsReset(scene, camera, settings, options, still)) {
+    if (needsReset(scene, camera, settings, options, still) ||
+        rayReconstruction != m_lastRayReconstruction) {
         m_frameIndex = 0;
     }
     // What the upscaler cannot reproject: new content (the hybrid pipeline: whatever
@@ -602,6 +614,7 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
             .still = still,
             .writeIds = !still,
             .upscaled = upscaler != nullptr,
+            .rayReconstruction = rayReconstruction,
             .queryPool = m_queryPool,
             .traceQuery = kQueriesPerSlot * slotIndex + kQueryTraceStart,
         };
@@ -645,7 +658,7 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
     }
     }
     if (upscaler != nullptr) {
-        const gpu::UpscaleFrame frame{
+        gpu::UpscaleFrame frame{
             .color = &m_radiance,
             .depth = &m_visibility->depth(),
             .motion = pipeline == GpuPipeline::Hybrid ? &m_hybrid->motion() : &m_raster->motion(),
@@ -659,6 +672,15 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
             .sharpness = options.upscaling.sharpness,
             .frameSlot = slotIndex,
         };
+        if (rayReconstruction) {
+            // m_radiance: this frame's samples, the panes' reflections apart (denoised).
+            const gpu::HybridRenderer::Guides guides = m_hybrid->guides();
+            frame.diffuseAlbedo = guides.diffuseAlbedo;
+            frame.specularAlbedo = guides.specularAlbedo;
+            frame.normalRoughness = guides.normalRoughness;
+            frame.reflectionMotion = guides.reflectionMotion;
+            frame.overlay = guides.overlay;
+        }
         upscaler->record(commandBuffer, frame);
     }
     m_post->record(commandBuffer, post, upscaler != nullptr ? m_upscaled : m_radiance, m_output);
@@ -697,6 +719,7 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
     m_lastDirectShadows = options.directShadows;
     m_lastRadianceCache = options.radianceCache;
     m_lastUpscaler = upscaling;
+    m_lastRayReconstruction = rayReconstruction;
     m_lastCamera = camera;
     ++m_frameNumber;
     ++m_frameIndex;

@@ -5,7 +5,9 @@
 // and the earlier ones, reprojected with the motion vectors:
 //   - TAAU (taau.comp): StarCore's own, any GPU;
 //   - FSR (upscaler_fsr.cpp): AMD FidelityFX Super Resolution 3.1, its prebuilt DLL;
-//   - DLSS (upscaler_dlss.cpp): NVIDIA DLSS Super Resolution, through NGX.
+//   - DLSS (upscaler_dlss.cpp): NVIDIA DLSS Super Resolution, through NGX;
+//   - DLSS-RR (upscaler_dlss.cpp): NVIDIA DLSS Ray Reconstruction, which also denoises
+//     (denoises()): it takes a pipeline's noisy samples and the guides of its surfaces.
 
 #include <cstdint>
 #include <expected>
@@ -43,6 +45,16 @@ struct UpscaleFrame
     float nearPlane = 0.0F;
     float sharpness = 0.0F;     // 0 to 1, where supported.
     std::uint32_t frameSlot = 0;
+
+    // Of an upscaler that denoises (`color`: one frame's noisy samples), at the
+    // pipeline's size, of the surfaces the pixels see:
+    const vulkan::Image* diffuseAlbedo = nullptr;    // RGBA16F, rgb.
+    const vulkan::Image* specularAlbedo = nullptr;   // RGBA16F, rgb: the lobe's mean.
+    const vulkan::Image* normalRoughness = nullptr;  // RGBA16F: world normal, roughness.
+    // RGBA32F, xy: as `motion`, of what the surfaces reflect.
+    const vulkan::Image* reflectionMotion = nullptr;
+    // RGBA16F, premultiplied: added to the result, not denoised (null: none).
+    const vulkan::Image* overlay = nullptr;
 };
 
 class TemporalUpscaler
@@ -65,6 +77,12 @@ public:
      */
     virtual void record(VkCommandBuffer commandBuffer, const UpscaleFrame& frame) = 0;
 
+    /** @brief Whether it denoises: the pipeline gives it noisy samples and the guides. */
+    [[nodiscard]] virtual auto denoises() const -> bool
+    {
+        return false;
+    }
+
 protected:
     TemporalUpscaler() = default;
 };
@@ -75,6 +93,9 @@ protected:
     -> std::expected<std::unique_ptr<TemporalUpscaler>, std::string>;
 /** @return Why not, without an NVIDIA RTX GPU, its driver's NGX or the DLSS DLL. */
 [[nodiscard]] auto createDlss(vulkan::Context& context)
+    -> std::expected<std::unique_ptr<TemporalUpscaler>, std::string>;
+/** @return Why not, without an NVIDIA RTX GPU, its driver's NGX or the DLSS-RR DLL. */
+[[nodiscard]] auto createDlssRr(vulkan::Context& context)
     -> std::expected<std::unique_ptr<TemporalUpscaler>, std::string>;
 
 /** @brief The barrier before an upscaler reads what the pipeline wrote. */

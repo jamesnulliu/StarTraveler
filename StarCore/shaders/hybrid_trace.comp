@@ -64,7 +64,7 @@ layout(set = 0, binding = 7, rg32ui) uniform readonly uimage2D glassVisibility;
 layout(set = 0, binding = 8, rgba32f) uniform writeonly image2D noisyPrimary;
 layout(set = 0, binding = 9, rgba32f) uniform writeonly image2D noisyGlass;
 // Primary surface albedo and emission (both after the glass in front of it; a of the
-// albedo: the path vertices that glass takes).
+// albedo: the path vertices that glass takes, of the emission: its mean transmittance).
 layout(set = 0, binding = 10, rgba16f) uniform writeonly image2D frameAlbedo;
 layout(set = 0, binding = 11, rgba16f) uniform writeonly image2D frameEmission;
 layout(set = 0, binding = 12, rgba32ui) uniform writeonly uimage2D primaryGuide;
@@ -297,11 +297,16 @@ void traceReflections(ivec2 pixel, vec3 origin, vec3 direction)
                                   reflection);
         reflected.zw = reflection;
     }
+    // Ray reconstruction's reflections move as their mirror direction's (a dense field, not
+    // one sample's), and the rough surfaces', blurred, with the surfaces.
+    bool reconstruct = (frameData.options.x & kFlagRayReconstruction) != 0u;
     if (reflecting) {
         uvec2 reflection;
-        motion.xy = virtualMotion(primary, imageLoad(visibility, pixel).y, direction, rays[1],
-                                  reflection);
+        motion.xy = virtualMotion(primary, imageLoad(visibility, pixel).y, direction,
+                                  reconstruct ? vec3(0.0) : rays[1], reflection);
         reflected.xy = reflection;
+    } else if (reconstruct && hasPrimary) {
+        motion.xy = motionOf(primary.instanceIndex, primaryPoint).xy;
     }
     imageStore(noisyGlass, pixel, results[0]);
     imageStore(noisySpecular, pixel, results[1]);
@@ -563,7 +568,9 @@ void writeSurfaces(ivec2 pixel, vec3 origin, vec3 direction)
                         albedo, emission, bounces);
     // a: the path vertices the panes in front take (direct.comp).
     imageStore(frameAlbedo, pixel, vec4(albedo, float(bounces)));
-    imageStore(frameEmission, pixel, vec4(emission, 0.0));
+    // a: how much of the primary surface the panes let through, on average (ray
+    // reconstruction's specular albedo, composite.comp).
+    imageStore(frameEmission, pixel, vec4(emission, dot(transmittance, vec3(1.0 / 3.0))));
 }
 
 /** The traced pixels: the primary layer's paths. */

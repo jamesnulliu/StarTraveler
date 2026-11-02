@@ -1,6 +1,7 @@
 // The sphere lights' light on a surface's diffuse lobe in closed form, shadowed
 // without noise: the hybrid renderer's direct layer (direct.comp, with shadow maps
-// where STARCORE_SPHERE_SHADOW_MAPS is defined: shadows.glsl included first) and its
+// where STARCORE_SPHERE_SHADOW_MAPS is defined: shadows.glsl included first), its paths'
+// hits (path.glsl's tracePathFrom; there also their glossy reflections') and its
 // radiance cache (radiance_cache.glsl: at the hits it shades, rays). Include after
 // path.glsl.
 
@@ -120,15 +121,130 @@ vec3 sphereTransmittance(Light light, SurfaceHit hit, vec2 u)
                                direction, distance);
 }
 
+// sphereHighlight's directions: of a light's cap, this many (of equal solid angle); of the
+// reflection lobe's microfacet normals, a grid of this many per side.
+const int kCapPoints = 16;
+const int kLobeGrid = 4;
+const float kGoldenAngle = 2.39996323;
+
 /**
- * analyticLight, each light's share shadowed: by its shadow maps (soft;
- * STARCORE_SPHERE_SHADOW_MAPS), else by a ray to a point of it (sphereTransmittance:
- * soft in expectation); a faint one not at all. Both of its part above the surface's
- * plane, as the closed form. `u`: uniform, of the maps' taps' rotation (x) and of the
- * point of the ray (turned every frame: the recent mean, or the upscaler, averages
- * them).
+ * The light sphere light i gives a surface's reflection lobe seen from `wo` (BSDF times
+ * cosine, as evaluateReflection's), unshadowed, with little noise. Of a light smaller than
+ * the lobe (its angular radius under twice alpha, about the directions' spread), the lobe
+ * integrated over its cap: kCapPoints directions of equal solid angle, a sunflower turned
+ * by u.x (stratified, so the mean converges; those under the surface's plane give none).
+ * Of a light wider than the lobe, whose peak few of those would find, the paths' estimate
+ * where they sample the reflection, over a grid of the lobe's microfacet normals (visible
+ * normals, sampleGgxVisibleNormal; each cell's at an offset of its own, turned by u: a
+ * fixed grid's steps showed as rings in a highlight) -- the share of the directions they
+ * mirror `wo` into (folded above the surface, as sampleBsdf's) that meet the light, soft
+ * at its edge, each times its reflectance. Between, both. Of a faint light, the lobe at
+ * its center times the solid angle of its part above the surface's plane. (The paths
+ * re-traced for the temporal gradients draw the same u: where nothing changed, the same
+ * light.) Against the lobe integrated over the light, roughness 0.15 to 0.8, views to
+ * grazing, lights low over the horizon: of a metal 1 % off, weighted by the light, of glass
+ * 4 % (its reflectance changes fast at grazing views); noise over u 8 % of it. (The grid
+ * alone: 30 %, most where the light is about as wide as the lobe -- a canopy reflecting a
+ * cockpit flickered with it while the ship moved; a representative point, Karis 2013, was
+ * 2.3 times the light at a grazing view of one low over the horizon.)
  */
-vec3 shadowedLight(Material material, vec3 wo, SurfaceHit hit, vec2 u)
+vec3 sphereHighlight(uint i, Material material, vec3 wo, SurfaceHit hit, vec2 u, bool faint)
+{
+    if (lights[i].instanceIndex == hit.instanceIndex) {
+        return vec3(0.0);
+    }
+    vec3 toCenter = lights[i].center - hit.position;
+    float distance2 = dot(toCenter, toCenter);
+    float radius = lights[i].radius;
+    if (distance2 <= radius * radius) {
+        return vec3(0.0);
+    }
+    vec3 center = toCenter * inversesqrt(distance2);
+    float sinRadius = radius * inversesqrt(distance2);
+    float unusedPdf;
+    if (faint) {
+        // The lobe towards its center, times its solid angle above the surface's plane (of
+        // its disk facing the point, the segment past the plane's chord).
+        vec3 lobe = evaluateReflection(material, wo, hit, center, 0u, unusedPdf);
+        float facing = dot(center, hit.normal);
+        float chord = clamp(-facing / (sinRadius * sqrt(max(1.0 - facing * facing, 1e-12))),
+                            -1.0, 1.0);
+        float above = (acos(chord) - chord * sqrt(1.0 - chord * chord)) / kPi;
+        return lights[i].emission * lobe * (kPi * sinRadius * sinRadius * above);
+    }
+    float angularRadius = asin(sinRadius);
+    float alpha = roughnessToAlpha(material.roughness);
+    Frame frame = makeFrame(hit.normal);
+    vec3 woLocal = toLocal(frame, wo);
+    woLocal.z = max(woLocal.z, 1e-5);
+    woLocal = normalize(woLocal);
+    vec3 centerLocal = toLocal(frame, center);
+    bool thin = (material.flags & kMaterialThinWalled) != 0u;
+    float eta = thin || hit.frontFace ? 1.0 / material.ior : material.ior;
+    // The grid's share: of a light wider than the lobe.
+    float narrow = smoothstep(1.0, 2.0, angularRadius / (2.0 * alpha));
+    vec3 result = vec3(0.0);
+    if (narrow < 1.0) {
+        // evaluateReflection per direction: of each microfacet mirroring `wo` into it (and
+        // the folded one), the visible normals' density mirrored -- D(h) G1(wo) / (4 wo.z)
+        // -- times its reflectance.
+        Frame cap = makeFrame(centerLocal);
+        float oneMinusCos = coneOneMinusCos(radius, distance2);
+        vec3 sum = vec3(0.0);
+        [[dont_unroll]] for (int k = 0; k < kCapPoints; ++k) {
+            float down = (float(k) + 0.5) / float(kCapPoints) * oneMinusCos;  // 1 - cosine.
+            float sine = sqrt(down * (2.0 - down));
+            float angle = float(k) * kGoldenAngle + kTwoPi * u.x;
+            vec3 wi = (1.0 - down) * centerLocal +
+                      sine * (cos(angle) * cap.tangent + sin(angle) * cap.bitangent);
+            for (int folded = 0; folded < 2; ++folded) {
+                if (wi.z <= 0.0 || (folded == 1 && wi.z >= woLocal.z)) {
+                    break;
+                }
+                vec3 h = normalize(woLocal + vec3(wi.xy, folded == 1 ? -wi.z : wi.z));
+                float cosine = dot(woLocal, h);
+                sum += ggxDistribution(h, alpha) *
+                       (material.metallic * fresnelSchlick(material.albedo.rgb, cosine) +
+                        vec3((1.0 - material.metallic) * fresnelDielectric(cosine, eta)));
+            }
+        }
+        float visible = 1.0 / (1.0 + smithLambda(woLocal, alpha));  // G1(wo).
+        result = (1.0 - narrow) *
+                 (kTwoPi * oneMinusCos / float(kCapPoints) * visible / (4.0 * woLocal.z)) * sum;
+    }
+    if (narrow > 0.0) {
+        // The light's edge as the chord from its center (unit sphere of directions), soft
+        // over two cells' directions, at most a quarter of its radius (wider, it took in
+        // more than the light).
+        float edge = 2.0 * sin(0.5 * angularRadius);
+        float soft = min(4.0 * alpha / float(kLobeGrid), 0.25 * angularRadius);
+        vec3 sum = vec3(0.0);
+        [[dont_unroll]] for (int k = 0; k < kLobeGrid * kLobeGrid; ++k) {
+            vec2 cell = fract(u + vec2(0.7548777, 0.5698403) * float(k + 1));
+            vec3 h = sampleGgxVisibleNormal(woLocal, alpha,
+                                            (float(k % kLobeGrid) + cell.x) / float(kLobeGrid),
+                                            (float(k / kLobeGrid) + cell.y) / float(kLobeGrid));
+            float meets =
+                clamp((edge - distance(reflectLocal(woLocal, h), centerLocal)) / soft + 0.5, 0.0,
+                      1.0);
+            float cosine = dot(woLocal, h);
+            sum += meets * (material.metallic * fresnelSchlick(material.albedo.rgb, cosine) +
+                            vec3((1.0 - material.metallic) * fresnelDielectric(cosine, eta)));
+        }
+        result += narrow / float(kLobeGrid * kLobeGrid) * sum;
+    }
+    return lights[i].emission * result;
+}
+
+/**
+ * analyticLight times `albedo` -- with `glossy` also each light's sphereHighlight --
+ * each light's share shadowed: by its shadow maps (soft; STARCORE_SPHERE_SHADOW_MAPS),
+ * else by a ray to a point of it (sphereTransmittance: soft in expectation); a faint one
+ * not at all. Both of its part above the surface's plane, as the closed form. `u`:
+ * uniform, of the maps' taps' rotation (x) and of the point of the ray (turned every
+ * frame: the recent mean, or the upscaler, averages them).
+ */
+vec3 shadowedLight(Material material, vec3 wo, SurfaceHit hit, vec2 u, vec3 albedo, bool glossy)
 {
     vec3 total = vec3(0.0);
     for (uint i = 0u; visitLight(i, kLightSpheres); ++i) {
@@ -138,24 +254,30 @@ vec3 shadowedLight(Material material, vec3 wo, SurfaceHit hit, vec2 u)
         return vec3(0.0);
     }
     float faint = kFaintShare * luminance(total);
+    vec3 diffuse = albedo * closedFormShare(material, wo, hit);
     vec3 sum = vec3(0.0);
     for (uint i = 0u; visitLight(i, kLightSpheres); ++i) {
         vec3 irradiance = sphereIrradiance(i, hit);
-        if (luminance(irradiance) > faint) {
-            Light light = lights[i];
+        vec3 light = diffuse * irradiance;
+        bool bright = luminance(irradiance) > faint;
+        if (glossy) {
+            light += sphereHighlight(i, material, wo, hit, u, !bright);
+        }
+        if (bright) {
+            Light sphere = lights[i];
 #ifdef STARCORE_SPHERE_SHADOW_MAPS
             if (hasShadowMaps(i)) {
-                irradiance *= shadowVisibility(i, light.center, light.radius, hit.position,
-                                               hit.geometricNormal, kTwoPi * u.x);
+                light *= shadowVisibility(i, sphere.center, sphere.radius, hit.position,
+                                          hit.geometricNormal, kTwoPi * u.x);
             } else
 #endif
             {
-                irradiance *= sphereTransmittance(light, hit, u);
+                light *= sphereTransmittance(sphere, hit, u);
             }
         }
-        sum += irradiance;
+        sum += light;
     }
-    return closedFormShare(material, wo, hit) * sum;
+    return sum;
 }
 
 /**
@@ -168,12 +290,13 @@ bool closedFormHitLights()
 }
 
 /**
- * The light the sphere lights give a surface's diffuse lobe, shadowed (by rays, unless
- * shadow maps), seen from `wo`; `u` as shadowedLight's.
+ * The light the sphere lights give a surface's diffuse lobe, and with `glossy` its
+ * reflection, shadowed (by rays, unless shadow maps), seen from `wo`; `u` as
+ * shadowedLight's.
  */
-vec3 closedFormHitLight(SurfaceHit hit, Material material, vec3 wo, vec2 u)
+vec3 closedFormHitLight(SurfaceHit hit, Material material, vec3 wo, vec2 u, bool glossy)
 {
-    return material.albedo.rgb * shadowedLight(material, wo, hit, u);
+    return shadowedLight(material, wo, hit, u, material.albedo.rgb, glossy);
 }
 
 #endif  // STARCORE_SPHERE_LIGHT_GLSL

@@ -690,6 +690,9 @@ const uint kVertexSkipEmission = 1u;  // The caller accounts for the vertex's em
 // and the spheres its sampled direction finds next are not counted (the hybrid
 // renderer's direct layer, direct.comp).
 const uint kVertexSkipLights = 16u;
+// And through its glossy reflection (kGlossyLightRoughness and rougher; the hybrid
+// renderer's path hits, sphere_light.glsl).
+const uint kVertexSkipGlossyLights = 32u;
 
 /**
  * The emission of a vertex a path reached, MIS-weighted against the lights sampled at
@@ -749,7 +752,8 @@ bool pathVertex(SurfaceHit hit, Material material, int lightIndex, vec3 directio
         evaluateReflection(material, wo, hit, scatter.direction, lobes, misPdf);
     }
     // The kinds of lights sampled here (the others' light is the caller's).
-    uint sampled = nextEvent && (flags & kVertexSkipLights) != 0u && scatter.lobe == kLobeDiffuse
+    uint skipped = scatter.lobe == kLobeDiffuse ? kVertexSkipLights : kVertexSkipGlossyLights;
+    uint sampled = nextEvent && (scatter.lobe == kLobeDiffuse || glossy) && (flags & skipped) != 0u
                        ? kLightMeshes
                        : kLightsAll;
     if (nextEvent && (scatter.lobe == kLobeDiffuse || glossy)) {
@@ -821,7 +825,8 @@ void continuePath(vec3 origin, vec3 direction, uint bounce, uint end, inout Path
 #ifdef STARCORE_HYBRID_PATHS
 // The hybrid pipeline's (sphere_light.glsl, radiance_cache.glsl).
 bool closedFormHitLights();
-vec3 closedFormHitLight(SurfaceHit hit, Material material, vec3 wo, vec2 u);
+float diffuseLobe(Material material);
+vec3 closedFormHitLight(SurfaceHit hit, Material material, vec3 wo, vec2 u, bool glossy);
 bool radianceCacheEnabled();
 bool cachedReflection(SurfaceHit hit, Material material, vec3 wo, float footprint, vec2 u,
                       out vec3 reflected);
@@ -888,15 +893,24 @@ void tracePathFrom(SurfaceHit hit, vec3 direction, uint bounce, uint end, uint f
             }
             // The first vertex past the path's start (where reflections find what they show,
             // where bounced light comes from), as engines light it: the light the sphere
-            // lights give its diffuse lobe in closed form, shadowed, its lights sampled only
-            // the meshes there -- without the noise of a sun found at random (as the direct
-            // layer's primary surfaces). Not deeper: little of the light, each a few rays.
-            if (vertex == 1u && closedFormHitLights() && material.metallic < 1.0 &&
-                material.transmission < 1.0) {
-                path.radiance += clampContribution(
-                    path.throughput * closedFormHitLight(hit, material, -direction, u),
-                    path.scatterings + 1u, path.scale);
-                flags = kVertexSkipLights;
+            // lights give its diffuse lobe and its glossy reflection in closed form,
+            // shadowed, its lights sampled only the meshes there -- without the noise of a
+            // sun found at random (as the direct layer's primary surfaces). Not deeper:
+            // little of the light, each a few rays. (The glossy one over the light's cap or a
+            // grid of the lobe's directions, sphereHighlight. Sampled, it was most of the
+            // noise of a canopy reflecting a sunlit cockpit, and re-traced for the temporal
+            // gradients it came out different as a ship flew nearer a light: the lights'
+            // weights changed which one it picked.)
+            if (vertex == 1u && closedFormHitLights()) {
+                bool diffuse = diffuseLobe(material) > 0.0;
+                bool glossy = material.roughness >= kGlossyLightRoughness;
+                if (diffuse || glossy) {
+                    path.radiance += clampContribution(
+                        path.throughput * closedFormHitLight(hit, material, -direction, u, glossy),
+                        path.scatterings + 1u, path.scale);
+                    flags = (diffuse ? kVertexSkipLights : 0u) |
+                            (glossy ? kVertexSkipGlossyLights : 0u);
+                }
             }
 #endif
         }

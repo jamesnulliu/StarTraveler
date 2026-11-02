@@ -152,7 +152,7 @@ bool cachedReflection(SurfaceHit hit, Material material, vec3 wo, float footprin
     if (value.w < kCacheMinSamples) {
         return false;
     }
-    reflected = max(value.rgb + closedFormHitLight(hit, material, wo, u), vec3(0.0));
+    reflected = max(value.rgb + closedFormHitLight(hit, material, wo, u, false), vec3(0.0));
     return true;
 }
 

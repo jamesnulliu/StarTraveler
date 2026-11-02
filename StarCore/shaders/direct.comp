@@ -323,7 +323,7 @@ void main()
             vec2 noise = fract(52.9829189 * fract(vec2(dot(vec2(pixel), ign),
                                                        dot(vec2(pixel.yx) + 17.0, ign))) +
                                vec2(0.618034, 0.7548777) * float(frameData.frame.x));
-            unshadowed = albedo.rgb * shadowedLight(material, wo, primary, noise);
+            unshadowed = shadowedLight(material, wo, primary, noise, albedo.rgb, false);
         }
         imageStore(frameUnshadowed, pixel, vec4(unshadowed, 0.0));
         if (traced) {

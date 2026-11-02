@@ -677,7 +677,7 @@ void updateCache(ivec2 block)
                 before[recorded] = path.radiance;
                 throughputs[recorded] = path.throughput;
                 uncached[recorded] = closedFormHitLight(
-                    hit, material, -direction, vec2(nextFloat(rng), nextFloat(rng)));
+                    hit, material, -direction, vec2(nextFloat(rng), nextFloat(rng)), false);
                 ++recorded;
                 record = true;
             }

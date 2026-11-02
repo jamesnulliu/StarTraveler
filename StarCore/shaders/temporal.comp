@@ -25,8 +25,9 @@
 //
 // Reflections (the glass and specular layers) are reprojected from where
 // their image was, which moves unlike the surface (hybrid_trace.comp,
-// virtualMotion), if that showed the same reflected (reflection guides). The
-// motion is an estimate: while things move, the history of the primary
+// virtualMotion), if that held the light of what is reflected there now
+// (reflection guides; historyOf). The motion is an estimate: while things move,
+// the history of the primary
 // surfaces' sharp reflections is also clamped to this frame's samples around
 // the pixel (clampToFrame). Not the panes': what they reflect is often a few
 // bright samples among dark ones (a canopy reflecting the cockpit, which
@@ -74,9 +75,12 @@ layout(set = 0, binding = 19, rg32f) uniform writeonly image2D moments;
 layout(set = 0, binding = 20, rgba16f) uniform writeonly image2D filterInput;
 // Of the reflected images: xy of the specular layer, zw of the glass layer.
 layout(set = 0, binding = 21, rgba32f) uniform readonly image2D reflectionMotion;
-// What was / is reflected (hybrid.glsl, encodeReflection), as reflectionMotion; of
-// the pixels traced (TraceResolution::Half: the others borrow).
-layout(set = 0, binding = 22, rgba32ui) uniform readonly uimage2D previousReflectionGuide;
+// What a reflection layer's history holds the light of (hybrid.glsl, encodeReflection),
+// per pixel: as this pass wrote it the previous frame, and writes it now (see main).
+layout(set = 0, binding = 22, rg32ui) uniform readonly uimage2D previousHistoryOf;
+layout(set = 0, binding = 26, rg32ui) uniform writeonly uimage2D historyOf;
+// What is reflected now, as reflectionMotion; of the pixels traced
+// (TraceResolution::Half: the others borrow).
 layout(set = 0, binding = 23, rgba32ui) uniform readonly uimage2D reflectionGuide;
 // The layer's temporal gradients, filtered (hybrid.glsl, one per stratum): how
 // much of its light changed since the previous frame.
@@ -175,17 +179,6 @@ uvec2 reflectionOf(uvec4 guide)
     return pass.layer == kLayerSpecular ? guide.xy : guide.zw;
 }
 
-/**
- * What a previous frame's pixel reflected: of the pixel traced in its 2x2
- * block then (TraceResolution::Half: one it borrowed from, or near it).
- */
-uvec2 previousReflection(ivec2 tap)
-{
-    ivec2 traced = kBorrowing ? previouslyTraced(tap) : tap;
-    return reflectionOf(imageLoad(previousReflectionGuide,
-                                  all(lessThan(vec2(traced), viewportSize())) ? traced : tap));
-}
-
 History loadHistory(ivec2 tap)
 {
     History h;
@@ -226,6 +219,26 @@ bool inside(ivec2 pixel)
 bool sampledOn(ivec2 tap, uint key)
 {
     return inside(tap) && (!kBorrowing || tracedThisFrame(tap)) && imageLoad(guide, tap).z == key;
+}
+
+/**
+ * Whether a pixel traced this frame around this one on the same surface (3x3; 5x5
+ * where pixels borrow) reflects what a previous frame's pixel's history holds the light
+ * of (`previous`).
+ */
+bool reflectedAround(ivec2 pixel, uint key, uvec2 previous)
+{
+    int radius = kBorrowing ? 2 : 1;
+    for (int dy = -radius; dy <= radius; ++dy) {
+        for (int dx = -radius; dx <= radius; ++dx) {
+            ivec2 tap = pixel + ivec2(dx, dy);
+            if ((dx != 0 || dy != 0) && sampledOn(tap, key) &&
+                sameReflection(reflectionOf(imageLoad(reflectionGuide, tap)), previous)) {
+                return true;
+            }
+        }
+    }
+    return false;
 }
 
 /**
@@ -433,6 +446,8 @@ void main()
 
     // Bilinear reprojection over the taps that saw the same surface.
     bool reprojected = false;  // Some taps saw the same surface.
+    // What the history of a reflection layer will hold the light of (historyOf).
+    uvec2 holds = reflection;
     History history;
     history.color = vec4(0.0);
     history.albedo = vec3(0.0);
@@ -445,8 +460,14 @@ void main()
             previousRay(vec2(pixel) + frameData.viewport.zw + currentMotion.xy) * currentMotion.z;
         vec3 normal = current.z != 0u ? guideNormal(current) : vec3(0.0);
         // The history of a reflection is where its image was (on the same surface), if
-        // that showed the same reflected (sharp reflections only: the mirror direction
-        // says little about glossy ones).
+        // that held the light of what this pixel reflects, or a pixel around it (sharp
+        // reflections only: the mirror direction says little about glossy ones). At the
+        // edge of a sharp reflection, what a pixel's sample reflects is either side, by the
+        // jitter and the sample's ray (the edge of a light strip a canopy reflects): its
+        // history is of both, and is kept while the ship flies on. What it holds the light
+        // of stays what it was, though its samples are now of the other side: where the
+        // reflection moved on, the history is dropped once that is not around any more
+        // (else, of the other side then, it trailed behind a reflection on a moving pane).
         // A glossy reflection is a blurred image, its motion a guess (of a curved surface,
         // a poor one): it follows the surface, and its gradients tell what changed.
         vec2 moved = reflects() ? mix(currentMotion.xy, reflectedMotion, sharpness)
@@ -459,13 +480,42 @@ void main()
         float weights[4] = float[](
             (1.0 - f.x) * (1.0 - f.y), f.x * (1.0 - f.y), (1.0 - f.x) * f.y, f.x * f.y);
         ivec2 offsets[4] = ivec2[](ivec2(0, 0), ivec2(1, 0), ivec2(0, 1), ivec2(1, 1));
-        float total = 0.0;
+        // Which taps saw the same surface and, of a sharp reflection, held the light of what
+        // this pixel reflects (1), else of what a pixel around it does (2; only if none
+        // did 1: the history keeps the light of one of them).
+        uint kept[4] = uint[](0u, 0u, 0u, 0u);
+        bool own = false;
+        float aroundWeight = 0.0;
         for (int i = 0; i < 4; ++i) {
             ivec2 tap = base + offsets[i];
-            if (weights[i] <= 0.0 || !sameSurface(current, previousPoint, normal, tap, still) ||
-                (checkReflection && !sameReflection(reflection, previousReflection(tap)))) {
+            if (weights[i] <= 0.0 || !sameSurface(current, previousPoint, normal, tap, still)) {
                 continue;
             }
+            kept[i] = 1u;
+            if (checkReflection) {
+                uvec2 then = imageLoad(previousHistoryOf, tap).xy;
+                if (sameReflection(reflection, then)) {
+                    own = true;
+                } else if (reflectedAround(pixel, current.z, then)) {
+                    kept[i] = 2u;
+                    if (weights[i] > aroundWeight) {
+                        aroundWeight = weights[i];
+                        holds = then;
+                    }
+                } else {
+                    kept[i] = 0u;
+                }
+            }
+        }
+        if (own) {
+            holds = reflection;
+        }
+        float total = 0.0;
+        for (int i = 0; i < 4; ++i) {
+            if (kept[i] != (own || !checkReflection ? 1u : 2u)) {
+                continue;
+            }
+            ivec2 tap = base + offsets[i];
             History h = loadHistory(tap);
             history.color += weights[i] * h.color;
             history.albedo += weights[i] * h.albedo;
@@ -509,7 +559,12 @@ void main()
             }
         } else {
             history.color = vec4(0.0);
+            holds = reflection;
         }
+    }
+
+    if (reflects()) {
+        imageStore(historyOf, pixel, uvec4(holds, 0u, 0u));
     }
 
     // Accumulate this frame's samples, if its paths were traced (of a pixel not

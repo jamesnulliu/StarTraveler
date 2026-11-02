@@ -33,7 +33,7 @@ constexpr VkDescriptorType kTraceBindings[] = {
 constexpr VkDescriptorType kTemporalBindings[] = {
     kBuffer, kUniform, kBuffer, kImage, kBuffer, kBuffer, kBuffer, kImage, kImage, kImage, kImage,
     kImage,  kImage,   kImage,  kImage, kImage,  kImage,  kImage,  kImage, kImage, kImage, kImage,
-    kImage,  kImage,   kImage,  kImage};
+    kImage,  kImage,   kImage,  kImage, kImage};
 constexpr VkDescriptorType kAtrousBindings[] = {kBuffer, kUniform, kBuffer, kImage,
                                                 kBuffer, kBuffer,  kBuffer, kImage,
                                                 kImage,  kImage,   kImage,  kImage};
@@ -126,6 +126,7 @@ struct HybridRenderer::Images
     vulkan::Image primaryMotion;
     vulkan::Image glassMotion;
     vulkan::Image reflectionMotion;  // Of the reflected images: xy specular, zw glass.
+    vulkan::Image reflectionGuide;   // What is reflected: xy specular, zw glass.
     // RG32UI: compact guides for the a-trous taps.
     vulkan::Image primaryFilterGuide;
     vulkan::Image glassFilterGuide;
@@ -161,7 +162,9 @@ struct HybridRenderer::Images
     std::array<vulkan::Image, 2> directUnshadowed;
     std::array<vulkan::Image, 2> directRecent;
     std::array<vulkan::Image, 2> directMoments;
-    std::array<vulkan::Image, 2> reflectionGuide;  // What is reflected: xy specular, zw glass.
+    // What the glass and specular layers' histories hold the light of (temporal.comp).
+    std::array<vulkan::Image, 2> glassHistoryOf;
+    std::array<vulkan::Image, 2> specularHistoryOf;
     // Filter input ([0], from the temporal pass) and a-trous ping-pong.
     std::array<vulkan::Image, 2> primaryFilter;
     std::array<vulkan::Image, 2> glassFilter;
@@ -176,18 +179,20 @@ struct HybridRenderer::Images
     {
         for (vulkan::Image* image :
              {&noisyPrimary, &noisyGlass, &noisySpecular, &frameAlbedo, &frameEmission,
-              &primaryMotion, &glassMotion, &reflectionMotion, &primaryFilterGuide,
-              &glassFilterGuide, &noisyDirect, &frameUnshadowed, &highlights}) {
+              &primaryMotion, &glassMotion, &reflectionMotion, &reflectionGuide,
+              &primaryFilterGuide, &glassFilterGuide, &noisyDirect, &frameUnshadowed,
+              &highlights}) {
             function(*image);
         }
         for (auto* pair :
-             {&primaryGuide,      &glassGuide,       &primaryColor,   &primaryAlbedo,
-              &primaryEmission,   &primaryMoments,   &primaryHits,    &primaryFound,
-              &reflectionSamples, &sampleSurface,    &sampleLight,    &glassColor,
-              &glassMoments,      &specularColor,    &specularMoments, &directColor,
-              &directUnshadowed,  &directRecent,     &directMoments,  &reflectionGuide,
-              &primaryFilter,     &glassFilter,      &specularFilter, &directFilter,
-              &gradients[0],      &gradients[1],     &gradients[2],   &gradients[3]}) {
+             {&primaryGuide,      &glassGuide,       &primaryColor,      &primaryAlbedo,
+              &primaryEmission,   &primaryMoments,   &primaryHits,       &primaryFound,
+              &reflectionSamples, &sampleSurface,    &sampleLight,       &glassColor,
+              &glassMoments,      &specularColor,    &specularMoments,   &directColor,
+              &directUnshadowed,  &directRecent,     &directMoments,     &glassHistoryOf,
+              &specularHistoryOf, &primaryFilter,    &glassFilter,       &specularFilter,
+              &directFilter,      &gradients[0],     &gradients[1],      &gradients[2],
+              &gradients[3]}) {
             function((*pair)[0]);
             function((*pair)[1]);
         }
@@ -296,6 +301,7 @@ void HybridRenderer::resize(std::uint32_t width, std::uint32_t height)
                       VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT);
     images->glassMotion = storage(VK_FORMAT_R32G32B32A32_SFLOAT);
     images->reflectionMotion = storage(VK_FORMAT_R32G32B32A32_SFLOAT);
+    images->reflectionGuide = storage(VK_FORMAT_R32G32B32A32_UINT);
     images->primaryFilterGuide = storage(VK_FORMAT_R32G32_UINT);
     images->glassFilterGuide = storage(VK_FORMAT_R32G32_UINT);
     images->noisyDirect = storage(VK_FORMAT_R32G32B32A32_SFLOAT);
@@ -321,7 +327,8 @@ void HybridRenderer::resize(std::uint32_t width, std::uint32_t height)
         images->directUnshadowed[i] = storage(VK_FORMAT_R32G32B32A32_SFLOAT);
         images->directRecent[i] = storage(VK_FORMAT_R16G16B16A16_SFLOAT);
         images->directMoments[i] = storage(VK_FORMAT_R32G32_SFLOAT);
-        images->reflectionGuide[i] = storage(VK_FORMAT_R32G32B32A32_UINT);
+        images->glassHistoryOf[i] = storage(VK_FORMAT_R32G32_UINT);
+        images->specularHistoryOf[i] = storage(VK_FORMAT_R32G32_UINT);
         images->primaryFilter[i] = storage(VK_FORMAT_R16G16B16A16_SFLOAT);
         images->glassFilter[i] = storage(VK_FORMAT_R16G16B16A16_SFLOAT);
         images->specularFilter[i] = storage(VK_FORMAT_R16G16B16A16_SFLOAT);
@@ -468,7 +475,7 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
             .storageBuffer(19, scene.previousTransformBuffer())
             .storageImage(20, images.noisySpecular.view())
             .storageImage(21, images.reflectionMotion.view())
-            .storageImage(22, images.reflectionGuide[current].view())
+            .storageImage(22, images.reflectionGuide.view())
             .storageImage(23, images.primaryHits[previous].view())
             .storageImage(24, images.primaryHits[current].view())
             .storageImage(25, images.primaryFound[previous].view())
@@ -590,7 +597,10 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
         const Images::LayerImages layerImages = images.layer(layer);
         // Only the primary layer has albedo and emission: their images are bound, unused, for
         // the others (a barrier between the layers all the same: they count as used). The
-        // gradients only while moving (unused still).
+        // gradients only while moving (unused still). What the history holds the light of:
+        // the reflection layers' (the glass layer's bound, unused, for the others).
+        const std::array<vulkan::Image, 2>& historyOf =
+            layer == Layer::Specular ? images.specularHistoryOf : images.glassHistoryOf;
         vulkan::DescriptorWrites writes;
         writes.uniformBuffer(1, uniformBuffer.handle())
             .storageImage(3, (*layerImages.guide)[current].view())
@@ -609,10 +619,11 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
             .storageImage(19, (*layerImages.moments)[current].view())
             .storageImage(20, (*layerImages.filter)[0].view())
             .storageImage(21, images.reflectionMotion.view())
-            .storageImage(22, images.reflectionGuide[previous].view())
-            .storageImage(23, images.reflectionGuide[current].view())
+            .storageImage(22, historyOf[previous].view())
+            .storageImage(23, images.reflectionGuide.view())
             .storageImage(24, images.gradients[std::to_underlying(layer)][gradients].view())
-            .storageImage(25, images.highlights.view());
+            .storageImage(25, images.highlights.view())
+            .storageImage(26, historyOf[current].view());
         temporal.pushDescriptors(commandBuffer, writes.writes());
         temporal.pushConstants(commandBuffer, &layer, sizeof(layer));
         vkCmdDispatch(commandBuffer, groupsX, groupsY, 1);

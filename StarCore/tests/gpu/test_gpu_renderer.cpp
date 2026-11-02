@@ -1494,6 +1494,186 @@ TEST_CASE("GPU hybrid: shadow maps of a big light low over a planet, as traced",
     CHECK(difference.mean < 1.0F);
 }
 
+TEST_CASE("GPU hybrid: a glossy surface a pane reflects keeps its history while moving",
+          "[gpu][hybrid]")
+{
+    // A pane in front of the camera reflecting a glossy ball behind it, both moving with the
+    // camera (a canopy reflecting a cockpit), lit from the sides by a big sphere light (a
+    // sun) and a small one the ship flies towards: with shadow maps, the paths' hits (the
+    // ball, seen in the pane) get the sphere lights' light on their glossy reflection in
+    // closed form, as on their diffuse lobe -- in the ball's reflection, little noise left
+    // for the moving history to average. (Sampled, a light picked by the lights' weights,
+    // it was noisy, and as the small light's weight grew a sample re-traced for the
+    // temporal gradients could pick the other.) Still, as the path tracer.
+    const GpuTest gpu;
+    Scene scene;
+    scene.environment().skyColor = Vec3(0.0F);
+    Entity pane = scene.createEntity("Pane");
+    pane.add<MeshComponent>(MeshComponent{.mesh = primitives::quad(Vec2(3.2F, 2.0F)).build()});
+    pane.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(1.0F), .roughness = 0.02F, .transmission = 1.0F, .thinWalled = true});
+    Entity ball = scene.createEntity("Ball");
+    ball.add<SphereComponent>(1.2F);
+    ball.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(0.6F, 0.6F, 0.65F), .roughness = 0.35F, .metallic = 0.85F});
+    Entity sun = scene.createEntity("Sun");
+    sun.get<TransformComponent>().translation = {30.0F, 12.0F, -40.0F};
+    sun.add<SphereComponent>(10.0F);
+    sun.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(1.0F), .emissionColor = Vec3(1.0F), .emissionPower = 30.0F});
+    Entity lamp = scene.createEntity("Lamp");
+    lamp.get<TransformComponent>().translation = {-10.0F, 2.0F, -15.0F};
+    lamp.add<SphereComponent>(0.3F);
+    lamp.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(1.0F), .emissionColor = Vec3(1.0F, 0.3F, 0.2F), .emissionPower = 3000.0F});
+    RenderSceneBuilder builder;
+    constexpr std::uint32_t kWidth = 96;
+    constexpr std::uint32_t kHeight = 72;
+    constexpr int kFrames = 40;  // Past the history cap.
+    auto at = [&](float z) {
+        pane.get<TransformComponent>().translation = {0.0F, 1.0F, z + 5.0F};
+        ball.get<TransformComponent>().translation = {0.6F, 0.9F, z + 11.0F};
+        scene.markDirty();
+        Camera camera = makeCamera(kWidth, kHeight);
+        camera.setPosition({0.0F, 1.0F, z + 9.0F});
+        return camera;
+    };
+    const PathTracerSettings settings{.samplesPerPixel = 2, .fireflyClamp = 8.0F};
+    GpuRenderOptions options = shadowOptions(DirectShadows::ShadowMaps);
+    options.view = HybridView::Glass;
+
+    auto moving = [&](std::uint32_t seed) {
+        auto hybrid = gpu.makeRenderer(kWidth, kHeight);
+        PathTracerSettings seeded = settings;
+        seeded.seed = seed;
+        for (int i = 0; i < kFrames; ++i) {
+            hybrid->render(builder.update(scene), at(-0.1F * static_cast<float>(i)), seeded,
+                           options);
+        }
+        REQUIRE(hybrid->accumulatedFrames() == kFrames);  // Reprojected, not restarted.
+        return hybrid->readImage();
+    };
+    const ColorImage first = moving(1);
+    const ColorImage second = moving(2);
+    // Where it ended, still for long: the ball's reflection is where that shows light.
+    const Camera end = at(-0.1F * static_cast<float>(kFrames - 1));
+    auto glass = gpu.makeRenderer(kWidth, kHeight);
+    for (int i = 0; i < 128; ++i) {
+        glass->render(builder.update(scene), end, settings, options);
+    }
+    const ColorImage expected = glass->readImage();
+    double noiseSum = 0.0;
+    double errorSum = 0.0;
+    std::size_t reflected = 0;
+    for (std::size_t i = 0; i < expected.pixels().size(); ++i) {
+        if (channel(expected.pixels()[i], 0) + channel(expected.pixels()[i], 1) +
+                channel(expected.pixels()[i], 2) <
+            9) {
+            continue;
+        }
+        for (int c = 0; c < 3; ++c) {
+            noiseSum +=
+                std::abs(channel(first.pixels()[i], c) - channel(second.pixels()[i], c));
+            errorSum +=
+                std::abs(channel(first.pixels()[i], c) - channel(expected.pixels()[i], c));
+        }
+        ++reflected;
+    }
+    REQUIRE(reflected > 100);
+    const auto noise = static_cast<float>(noiseSum / (3.0 * static_cast<double>(reflected)));
+    const auto error = static_cast<float>(errorSum / (3.0 * static_cast<double>(reflected)));
+
+    // Still, against the path tracer.
+    auto reference = gpu.makeRenderer(kWidth, kHeight);
+    auto still = gpu.makeRenderer(kWidth, kHeight);
+    GpuRenderOptions final = shadowOptions(DirectShadows::ShadowMaps);
+    final.view = HybridView::Final;
+    const PathTracerSettings converged{.samplesPerPixel = 8, .fireflyClamp = 8.0F};
+    for (int i = 0; i < 128; ++i) {
+        reference->render(builder.update(scene), end, converged);
+        still->render(builder.update(scene), end, converged, final);
+    }
+    const BlockDifference difference = blockDifference(still->readImage(), reference->readImage());
+    INFO("in the ball's reflection (" << reflected << " pixels): noise " << noise
+                                      << ", against the still image " << error
+                                      << "; still, against the path tracer: worst block "
+                                      << difference.worst << ", mean " << difference.mean);
+    // Measured on an RTX 4060: noise 0.23, against the still image 1.07; sampled 0.73 and
+    // 1.22; over a grid of the lobe's directions alone (no integral over the light's cap)
+    // 0.91 and 1.72.
+    CHECK(noise < 0.45F);
+    CHECK(error < 1.4F);
+    CHECK(difference.worst < 8.0F);
+    CHECK(difference.mean < 1.0F);
+}
+
+TEST_CASE("GPU hybrid: the edges of what a pane reflects keep their history while moving",
+          "[gpu][hybrid]")
+{
+    // A pane in front of the camera reflecting a light strip behind it, both moving with
+    // the camera (a canopy reflecting a cockpit's light strip, the ship flying on). At the
+    // strip's edges what a pixel's sample reflects is the strip or the dark around it, by
+    // the jitter and the sample's ray: checked against the pixel's previous one alone, the
+    // edges' history was dropped every few frames, and they flickered and bled.
+    const GpuTest gpu;
+    Scene scene;
+    scene.environment().skyColor = Vec3(0.0F);
+    Entity pane = scene.createEntity("Pane");
+    pane.add<MeshComponent>(MeshComponent{.mesh = primitives::quad(Vec2(3.2F, 2.0F)).build()});
+    pane.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(1.0F), .roughness = 0.02F, .transmission = 1.0F, .thinWalled = true});
+    Entity strip = scene.createEntity("Strip");
+    strip.add<MeshComponent>(
+        MeshComponent{.mesh = primitives::box(Vec3(1.2F, 0.02F, 0.02F)).build()});
+    strip.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(0.0F), .emissionColor = Vec3(1.0F, 0.85F, 0.65F), .emissionPower = 60.0F});
+    RenderSceneBuilder builder;
+    constexpr std::uint32_t kWidth = 96;
+    constexpr std::uint32_t kHeight = 72;
+    constexpr int kFrames = 40;  // Past the history cap.
+    auto at = [&](float x) {
+        pane.get<TransformComponent>().translation = {x, 1.0F, 5.0F};
+        strip.get<TransformComponent>().translation = {x + 0.3F, 1.25F, 12.0F};
+        strip.get<TransformComponent>().rotation = Quat(Vec3(0.0F, 0.0F, 0.35F));
+        scene.markDirty();
+        Camera camera = makeCamera(kWidth, kHeight);
+        camera.setPosition({x, 1.0F, 9.0F});
+        return camera;
+    };
+    const PathTracerSettings settings{.samplesPerPixel = 2, .fireflyClamp = 8.0F};
+    GpuRenderOptions options = hybridOptions();
+    options.view = HybridView::Glass;
+
+    auto moving = [&](std::uint32_t seed) {
+        auto hybrid = gpu.makeRenderer(kWidth, kHeight);
+        PathTracerSettings seeded = settings;
+        seeded.seed = seed;
+        for (int i = 0; i < kFrames; ++i) {
+            hybrid->render(builder.update(scene),
+                           at(-1.0F + 2.0F * static_cast<float>(i) / (kFrames - 1)), seeded,
+                           options);
+        }
+        REQUIRE(hybrid->accumulatedFrames() == kFrames);  // Reprojected, not restarted.
+        return hybrid->readImage();
+    };
+    const ColorImage first = moving(1);
+    const ColorImage second = moving(2);
+    // Where it ended, still for long.
+    auto still = gpu.makeRenderer(kWidth, kHeight);
+    const Camera end = at(1.0F);
+    for (int i = 0; i < 128; ++i) {
+        still->render(builder.update(scene), end, settings, options);
+    }
+    const ColorImage expected = still->readImage();
+    REQUIRE(meanLinear(expected) > 1e-3);  // The reflection is there.
+    const float noise = meanDifference(first, second);
+    const float error = meanDifference(first, expected);
+    INFO("noise " << noise << ", against the still image " << error);
+    CHECK(noise < 0.25F);
+    // Measured on an RTX 4060: 0.20; 0.45 checked against the pixel's previous one alone.
+    CHECK(error < 0.3F);
+}
+
 TEST_CASE("GPU hybrid: what moves with the camera keeps its history", "[gpu][hybrid]")
 {
     // A deck under a lamp, both moving with the camera (like a cockpit), past still

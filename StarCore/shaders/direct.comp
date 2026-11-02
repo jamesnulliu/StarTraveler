@@ -51,6 +51,10 @@
 #include "path.glsl"
 #define STARCORE_SHADOW_RECORDS 18
 #define STARCORE_SHADOW_ATLAS 19
+// The filter's taps turn every frame, and the recent mean (or the upscaler) averages
+// them: half of them do. (16 took 0.24 ms more at 2560x1440 with DLSS, for no less
+// noise.)
+#define STARCORE_SHADOW_FILTER_TAPS 8u
 #include "shadows.glsl"
 #define STARCORE_SPHERE_SHADOW_MAPS
 #include "sphere_light.glsl"

@@ -84,9 +84,15 @@ layout(set = 0, binding = STARCORE_SHADOW_ATLAS) uniform sampler2D shadowAtlas;
 
 // Percentage-closer soft shadows: the occluders' mean distance from the light
 // (searched where they could shade the point) and the light's radius make the
-// width of the penumbra, over which the shadow test is averaged.
+// width of the penumbra, over which the shadow test is averaged. Fewer taps of the
+// search find less of an occluder far from the point (a big light's shadow ended
+// early); fewer of the filter only add noise where something averages the taps'
+// rotation over frames (STARCORE_SHADOW_FILTER_TAPS).
+#ifndef STARCORE_SHADOW_FILTER_TAPS
+#define STARCORE_SHADOW_FILTER_TAPS 16u
+#endif
 const uint kBlockerTaps = 8u;
-const uint kFilterTaps = 16u;
+const uint kFilterTaps = STARCORE_SHADOW_FILTER_TAPS;
 const float kMaxSearchTexels = 24.0;
 const float kMinFilterTexels = 1.0;
 const float kMaxFilterTexels = 24.0;

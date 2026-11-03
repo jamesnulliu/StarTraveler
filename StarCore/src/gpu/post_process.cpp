@@ -1,5 +1,7 @@
 #include <algorithm>
 
+#include <glm/matrix.hpp>
+
 #include "post_process.hpp"
 #include "starcore/vulkan/context.hpp"
 
@@ -17,6 +19,7 @@ namespace
 #include "shaders/particle.frag.spv.h"
 #include "shaders/particle.vert.spv.h"
 #include "shaders/post.comp.spv.h"
+#include "shaders/star.vert.spv.h"
 
 constexpr VkFormat kParticleFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkFormat kBloomFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
@@ -43,6 +46,15 @@ struct ParticleParams
     float shutter = 0.0F;
     float padding = 0.0F;
     Vec2 depthScale{1.0F};  // The depth's size over the particle image's.
+};
+
+/** @brief Push constants of star.vert (and particle.frag: the first 16 bytes alike). */
+struct StarParams
+{
+    float shutter = 0.0F;
+    float brightness = 1.0F;
+    Vec2 depthScale{1.0F};
+    Vec4 galacticToWorld[3] = {};  // Rows.
 };
 
 /** @brief Push constants of bloom_prefilter.comp. */
@@ -109,6 +121,12 @@ PostProcess::PostProcess(vulkan::Context& context)
                                    .pushConstantSize = sizeof(ParticleParams),
                                    .colorFormats = std::span(&kParticleFormat, 1),
                                    .additiveBlending = true}),
+      m_starPipeline(context, {.vertexSpirv = star_vert_spv,
+                               .fragmentSpirv = particle_frag_spv,
+                               .bindings = kParticleBindings,
+                               .pushConstantSize = sizeof(StarParams),
+                               .colorFormats = std::span(&kParticleFormat, 1),
+                               .additiveBlending = true}),
       m_bloomPrefilter(context, bloom_prefilter_comp_spv, kPrefilterBindings,
                        static_cast<std::uint32_t>(sizeof(PrefilterParams))),
       m_bloomDown(context, bloom_down_comp_spv, kResampleBindings),
@@ -165,9 +183,30 @@ void PostProcess::resize(std::uint32_t width, std::uint32_t height)
     });
 }
 
+void PostProcess::syncStars(const std::shared_ptr<const SkyMap>& map)
+{
+    if (map == m_starSource) {
+        return;
+    }
+    // Frames in flight may still read the old buffer (a new sky is rare).
+    m_context->waitIdle();
+    m_stars = {};
+    m_starSource = map;
+    if (map && !map->stars.empty()) {
+        m_stars = vulkan::createDeviceBuffer(
+            *m_context, std::as_bytes(std::span<const SkyStar>(map->stars)),
+            VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    }
+}
+
 auto PostProcess::drawParticles(VkCommandBuffer commandBuffer, const PostFrame& frame) -> bool
 {
-    if (frame.particles.empty() || frame.depth == nullptr || frame.raw) {
+    if (frame.depth == nullptr || frame.raw) {
+        return false;
+    }
+    syncStars(frame.sky != nullptr ? frame.sky->map : nullptr);
+    const bool stars = m_stars.isValid();
+    if (frame.particles.empty() && !stars) {
         return false;
     }
     const std::uint32_t width = m_particles.width();
@@ -183,13 +222,17 @@ auto PostProcess::drawParticles(VkCommandBuffer commandBuffer, const PostFrame& 
     writeUniforms(*m_context, m_uniforms[frame.frameSlot], uniforms);
 
     // The slot's previous submission completed: its buffer may be rewritten.
-    const auto bytes = std::as_bytes(frame.particles);
     vulkan::Buffer& buffer = m_particleBuffers[frame.frameSlot];
-    if (!buffer.isValid() || buffer.size() < bytes.size()) {
-        buffer = vulkan::Buffer(*m_context, std::max<VkDeviceSize>(bytes.size(), buffer.size() * 2),
-                                VK_BUFFER_USAGE_STORAGE_BUFFER_BIT, vulkan::MemoryUsage::Upload);
+    if (!frame.particles.empty()) {
+        const auto bytes = std::as_bytes(frame.particles);
+        if (!buffer.isValid() || buffer.size() < bytes.size()) {
+            buffer = vulkan::Buffer(*m_context,
+                                    std::max<VkDeviceSize>(bytes.size(), buffer.size() * 2),
+                                    VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
+                                    vulkan::MemoryUsage::Upload);
+        }
+        buffer.write(bytes);
     }
-    buffer.write(bytes);
 
     // The visibility pass wrote the depth (and copied it).
     vulkan::memoryBarrier(commandBuffer,
@@ -216,20 +259,39 @@ auto PostProcess::drawParticles(VkCommandBuffer commandBuffer, const PostFrame& 
     vkCmdSetViewport(commandBuffer, 0, 1, &viewport);
     vkCmdSetScissor(commandBuffer, 0, 1, &scissor);
 
-    vulkan::DescriptorWrites writes;
-    writes.uniformBuffer(1, m_uniforms[frame.frameSlot].handle())
-        .storageBuffer(3, buffer.handle())
-        .sampledImage(4, frame.depth->view(), m_nearest.handle());
-    m_particlePipeline.bind(commandBuffer);
-    m_particlePipeline.pushDescriptors(commandBuffer, writes.writes());
-    const ParticleParams params{
-        .shutter = frame.effects.motionBlur ? frame.effects.shutter : 0.0F,
-        .depthScale = Vec2(static_cast<float>(frame.depth->width()) / static_cast<float>(width),
-                           static_cast<float>(frame.depth->height()) /
-                               static_cast<float>(height)),
-    };
-    m_particlePipeline.pushConstants(commandBuffer, &params, sizeof(params));
-    vkCmdDraw(commandBuffer, static_cast<std::uint32_t>(6 * frame.particles.size()), 1, 0, 0);
+    const float shutter = frame.effects.motionBlur ? frame.effects.shutter : 0.0F;
+    const Vec2 depthScale(static_cast<float>(frame.depth->width()) / static_cast<float>(width),
+                          static_cast<float>(frame.depth->height()) / static_cast<float>(height));
+    if (stars) {
+        vulkan::DescriptorWrites writes;
+        writes.uniformBuffer(1, m_uniforms[frame.frameSlot].handle())
+            .storageBuffer(3, m_stars.handle())
+            .sampledImage(4, frame.depth->view(), m_nearest.handle());
+        m_starPipeline.bind(commandBuffer);
+        m_starPipeline.pushDescriptors(commandBuffer, writes.writes());
+        StarParams params{
+            .shutter = shutter, .brightness = frame.sky->brightness, .depthScale = depthScale};
+        const Mat3 galacticToWorld = glm::transpose(frame.sky->worldToGalactic);
+        for (int row = 0; row < 3; ++row) {
+            params.galacticToWorld[row] = Vec4(galacticToWorld[0][row], galacticToWorld[1][row],
+                                               galacticToWorld[2][row], 0.0F);
+        }
+        m_starPipeline.pushConstants(commandBuffer, &params, sizeof(params));
+        vkCmdDraw(commandBuffer, static_cast<std::uint32_t>(6 * m_starSource->stars.size()), 1,
+                  0, 0);
+    }
+    if (!frame.particles.empty()) {
+        vulkan::DescriptorWrites writes;
+        writes.uniformBuffer(1, m_uniforms[frame.frameSlot].handle())
+            .storageBuffer(3, buffer.handle())
+            .sampledImage(4, frame.depth->view(), m_nearest.handle());
+        m_particlePipeline.bind(commandBuffer);
+        m_particlePipeline.pushDescriptors(commandBuffer, writes.writes());
+        const ParticleParams params{.shutter = shutter, .depthScale = depthScale};
+        m_particlePipeline.pushConstants(commandBuffer, &params, sizeof(params));
+        vkCmdDraw(commandBuffer, static_cast<std::uint32_t>(6 * frame.particles.size()), 1, 0,
+                  0);
+    }
     vkCmdEndRendering(commandBuffer);
 
     vulkan::memoryBarrier(commandBuffer, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,

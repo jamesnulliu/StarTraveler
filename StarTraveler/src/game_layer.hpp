@@ -205,6 +205,9 @@ private:
     starcore::Mat4 m_lastView{0.0F};
     bool m_previewing = false;  // Adaptive rendering is showing the preview.
     RenderOptions m_options;
+    // Render panel: the space sky settings that generate it anew, while being edited.
+    starcore::SpaceSky m_skyEdit;
+    bool m_skyEditing = false;
     bool m_frozen = false;    // Keep the displayed frame (seed fill paints on it).
     bool m_stepOnce = false;  // Trace one frame while live rendering is off.
 

@@ -444,8 +444,7 @@ private:
                                   const PathTracerSettings& settings,
                                   const GpuRenderOptions& options, bool& still) const -> bool;
     void recordPathTracing(VkCommandBuffer commandBuffer, std::uint32_t slotIndex,
-                           const RenderScene& scene, const Camera& camera,
-                           const PathTracerSettings& settings);
+                           const Camera& camera, const PathTracerSettings& settings);
     void readBack(const vulkan::Image& image, std::span<std::byte> destination);
 
     vulkan::Context* m_context;

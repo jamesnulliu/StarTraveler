@@ -3,6 +3,8 @@
 //   1. particles (particle.vert/.frag): additive sprites, streaked along their
 //      screen motion, into a particle image, tested against the visibility
 //      buffer's depth (at the rendered size: lower when the frame is upscaled);
+//      and the space sky's stars (star.vert), points where no surface is, at the
+//      output's size (temporal upscalers would smear or drop sub-pixel points);
 //   2. bloom (bloom_prefilter/down/up.comp): the frame downsampled into a
 //      chain of half-size levels, then upsampled back summing them;
 //   3. motion tiles (motion_tiles/neighbors.comp): the largest blur per 16x16
@@ -13,6 +15,7 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <vector>
 
@@ -35,7 +38,10 @@ struct PostFrame
     EffectSettings effects;
     bool raw = false;  // A debug image: clamped, no tone mapping, no effects.
     std::span<const RenderParticle> particles;
-    // Reversed depth of the nearest surfaces (VisibilityPass); null: no particles.
+    // The space sky (RenderScene::sky), whose stars are drawn with the particles; null:
+    // none.
+    const RenderSky* sky = nullptr;
+    // Reversed depth of the nearest surfaces (VisibilityPass); null: no particles, no stars.
     const vulkan::Image* depth = nullptr;
     // RGBA32F motion vectors and depths (motion_blur.glsl); null: no motion blur.
     const vulkan::Image* motion = nullptr;
@@ -60,14 +66,17 @@ public:
                 const vulkan::Image& radiance, const vulkan::Image& output);
 
 private:
-    /** @return Whether particles were drawn. */
+    /** @return Whether particles or stars were drawn. */
     auto drawParticles(VkCommandBuffer commandBuffer, const PostFrame& frame) -> bool;
+    /** @brief The stars of `map` on the GPU (uploaded when it is another map). */
+    void syncStars(const std::shared_ptr<const SkyMap>& map);
     void recordBloom(VkCommandBuffer commandBuffer, const PostFrame& frame,
                      const vulkan::Image& radiance, bool particles);
     void recordMotionTiles(VkCommandBuffer commandBuffer, const PostFrame& frame);
 
     vulkan::Context* m_context;
     vulkan::GraphicsPipeline m_particlePipeline;
+    vulkan::GraphicsPipeline m_starPipeline;
     vulkan::ComputePipeline m_bloomPrefilter;
     vulkan::ComputePipeline m_bloomDown;
     vulkan::ComputePipeline m_bloomUp;
@@ -82,6 +91,8 @@ private:
     vulkan::Image m_neighborBlur;        // ... and its neighborhood's.
     std::array<vulkan::Buffer, kFramesInFlight> m_uniforms;
     std::array<vulkan::Buffer, kFramesInFlight> m_particleBuffers;
+    vulkan::Buffer m_stars;                       // SkyStar[] of m_starSource.
+    std::shared_ptr<const SkyMap> m_starSource;
 };
 
 }  // namespace starcore::gpu

@@ -422,6 +422,16 @@ auto serializeScene(const Scene& scene, const std::filesystem::path& baseDirecto
     out << YAML::Key << "Environment" << YAML::Value << YAML::BeginMap;
     out << YAML::Key << "SkyColor" << YAML::Value
         << YAML::Node(scene.environment().skyColor);
+    if (const SpaceSky& space = scene.environment().space; space != SpaceSky{}) {
+        out << YAML::Key << "Space" << YAML::Value << YAML::BeginMap;
+        out << YAML::Key << "Enabled" << YAML::Value << space.enabled;
+        out << YAML::Key << "Seed" << YAML::Value << space.seed;
+        out << YAML::Key << "Brightness" << YAML::Value << space.brightness;
+        out << YAML::Key << "MilkyWay" << YAML::Value << space.milkyWay;
+        out << YAML::Key << "StarMagnitude" << YAML::Value << space.starMagnitude;
+        out << YAML::Key << "Orientation" << YAML::Value << YAML::Node(space.orientation);
+        out << YAML::EndMap;
+    }
     out << YAML::EndMap;
 
     if (scene.layers() != SceneLayers{}) {
@@ -491,6 +501,15 @@ auto deserializeScene(std::string_view yaml, Scene& scene,
         if (const auto environment = root["Environment"]) {
             scene.environment().skyColor =
                 read(environment["SkyColor"], scene.environment().skyColor);
+            if (const auto space = environment["Space"]) {
+                SpaceSky& s = scene.environment().space;
+                s.enabled = read(space["Enabled"], true);
+                s.seed = read(space["Seed"], s.seed);
+                s.brightness = read(space["Brightness"], s.brightness);
+                s.milkyWay = read(space["MilkyWay"], s.milkyWay);
+                s.starMagnitude = read(space["StarMagnitude"], s.starMagnitude);
+                s.orientation = read(space["Orientation"], s.orientation);
+            }
         }
 
         if (const auto layers = root["Layers"]) {

@@ -11,7 +11,8 @@
 
 uint instanceMask();
 uint lightCount();
-vec3 skyColor();
+vec3 skyRadiance(vec3 direction);  // What escaping rays see (sky.glsl).
+vec3 skyAmbient();                 // Its mean (the preview's ambient light).
 uint maxBounces();
 bool nextEventEnabled();
 float fireflyClamp();  // 0 = off.
@@ -810,8 +811,8 @@ void continuePath(vec3 origin, vec3 direction, uint bounce, uint end, inout Path
     for (; bounce < end; ++bounce) {
         SurfaceHit hit;
         if (!traceClosestHit(origin, direction, instanceMask(), hit)) {
-            path.radiance +=
-                clampContribution(path.throughput * skyColor(), path.scatterings, path.scale);
+            path.radiance += clampContribution(path.throughput * skyRadiance(direction),
+                                               path.scatterings, path.scale);
             return;
         }
         Instance instance = instances[hit.instanceIndex];
@@ -863,8 +864,8 @@ void tracePathFrom(SurfaceHit hit, vec3 direction, uint bounce, uint end, uint f
     for (uint vertex = 0u; bounce < end; ++bounce, ++vertex) {
         if (vertex > 0u) {
             if (!traceClosestHit(origin, direction, instanceMask(), hit)) {
-                path.radiance +=
-                    clampContribution(path.throughput * skyColor(), path.scatterings, path.scale);
+                path.radiance += clampContribution(path.throughput * skyRadiance(direction),
+                                                   path.scatterings, path.scale);
                 if (vertex < 2u) {
                     secondRadiance = path.radiance;
                 }
@@ -940,17 +941,17 @@ vec3 tracePath(vec3 origin, vec3 direction, inout uint rng)
 /** RenderMode::Preview: direct light + ambient + headlight, deterministic. */
 vec3 shadePreview(vec3 origin, vec3 direction)
 {
-    vec3 sky = skyColor();
+    vec3 ambient = skyAmbient();
     vec3 result = vec3(0.0);
     vec3 throughput = vec3(1.0);
     for (int layer = 0; layer < kMaxThinLayers; ++layer) {
         SurfaceHit hit;
         if (!traceClosestHit(origin, direction, instanceMask(), hit)) {
-            return result + throughput * sky;
+            return result + throughput * skyRadiance(direction);
         }
         Material material = materialOf(hit.instanceIndex);
 
-        vec3 irradiance = sky + vec3(kPreviewAmbient) +
+        vec3 irradiance = ambient + vec3(kPreviewAmbient) +
                           vec3(kPreviewHeadlight * max(0.0, -dot(hit.normal, direction)));
         for (uint i = 0u; i < lightCount(); ++i) {
             Light light = lights[i];

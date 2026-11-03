@@ -14,6 +14,7 @@
 #define STARCORE_NO_RAY_QUERY
 #include "hybrid.glsl"
 #include "shadows.glsl"
+#include "sky.glsl"
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -59,7 +60,7 @@ const float kFaintLight = 0.02;
  */
 vec3 irradianceAt(SurfaceHit hit, vec3 direction, float rotation)
 {
-    vec3 irradiance = frameData.skyColor.rgb + vec3(kPreviewAmbient) +
+    vec3 irradiance = skyAmbientOf(frameData.sky.xy) + vec3(kPreviewAmbient) +
                       vec3(kPreviewHeadlight * max(0.0, -dot(hit.normal, direction)));
     uint count = frameData.options.z;
     vec3 unshadowed = irradiance;
@@ -118,7 +119,7 @@ void main()
     float rotation =
         kTwoPi * fract(52.9829189 * fract(dot(vec2(pixel), vec2(0.06711056, 0.00583715))) +
                        0.618034 * float(frameData.frame.x));
-    vec3 radiance = frameData.skyColor.rgb;
+    vec3 radiance = skyRadianceOf(frameData.sky.xy, direction);
     uint entityId = kNoEntityId;
     if (hasPrimary) {
         Material material = materialOf(primary.instanceIndex);

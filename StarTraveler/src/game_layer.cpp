@@ -969,7 +969,55 @@ void GameLayer::drawRenderPanel()
                      settings.fireflyClamp > 0.0F ? "%.1f" : "off");
     enumCombo("Tone mapper", settings.toneMapper);
     ImGui::Checkbox("sRGB output", &settings.srgbOutput);
-    if (color3Edit("Sky", m_scene.environment().skyColor)) {
+    bool skyChanged = color3Edit("Sky", m_scene.environment().skyColor);
+    // A space sky: brightness and orientation apply at once; seed, Milky Way and stars
+    // generate it anew (a fraction of a second) once edited.
+    SpaceSky& space = m_scene.environment().space;
+    skyChanged |= ImGui::Checkbox("Space sky", &space.enabled);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Black space with the Milky Way and stars, generated from a seed "
+                          "(the sky color adds to it)");
+    }
+    if (space.enabled) {
+        skyChanged |= ImGui::SliderFloat("Sky brightness", &space.brightness, 0.01F, 16.0F,
+                                         "%.2f", ImGuiSliderFlags_Logarithmic);
+        skyChanged |= ImGui::DragFloat3("Galaxy orientation", &space.orientation.x, 0.5F,
+                                        -360.0F, 360.0F, "%.1f");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Euler angles (degrees) of the galaxy: unrotated, its center is "
+                              "towards +X and its band lies in the XZ plane");
+        }
+        if (!m_skyEditing) {
+            m_skyEdit = space;
+        }
+        bool active = false;
+        bool edited = false;
+        auto track = [&] {
+            active |= ImGui::IsItemActive();
+            edited |= ImGui::IsItemDeactivatedAfterEdit();
+        };
+        int seed = static_cast<int>(m_skyEdit.seed);
+        if (ImGui::InputInt("Sky seed", &seed, 1, 10, ImGuiInputTextFlags_EnterReturnsTrue)) {
+            m_skyEdit.seed = static_cast<std::uint32_t>(std::max(seed, 0));
+            edited = true;
+        }
+        ImGui::SliderFloat("Milky Way", &m_skyEdit.milkyWay, 0.0F, 4.0F, "%.2f");
+        track();
+        ImGui::SliderFloat("Faintest stars", &m_skyEdit.starMagnitude, 2.0F, 10.0F, "mag %.1f");
+        track();
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Stars down to this magnitude are points (one more: some 2.8 "
+                              "times as many); fainter ones are part of the sky's glow");
+        }
+        m_skyEditing = active;
+        if (edited) {
+            space.seed = m_skyEdit.seed;
+            space.milkyWay = m_skyEdit.milkyWay;
+            space.starMagnitude = m_skyEdit.starMagnitude;
+            skyChanged = true;
+        }
+    }
+    if (skyChanged) {
         m_scene.markDirty();
     }
 

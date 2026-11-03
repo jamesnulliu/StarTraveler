@@ -18,7 +18,7 @@ layout(set = 0, binding = 1, std140) uniform FrameUniforms
     vec4 previousForward;
     vec4 previousRight;
     vec4 previousUp;
-    vec4 skyColor;
+    uvec4 sky;       // xy: address of the scene's sky record (sky.glsl)
     vec4 viewport;   // xy: size in pixels, zw: sample position in the pixel ([0, 1), jitter)
     vec4 previousJitter;  // xy: the sample position of the previous frame
     uvec4 frame;     // random stream index, seed, samples per pixel, max bounces

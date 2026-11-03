@@ -11,6 +11,7 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -71,6 +72,21 @@ struct LightRecord
     Vec4 objectToWorld[3];  // Rows.
 };
 static_assert(sizeof(LightRecord) == 96, "std430 layout of Light in scene.glsl");
+
+/**
+ * @brief The sky as the shaders look it up (`SkyRecord` in sky.glsl): RenderScene's
+ *        skyColor and space sky.
+ */
+struct SkyRecord
+{
+    Vec4 color{0.0F};          // rgb: constant radiance; w: the map's brightness.
+    Vec4 ambient{0.0F};        // rgb: mean radiance over all directions (skyAmbient).
+    Vec4 galactic[3] = {};     // Rows of the rotation from world to galactic directions.
+    std::uint64_t map = 0;     // Buffer device address of the map's texels (0: none).
+    std::uint32_t width = 0;   // Of the map.
+    std::uint32_t height = 0;
+};
+static_assert(sizeof(SkyRecord) == 96, "std430 layout of SkyRecord in sky.glsl");
 
 /** @brief An acceleration structure and the buffer holding it. */
 struct AccelerationStructure
@@ -148,6 +164,11 @@ public:
     {
         return m_previousTransforms.handle();
     }
+    /** @brief Buffer device address of the sky's SkyRecord (sky.glsl). */
+    [[nodiscard]] auto skyAddress() const noexcept -> VkDeviceAddress
+    {
+        return m_skyRecordAddress;
+    }
     /** @brief Meshes on the GPU (cached across updates). */
     [[nodiscard]] auto meshCount() const noexcept -> std::size_t
     {
@@ -209,6 +230,11 @@ private:
     std::size_t m_lightTriangleCapacity = 0;
     std::uint32_t m_lightCount = 0;
 
+    vulkan::Buffer m_skyRecord;  // SkyRecord.
+    VkDeviceAddress m_skyRecordAddress = 0;
+    vulkan::Buffer m_skyMap;                      // The space sky's texels.
+    std::shared_ptr<const SkyMap> m_skyMapSource;  // What it holds.
+
     AccelerationStructure m_tlas;
     std::uint32_t m_tlasCapacity = 0;  // Instances the TLAS storage fits.
     vulkan::Buffer m_tlasScratch;
@@ -221,6 +247,7 @@ private:
     std::uint64_t m_version = 0;
     std::uint64_t m_contentVersion = 0;
     std::uint64_t m_lightsVersion = 0;
+    std::uint64_t m_skyVersion = 0;
     std::uint32_t m_uploadedInstances = 0;
 };
 

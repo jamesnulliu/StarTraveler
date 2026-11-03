@@ -9,6 +9,7 @@
 
 #include "hybrid.glsl"
 #include "path.glsl"
+#include "sky.glsl"
 
 uint instanceMask()
 {
@@ -20,9 +21,14 @@ uint lightCount()
     return frameData.options.z;
 }
 
-vec3 skyColor()
+vec3 skyRadiance(vec3 direction)
 {
-    return frameData.skyColor.rgb;
+    return skyRadianceOf(frameData.sky.xy, direction);
+}
+
+vec3 skyAmbient()
+{
+    return skyAmbientOf(frameData.sky.xy);
 }
 
 uint maxBounces()

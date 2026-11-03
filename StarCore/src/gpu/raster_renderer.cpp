@@ -56,7 +56,7 @@ void RasterRenderer::record(VkCommandBuffer commandBuffer, const RasterFrame& fr
     cameraBasis(*frame.previousCamera, uniforms.previousPosition, uniforms.previousForward,
                 uniforms.previousRight, uniforms.previousUp);
     uniforms.cameraPosition.w = kNearPlane;
-    uniforms.skyColor = Vec4(frame.scene->skyColor, 0.0F);
+    splitAddress(scene.skyAddress(), uniforms.sky[0], uniforms.sky[1]);
     // A frame on its own samples pixel centers; averaged ones spread over the pixel.
     // Upscaled: every frame on its own, each at its own sample position.
     const bool alone = frame.jittered || frame.accumulated == 0;

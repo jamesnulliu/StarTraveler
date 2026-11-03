@@ -21,6 +21,7 @@
 #include <starcore/gpu/gpu_renderer.hpp>
 #include <starcore/math/color.hpp>
 #include <starcore/render/path_tracer.hpp>
+#include <starcore/render/sky.hpp>
 #include <starcore/scene/entity.hpp>
 #include <starcore/scene/layers.hpp>
 #include <starcore/vulkan/context.hpp>
@@ -416,6 +417,49 @@ TEST_CASE("GPU: path tracing converges to the CPU image", "[gpu]")
         renderScene = buildRenderScene(test.scene);
         REQUIRE(renderScene.lights.size() == 4);
         compare(PathTracerSettings{.samplesPerPixel = 4, .seed = 7}, 64, 12.0F, 2.0F);
+    }
+}
+
+TEST_CASE("GPU: a space sky, as the CPU sees it", "[gpu]")
+{
+    const GpuTest gpu;
+    // A white ball lit by the Milky Way, whose band crosses the view at a slant.
+    Scene scene;
+    scene.environment().skyColor = Vec3(0.0F);
+    scene.environment().space = SpaceSky{
+        .enabled = true, .seed = 3, .brightness = 25.0F, .orientation = {0.0F, 0.0F, 70.0F}};
+    Entity ball = scene.createEntity("Ball");
+    ball.add<SphereComponent>(2.5F);
+    ball.add<MaterialComponent>(MaterialComponent{.albedo = Vec3(0.8F)});
+    const RenderScene renderScene = buildRenderScene(scene);
+    REQUIRE(renderScene.sky.map != nullptr);
+    constexpr std::uint32_t kWidth = 64;
+    constexpr std::uint32_t kHeight = 48;
+    const Camera camera = makeCamera(kWidth, kHeight);
+
+    auto compare = [&](const PathTracerSettings& settings, std::uint32_t frames) {
+        CpuPathTracer cpu;
+        cpu.resize(kWidth, kHeight);
+        auto tracer = gpu.makeRenderer(kWidth, kHeight);
+        for (std::uint32_t i = 0; i < frames; ++i) {
+            cpu.render(renderScene, camera, settings);
+            tracer->render(renderScene, camera, settings);
+        }
+        const ColorImage image = tracer->readImage();
+        const BlockDifference difference = blockDifference(image, cpu.image());
+        INFO("worst block " << difference.worst << ", mean " << difference.mean
+                            << "; mean linear " << meanLinear(cpu.image()));
+        CHECK(difference.worst < 3.0F);
+        CHECK(difference.mean < 0.5F);
+        CHECK(meanLinear(cpu.image()) > 0.02);  // The band and the ball it lights are seen.
+    };
+    SECTION("path traced")
+    {
+        compare(PathTracerSettings{.samplesPerPixel = 4, .seed = 5}, 16);
+    }
+    SECTION("preview (the sky's mean light as the ambient)")
+    {
+        compare(PathTracerSettings{.mode = RenderMode::Preview}, 4);
     }
 }
 
@@ -2353,6 +2397,102 @@ TEST_CASE("GPU effects: particles glow, hide behind surfaces and streak", "[gpu]
     const std::size_t streak = countPixels(render(moving, blurred), 0);
     INFO("lit pixels: still " << dot << ", moving " << streak);
     CHECK(streak > 3 * dot);
+}
+
+TEST_CASE("GPU effects: a space sky's stars are points, hidden by surfaces", "[gpu][effects]")
+{
+    const GpuTest gpu(false);
+    constexpr std::uint32_t kWidth = 160;
+    constexpr std::uint32_t kHeight = 120;
+    Scene scene;
+    scene.environment().skyColor = Vec3(0.0F);
+    scene.environment().space = SpaceSky{
+        .enabled = true, .seed = 2, .starMagnitude = 4.0F, .orientation = {90.0F, 0.0F, 0.0F}};
+    const RenderScene renderScene = buildRenderScene(scene);
+    REQUIRE(renderScene.sky.map != nullptr);
+    const Mat3 galacticToWorld = glm::transpose(renderScene.sky.worldToGalactic);
+    // A star of magnitude 2 or a little fainter (not clipped), away from the Milky Way, looked
+    // at through a narrow view (pixels about as wide as the map's texels, as in the game).
+    const auto& stars = renderScene.sky.map->stars;
+    const auto star = std::ranges::find_if(stars, [&](const SkyStar& candidate) {
+        return candidate.magnitude >= 2.0F && std::abs(candidate.direction.y) > 0.3F &&
+               std::abs((galacticToWorld * candidate.direction).y) < 0.7F;
+    });
+    REQUIRE(star != stars.end());
+    const Vec3 direction = galacticToWorld * star->direction;
+    Camera camera = makeCamera(kWidth, kHeight);
+    camera.setVerticalFov(10.0F);
+    camera.lookAt(camera.position() + direction);
+    auto render = [&](const RenderScene& view) {
+        auto renderer = gpu.makeRenderer(kWidth, kHeight);
+        renderer->render(view, camera, {}, kRaster);
+        return linearLuminance(renderer->readImage());
+    };
+    // Its light in the 8x8 pixels around the view's center (a pixel corner), over the
+    // light around them.
+    struct Spot
+    {
+        float peak = 0.0F;  // Over the background.
+        float sum = 0.0F;
+        float background = 0.0F;
+    };
+    auto spot = [&](const std::vector<float>& luminance) {
+        auto at = [&](std::uint32_t x, std::uint32_t y) { return luminance[y * kWidth + x]; };
+        std::vector<float> ring;
+        for (std::uint32_t y = kHeight / 2 - 8; y < kHeight / 2 + 8; ++y) {
+            for (std::uint32_t x = kWidth / 2 - 8; x < kWidth / 2 + 8; ++x) {
+                // Twice the distance of the pixel's center from the view's center.
+                const auto dx = std::abs(static_cast<int>(2 * x + 1) - static_cast<int>(kWidth));
+                const auto dy = std::abs(static_cast<int>(2 * y + 1) - static_cast<int>(kHeight));
+                if (std::max(dx, dy) >= 13) {  // 6 pixels and more from the center.
+                    ring.push_back(at(x, y));
+                }
+            }
+        }
+        std::ranges::nth_element(ring, ring.begin() + static_cast<std::ptrdiff_t>(ring.size() / 2));
+        Spot result{.background = ring[ring.size() / 2]};
+        for (std::uint32_t y = kHeight / 2 - 4; y < kHeight / 2 + 4; ++y) {
+            for (std::uint32_t x = kWidth / 2 - 4; x < kWidth / 2 + 4; ++x) {
+                result.peak = std::max(result.peak, at(x, y) - result.background);
+                result.sum += at(x, y) - result.background;
+            }
+        }
+        return result;
+    };
+    const std::vector<float> image = render(renderScene);
+    const Spot seen = spot(image);
+    // The flux over a pixel's solid angle, summed over its pixels.
+    const float side = 2.0F * std::tan(glm::radians(camera.verticalFov()) / 2.0F) / kHeight;
+    const float expected = star->flux * scene.environment().space.brightness / (side * side);
+    INFO("magnitude " << star->magnitude << ": peak " << seen.peak << ", sum " << seen.sum
+                      << " (expected " << expected << ") over " << seen.background);
+    CHECK(seen.peak > 0.05F);
+    CHECK(seen.peak < 1.0F);  // Not clipped, or the sum would be short.
+    CHECK(seen.sum == Catch::Approx(expected).epsilon(0.15));
+    // A point: its light in the four pixels around the corner it falls on.
+    std::size_t lit = 0;
+    for (std::uint32_t y = kHeight / 2 - 6; y < kHeight / 2 + 6; ++y) {
+        for (std::uint32_t x = kWidth / 2 - 6; x < kWidth / 2 + 6; ++x) {
+            lit += image[y * kWidth + x] - seen.background > 0.1F * seen.peak ? 1 : 0;
+        }
+    }
+    CHECK(lit <= 6);
+
+    // A black ball in front of it hides it.
+    Scene hidden;
+    hidden.environment() = scene.environment();
+    Entity ball = hidden.createEntity("Ball");
+    ball.get<TransformComponent>().translation = camera.position() + direction * 5.0F;
+    ball.add<SphereComponent>(0.06F);  // Some 8 pixels in radius.
+    ball.add<MaterialComponent>(MaterialComponent{.albedo = Vec3(0.0F)});
+    const std::vector<float> covered = render(buildRenderScene(hidden));
+    float coveredPeak = 0.0F;
+    for (std::uint32_t y = kHeight / 2 - 4; y < kHeight / 2 + 4; ++y) {
+        for (std::uint32_t x = kWidth / 2 - 4; x < kWidth / 2 + 4; ++x) {
+            coveredPeak = std::max(coveredPeak, covered[y * kWidth + x]);
+        }
+    }
+    CHECK(coveredPeak < 0.1F * seen.peak);
 }
 
 namespace

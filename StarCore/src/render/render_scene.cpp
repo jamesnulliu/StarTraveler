@@ -191,10 +191,20 @@ auto RenderSceneBuilder::update(const Scene& scene) -> const RenderScene&
         }
     }
 
-    if (scene.environment().skyColor != m_scene.skyColor) {
-        m_scene.skyColor = scene.environment().skyColor;
+    const SceneEnvironment& environment = scene.environment();
+    RenderSky sky;
+    if (environment.space.enabled) {
+        // Shared with the last update's while what it is made of is the same.
+        sky.map = generateSkyMap(environment.space);
+        sky.worldToGalactic = worldToGalactic(environment.space);
+        sky.brightness = environment.space.brightness;
+    }
+    if (environment.skyColor != m_scene.skyColor || sky != m_scene.sky) {
+        m_scene.skyColor = environment.skyColor;
+        m_scene.sky = std::move(sky);
         update.changed = true;
         update.contentChanged = true;
+        m_scene.skyVersion = update.stampNow();
     }
     if (update.lightsChanged) {
         syncLights(update);
@@ -422,6 +432,22 @@ auto buildRenderScene(const Scene& scene) -> RenderScene
     builder.update(scene);
     builder.updateTlas();
     return builder.take();
+}
+
+auto skyRadiance(const RenderScene& scene, Vec3 direction) -> Vec3
+{
+    if (!scene.sky.map) {
+        return scene.skyColor;
+    }
+    return scene.skyColor +
+           scene.sky.map->radiance(glm::normalize(scene.sky.worldToGalactic * direction)) *
+               scene.sky.brightness;
+}
+
+auto skyAmbient(const RenderScene& scene) -> Vec3
+{
+    return scene.sky.map ? scene.skyColor + scene.sky.map->meanRadiance * scene.sky.brightness
+                         : scene.skyColor;
 }
 
 // Queries ---------------------------------------------------------------------------------------------

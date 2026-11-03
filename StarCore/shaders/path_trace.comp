@@ -7,6 +7,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "path.glsl"
+#include "sky.glsl"
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
@@ -27,7 +28,7 @@ layout(push_constant) uniform Params
     vec4 cameraForward;   // w: firefly clamp (0 = off)
     vec4 cameraRight;     // right * aspect * tan(fov / 2)
     vec4 cameraUp;        // up * tan(fov / 2)
-    vec4 skyColor;
+    uvec4 sky;      // xy: address of the scene's sky record (sky.glsl)
     uvec4 frame;    // frame index, seed, samples per pixel, max bounces
     uvec4 options;  // flags, instance mask, light count, -
 }
@@ -43,9 +44,14 @@ uint lightCount()
     return params.options.z;
 }
 
-vec3 skyColor()
+vec3 skyRadiance(vec3 direction)
 {
-    return params.skyColor.rgb;
+    return skyRadianceOf(params.sky.xy, direction);
+}
+
+vec3 skyAmbient()
+{
+    return skyAmbientOf(params.sky.xy);
 }
 
 uint maxBounces()

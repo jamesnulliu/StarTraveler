@@ -19,6 +19,7 @@
 // changed since its last upload.
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <unordered_map>
 #include <utility>
@@ -28,6 +29,7 @@
 #include "starcore/math/bvh.hpp"
 #include "starcore/math/geometry.hpp"
 #include "starcore/math/types.hpp"
+#include "starcore/render/sky.hpp"
 
 namespace starcore
 {
@@ -149,6 +151,16 @@ private:
     std::uint64_t m_value;
 };
 
+/** @brief A space sky (SpaceSky) as the renderers look it up. */
+struct RenderSky
+{
+    std::shared_ptr<const SkyMap> map;  // Null: none (the sky is RenderScene::skyColor).
+    Mat3 worldToGalactic{1.0F};
+    float brightness = 1.0F;
+
+    auto operator==(const RenderSky&) const -> bool = default;
+};
+
 struct RenderScene
 {
     // Slot 0 is the unit sphere; each mesh in use has one slot (freed slots
@@ -166,7 +178,9 @@ struct RenderScene
     std::vector<float> lightTriangleCdf;
     // Per instance: index into `lights`, or -1.
     std::vector<std::int32_t> lightOfInstance;
+    // What rays that escape the scene see (skyRadiance): this, plus the space sky's map.
     Vec3 skyColor{0.0F};
+    RenderSky sky;
 
     // Change tracking (RenderSceneBuilder): stamps of nextRenderStamp(), 0
     // for never. Equal stamps mean equal data, also across copies.
@@ -174,6 +188,7 @@ struct RenderScene
     std::uint64_t version = 0;         // Last change of anything traced.
     std::uint64_t contentVersion = 0;  // Of anything but the instances' transforms.
     std::uint64_t lightsVersion = 0;   // Of `lights`.
+    std::uint64_t skyVersion = 0;      // Of skyColor and sky.
     std::vector<std::uint64_t> instanceVersions;  // Per instance: its last change.
 
     // The CPU's TLAS over instances[i].worldBounds, as of tlasVersion (~0:
@@ -252,6 +267,12 @@ private:
  *        RenderSceneBuilder to follow a changing scene).
  */
 [[nodiscard]] auto buildRenderScene(const Scene& scene) -> RenderScene;
+
+/** @brief Radiance of the sky towards a (unit) direction: what rays escaping the scene see. */
+[[nodiscard]] auto skyRadiance(const RenderScene& scene, Vec3 direction) -> Vec3;
+
+/** @brief The sky's mean radiance over all directions (the preview's ambient light). */
+[[nodiscard]] auto skyAmbient(const RenderScene& scene) -> Vec3;
 
 struct SurfaceHit
 {

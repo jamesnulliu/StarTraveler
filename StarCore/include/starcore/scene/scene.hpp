@@ -17,10 +17,36 @@ namespace starcore
 
 class Entity;
 
+/**
+ * @brief The sky of a scene in space: black, but for the Milky Way and stars, generated
+ *        from a seed (see starcore/render/sky.hpp). Real space has no ambient light: the
+ *        sky's light is faint, a band of the galaxy's stars and dust around the whole sky,
+ *        and points of very different brightness, crowding towards the band.
+ */
+struct SpaceSky
+{
+    bool enabled = false;
+    std::uint32_t seed = 1;
+    // Of all of the sky's light (the stars and the Milky Way).
+    float brightness = 1.0F;
+    // Of the Milky Way's diffuse light, next to the stars.
+    float milkyWay = 1.0F;
+    // The faintest stars drawn as points (apparent magnitude; one more is some 2.8 times
+    // as many stars). Fainter ones are part of the sky's diffuse light.
+    float starMagnitude = 8.0F;
+    // Euler angles (degrees, as transforms) of the galactic frame in the world: unrotated,
+    // the galactic center is towards +x and the band lies in the xz plane.
+    Vec3 orientation{0.0F};
+
+    auto operator==(const SpaceSky&) const -> bool = default;
+};
+
 struct SceneEnvironment
 {
-    // Radiance returned by rays that escape the scene (legacy default).
+    // Radiance returned by rays that escape the scene (legacy default); with a space sky,
+    // added to it.
     Vec3 skyColor{10.0F / 255.0F, 0.0F, 60.0F / 255.0F};
+    SpaceSky space;
 };
 
 /**

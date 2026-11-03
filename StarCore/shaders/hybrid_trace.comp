@@ -487,7 +487,7 @@ void primaryThroughPanes(bool hasPrimary, SurfaceHit primary, Material surface, 
         albedo = transmittance * surface.albedo.rgb;
         emission += transmittance * surface.emission.rgb;
     } else {
-        emission += transmittance * skyColor();
+        emission += transmittance * skyRadiance(direction);
     }
 }
 
@@ -668,8 +668,8 @@ void updateCache(ivec2 block)
     uint recorded = 0u;
     for (uint bounce = 0u; bounce < maxBounces(); ++bounce) {
         if (bounce > 0u && !traceClosestHit(origin, direction, instanceMask(), hit)) {
-            path.radiance +=
-                clampContribution(path.throughput * skyColor(), path.scatterings, path.scale);
+            path.radiance += clampContribution(path.throughput * skyRadiance(direction),
+                                               path.scatterings, path.scale);
             break;
         }
         Instance instance = instances[hit.instanceIndex];

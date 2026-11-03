@@ -566,7 +566,7 @@ auto tracePath(const RenderScene& scene, Ray ray, const PathTracerSettings& sett
     for (std::uint32_t bounce = 0; bounce < settings.maxBounces; ++bounce) {
         const auto hit = traceClosestHit(scene, ray, 0.0F, kInfinity, settings.instanceMask);
         if (!hit.has_value()) {
-            add(throughput * scene.skyColor, scatterings);
+            add(throughput * skyRadiance(scene, ray.direction), scatterings);
             break;
         }
         const RenderMaterial& material =
@@ -642,17 +642,18 @@ auto shadePreview(const RenderScene& scene, Ray ray, const PathTracerSettings& s
     }
     Vec3 result{0.0F};
     Vec3 throughput{1.0F};
+    const Vec3 ambient = skyAmbient(scene);
     for (int layer = 0; layer < kMaxThinLayers; ++layer) {
         const auto hit = traceClosestHit(scene, ray, 0.0F, kInfinity, settings.instanceMask);
         if (!hit.has_value()) {
-            return result + throughput * scene.skyColor;
+            return result + throughput * skyRadiance(scene, ray.direction);
         }
         const RenderMaterial& material =
             scene.materials[scene.instances[hit->instanceIndex].materialIndex];
 
         // Diffuse response to: the sky (ambient), a headlight and the sphere
         // lights (exact irradiance of a sphere above the horizon, shadowed).
-        Vec3 irradiance = scene.skyColor + Vec3(kAmbient) +
+        Vec3 irradiance = ambient + Vec3(kAmbient) +
                           Vec3(kHeadlight * std::max(0.0F, -glm::dot(hit->normal, ray.direction)));
         for (const RenderLight& light : scene.lights) {
             if (light.triangleCount > 0) {

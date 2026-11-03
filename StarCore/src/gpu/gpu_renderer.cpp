@@ -50,7 +50,7 @@ struct PathTraceParams
     Vec4 cameraForward;  // w: firefly clamp
     Vec4 cameraRight;    // right * aspect * tan(fov / 2)
     Vec4 cameraUp;       // up * tan(fov / 2)
-    Vec4 skyColor;
+    std::uint32_t sky[4];      // xy: address of the scene's sky record
     std::uint32_t frame[4];    // frame index, seed, samples per pixel, max bounces
     std::uint32_t options[4];  // flags, instance mask, light count, -
 };
@@ -394,8 +394,7 @@ auto GpuRenderer::needsReset(const RenderScene& scene, const Camera& camera,
 }
 
 void GpuRenderer::recordPathTracing(VkCommandBuffer commandBuffer, std::uint32_t slotIndex,
-                                    const RenderScene& scene, const Camera& camera,
-                                    const PathTracerSettings& settings)
+                                    const Camera& camera, const PathTracerSettings& settings)
 {
     // Camera rays: forward + right * ndcX + up * ndcY (Camera::generateRay).
     const float tanHalfFov = std::tan(glm::radians(camera.verticalFov()) * 0.5F);
@@ -409,15 +408,16 @@ void GpuRenderer::recordPathTracing(VkCommandBuffer commandBuffer, std::uint32_t
     if (m_frameIndex == 0) {
         flags |= kFlagWriteIds;
     }
-    const PathTraceParams params{
+    PathTraceParams params{
         .cameraPosition = Vec4(camera.position(), 0.0F),
         .cameraForward = Vec4(camera.forward(), settings.fireflyClamp),
         .cameraRight = Vec4(camera.right() * (camera.aspectRatio() * tanHalfFov), 0.0F),
         .cameraUp = Vec4(camera.up() * tanHalfFov, 0.0F),
-        .skyColor = Vec4(scene.skyColor, 0.0F),
+        .sky = {},
         .frame = {m_frameIndex, settings.seed, settings.samplesPerPixel, settings.maxBounces},
         .options = {flags, settings.instanceMask & kAllInstances, m_scene.lightCount(), 0U},
     };
+    gpu::splitAddress(m_scene.skyAddress(), params.sky[0], params.sky[1]);
 
     vulkan::DescriptorWrites writes;
     writes.accelerationStructure(0, m_scene.tlas())
@@ -593,12 +593,13 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
         .settings = settings,
         .effects = options.effects,
         .particles = particles,
+        .sky = &scene.sky,
         .renderScale = Vec2(renderSize) / Vec2(outputSize),
         .frameSlot = slotIndex,
     };
     switch (pipeline) {
     case GpuPipeline::PathTracing:
-        recordPathTracing(commandBuffer, slotIndex, scene, camera, settings);
+        recordPathTracing(commandBuffer, slotIndex, camera, settings);
         break;
     case GpuPipeline::Hybrid: {
         const gpu::HybridFrame frame{
@@ -627,6 +628,7 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
             post.raw = rawView(options.view);
             post.effects = {};
             post.particles = {};
+            post.sky = nullptr;
         }
         break;
     }

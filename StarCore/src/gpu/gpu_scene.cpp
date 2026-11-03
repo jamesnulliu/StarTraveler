@@ -158,6 +158,12 @@ GpuScene::GpuScene(vulkan::Context& context)
     if (m_rayTracing) {
         buildSphereBlas();
     }
+    // Written by every update of another render scene (or of the sky).
+    m_skyRecord = Buffer(*m_context, sizeof(SkyRecord),
+                         VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                             VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                         MemoryUsage::DeviceLocal);
+    m_skyRecordAddress = m_skyRecord.deviceAddress();
 }
 
 GpuScene::~GpuScene()
@@ -489,8 +495,36 @@ void GpuScene::update(const RenderScene& scene, VkCommandBuffer commandBuffer,
         }
     }
 
+    // The sky: its map when it is another one (uploaded right away: once per sky), its
+    // record with the rest.
+    std::vector<SkyRecord> skyRecords;
+    if (full || scene.skyVersion != m_skyVersion) {
+        if (scene.sky.map != m_skyMapSource) {
+            if (m_skyMap.isValid()) {
+                retire(std::move(m_skyMap), VK_NULL_HANDLE);
+            }
+            m_skyMapSource = scene.sky.map;
+            if (m_skyMapSource && !m_skyMapSource->texels.empty()) {
+                m_skyMap = vulkan::createDeviceBuffer(*m_context, bytesOf(m_skyMapSource->texels),
+                                                      kMeshUsage);
+            }
+        }
+        SkyRecord& record = skyRecords.emplace_back();
+        record.color = Vec4(scene.skyColor, scene.sky.brightness);
+        record.ambient = Vec4(skyAmbient(scene), 0.0F);
+        const Mat3& rotation = scene.sky.worldToGalactic;
+        for (int row = 0; row < 3; ++row) {
+            record.galactic[row] = Vec4(rotation[0][row], rotation[1][row], rotation[2][row], 0.0F);
+        }
+        if (m_skyMap.isValid()) {
+            record.map = m_skyMap.deviceAddress();
+            record.width = m_skyMapSource->width;
+            record.height = m_skyMapSource->height;
+        }
+    }
+
     // Staging: the changed instances' records, materials, transforms and TLAS
-    // instances, then the lights.
+    // instances, then the lights and the sky.
     std::vector<InstanceRecord> records;
     std::vector<RenderMaterial> materials;
     std::vector<InstanceTransformRecord> transforms;
@@ -545,12 +579,14 @@ void GpuScene::update(const RenderScene& scene, VkCommandBuffer commandBuffer,
     const auto lightBytes = bytesOf(lightRecords);
     const auto cdfBytes =
         uploadLights ? bytesOf(scene.lightTriangleCdf) : std::span<const std::byte>();
+    const auto skyBytes = bytesOf(skyRecords);
     const VkDeviceSize materialOffset = alignUp(recordBytes.size(), 256);
     const VkDeviceSize transformOffset = materialOffset + alignUp(materialBytes.size(), 256);
     const VkDeviceSize tlasInstanceOffset = transformOffset + alignUp(transformBytes.size(), 256);
     const VkDeviceSize lightOffset = tlasInstanceOffset + alignUp(tlasInstanceBytes.size(), 256);
     const VkDeviceSize cdfOffset = lightOffset + alignUp(lightBytes.size(), 256);
-    const VkDeviceSize stagingSize = cdfOffset + cdfBytes.size();
+    const VkDeviceSize skyOffset = cdfOffset + alignUp(cdfBytes.size(), 256);
+    const VkDeviceSize stagingSize = skyOffset + skyBytes.size();
     if (stagingSize > 0) {
         Buffer& staging = m_staging[frameSlot];
         if (!staging.isValid() || staging.size() < stagingSize) {
@@ -564,6 +600,7 @@ void GpuScene::update(const RenderScene& scene, VkCommandBuffer commandBuffer,
         staging.write(tlasInstanceBytes, tlasInstanceOffset);
         staging.write(lightBytes, lightOffset);
         staging.write(cdfBytes, cdfOffset);
+        staging.write(skyBytes, skyOffset);
 
         // One copy command per buffer, one region per run.
         std::vector<VkBufferCopy> regions;
@@ -597,6 +634,10 @@ void GpuScene::update(const RenderScene& scene, VkCommandBuffer commandBuffer,
             vkCmdCopyBuffer(commandBuffer, staging.handle(), m_lightTriangleCdf.handle(), 1,
                             &region);
         }
+        if (!skyBytes.empty()) {
+            const VkBufferCopy region{skyOffset, 0, skyBytes.size()};
+            vkCmdCopyBuffer(commandBuffer, staging.handle(), m_skyRecord.handle(), 1, &region);
+        }
     }
     m_lightCount = lightCount;
 
@@ -611,6 +652,7 @@ void GpuScene::update(const RenderScene& scene, VkCommandBuffer commandBuffer,
     m_version = scene.version;
     m_contentVersion = scene.contentVersion;
     m_lightsVersion = scene.lightsVersion;
+    m_skyVersion = scene.skyVersion;
 }
 
 void GpuScene::recordTlasBuild(VkCommandBuffer commandBuffer, std::uint32_t instanceCount)

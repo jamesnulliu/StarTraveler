@@ -27,7 +27,7 @@ struct FrameUniforms
     Vec4 previousForward;
     Vec4 previousRight;
     Vec4 previousUp;
-    Vec4 skyColor;
+    std::uint32_t sky[4];        // xy: address of the scene's sky record (GpuScene::skyAddress)
     Vec4 viewport;               // xy: size, zw: sample position in the pixel (jitter)
     Vec4 previousJitter;         // xy: the previous frame's
     std::uint32_t frame[4];      // random stream index, seed, samples per pixel, max bounces
@@ -57,6 +57,13 @@ inline constexpr float kNearPlane = 0.01F;          // Of the visibility pass (r
 
 /** @brief Camera rays: forward + right * ndcX + up * ndcY (Camera::generateRay). */
 void cameraBasis(const Camera& camera, Vec4& position, Vec4& forward, Vec4& right, Vec4& up);
+
+/** @brief A buffer device address as two uints (GL_EXT_buffer_reference_uvec2). */
+inline void splitAddress(std::uint64_t address, std::uint32_t& low, std::uint32_t& high)
+{
+    low = static_cast<std::uint32_t>(address);
+    high = static_cast<std::uint32_t>(address >> 32U);
+}
 
 /** @brief Sample position in the pixel of a frame (Halton 2, 3: low discrepancy over frames). */
 [[nodiscard]] auto jitter(std::uint32_t frameIndex) -> Vec2;

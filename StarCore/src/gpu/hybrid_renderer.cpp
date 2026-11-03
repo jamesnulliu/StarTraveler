@@ -402,7 +402,7 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
     uniforms.cameraPosition.w = kNearPlane;
     uniforms.cameraForward.w = settings.fireflyClamp;
     uniforms.cameraRight.w = settings.exposure;
-    uniforms.skyColor = Vec4(renderScene.skyColor, 0.0F);
+    splitAddress(scene.skyAddress(), uniforms.sky[0], uniforms.sky[1]);
     uniforms.viewport = Vec4(static_cast<float>(width), static_cast<float>(height),
                              jitter(frame.frameIndex));
     uniforms.previousJitter = Vec4(jitter(frame.frameIndex - 1), 0.0F, 0.0F);

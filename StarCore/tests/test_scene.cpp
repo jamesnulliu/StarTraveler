@@ -122,6 +122,12 @@ TEST_CASE("Scene YAML round-trip", "[scene][serializer]")
 {
     Scene scene;
     scene.environment().skyColor = {0.1F, 0.2F, 0.3F};
+    scene.environment().space = SpaceSky{.enabled = true,
+                                         .seed = 42,
+                                         .brightness = 0.5F,
+                                         .milkyWay = 1.5F,
+                                         .starMagnitude = 7.0F,
+                                         .orientation = {10.0F, 20.0F, 30.0F}};
 
     Entity ball = scene.createEntity("Ball");
     ball.get<TransformComponent>().translation = {1.0F, 2.0F, 3.0F};
@@ -154,6 +160,10 @@ TEST_CASE("Scene YAML round-trip", "[scene][serializer]")
     REQUIRE(deserializeScene(yaml, loaded).has_value());
     REQUIRE(loaded.entityCount() == 4);
     REQUIRE(loaded.environment().skyColor == scene.environment().skyColor);
+    REQUIRE(loaded.environment().space == scene.environment().space);
+    // Without a space sky the file has none (and loads without one).
+    Scene plain;
+    REQUIRE(serializeScene(plain).find("Space") == std::string::npos);
 
     Entity ball2 = loaded.findEntity(ball.uuid());
     REQUIRE(ball2.name() == "Ball");

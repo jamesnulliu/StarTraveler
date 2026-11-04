@@ -1567,6 +1567,35 @@ void GameLayer::drawInspectorPanel()
             entity.remove<ParticleEmitterComponent>();
         }
     }
+    if (auto* planet = entity.tryGet<PlanetComponent>()) {
+        const auto [open, remove] = componentHeader("Planet", true);
+        if (open) {
+            PlanetLook& look = planet->look;
+            changed |= ImGui::DragFloat("Radius", &planet->radius, 10.0F, 1.0F, 1e7F);
+            changed |= enumCombo("Kind", look.kind);
+            int seed = static_cast<int>(look.seed);
+            if (ImGui::DragInt("Seed", &seed, 1.0F, 0, 1 << 30)) {
+                look.seed = static_cast<std::uint32_t>(seed);
+                changed = true;
+            }
+            changed |= ImGui::ColorEdit3("Color", &look.color.x);
+            changed |= ImGui::ColorEdit3("Secondary color", &look.secondaryColor.x);
+            ImGui::SeparatorText("Atmosphere");
+            changed |= ImGui::DragFloat("Optical depth", &look.atmosphere, 0.01F, 0.0F, 20.0F);
+            changed |= ImGui::ColorEdit3("Scattering", &look.atmosphereColor.x);
+            changed |= ImGui::DragFloat("Scale height", &look.atmosphereHeight, 0.0005F, 0.0005F,
+                                        0.2F, "%.4f radii");
+            changed |= ImGui::SliderFloat("Haze", &look.haze, 0.0F, 1.0F);
+            ImGui::SeparatorText("Rings");
+            changed |= ImGui::DragFloatRange2("Radii", &look.ringInner, &look.ringOuter, 0.01F,
+                                              0.0F, 10.0F, "%.2f", "%.2f");
+            changed |= ImGui::SliderFloat("Opacity", &look.ringOpacity, 0.0F, 1.0F);
+            changed |= ImGui::ColorEdit3("Ring color", &look.ringColor.x);
+        }
+        if (remove) {
+            entity.remove<PlanetComponent>();
+        }
+    }
 
     ImGui::Separator();
     if (ImGui::Button("Add Component")) {
@@ -1597,6 +1626,7 @@ void GameLayer::drawInspectorPanel()
                                .vertices = {{-0.5F, -0.5F, 0}, {0.5F, -0.5F, 0}, {0, 0.5F, 0}}});
         addItem("Point", PointShapeComponent{});
         addItem("Particle emitter", ParticleEmitterComponent{});
+        addItem("Planet", PlanetComponent{});
         ImGui::EndPopup();
     }
 

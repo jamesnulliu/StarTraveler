@@ -56,6 +56,31 @@ auto bytesOf(const std::vector<T>& values) -> std::span<const std::byte>
     return std::as_bytes(std::span<const T>(values));
 }
 
+auto planetRecord(const RenderPlanet& planet) -> PlanetRecord
+{
+    const PlanetLook& look = planet.look;
+    PlanetRecord record;
+    const Mat3& rotation = planet.worldToLocal;
+    for (int row = 0; row < 3; ++row) {
+        record.frame[row] = Vec4(rotation[0][row], rotation[1][row], rotation[2][row], 0.0F);
+    }
+    record.origin = planetOrigin(planet);
+    record.kind = static_cast<std::uint32_t>(look.kind);
+    record.sun = rotation * planet.sunDirection;
+    record.seed = look.seed;
+    record.sunIrradiance = planet.sunIrradiance;
+    record.atmosphereHeight = look.atmosphereHeight;
+    record.atmosphere = planetAtmosphere(look);
+    record.haze = look.haze;
+    record.color = look.color;
+    record.ringInner = look.ringInner;
+    record.secondaryColor = look.secondaryColor;
+    record.ringOuter = look.ringOuter;
+    record.ringColor = look.ringColor;
+    record.ringOpacity = look.ringOpacity;
+    return record;
+}
+
 auto createAccelerationStructure(vulkan::Context& context, VkAccelerationStructureTypeKHR type,
                                  VkDeviceSize size) -> AccelerationStructure
 {
@@ -520,6 +545,11 @@ void GpuScene::update(const RenderScene& scene, VkCommandBuffer commandBuffer,
             record.map = m_skyMap.deviceAddress();
             record.width = m_skyMapSource->width;
             record.height = m_skyMapSource->height;
+        }
+        record.planetCount =
+            static_cast<std::uint32_t>(std::min(scene.sky.planets.size(), kMaxPlanets));
+        for (std::uint32_t i = 0; i < record.planetCount; ++i) {
+            record.planets[i] = planetRecord(scene.sky.planets[i]);
         }
     }
 

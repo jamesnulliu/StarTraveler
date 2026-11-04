@@ -73,6 +73,27 @@ struct LightRecord
 };
 static_assert(sizeof(LightRecord) == 96, "std430 layout of Light in scene.glsl");
 
+/** @brief A planet as the shaders draw it (`Planet` in planet.glsl): a RenderPlanet. */
+struct PlanetRecord
+{
+    Vec4 frame[3] = {};  // Rows of RenderPlanet::worldToLocal.
+    Vec3 origin{0.0F};   // planetOrigin.
+    std::uint32_t kind = 0;
+    Vec3 sun{0.0F, 1.0F, 0.0F};  // The sun's direction in the planet's frame.
+    std::uint32_t seed = 0;
+    Vec3 sunIrradiance{0.0F};
+    float atmosphereHeight = 0.0F;
+    Vec3 atmosphere{0.0F};  // planetAtmosphere.
+    float haze = 0.0F;
+    Vec3 color{0.0F};
+    float ringInner = 0.0F;
+    Vec3 secondaryColor{0.0F};
+    float ringOuter = 0.0F;
+    Vec3 ringColor{0.0F};
+    float ringOpacity = 0.0F;
+};
+static_assert(sizeof(PlanetRecord) == 160, "std430 layout of Planet in planet.glsl");
+
 /**
  * @brief The sky as the shaders look it up (`SkyRecord` in sky.glsl): RenderScene's
  *        skyColor and space sky.
@@ -85,8 +106,11 @@ struct SkyRecord
     std::uint64_t map = 0;     // Buffer device address of the map's texels (0: none).
     std::uint32_t width = 0;   // Of the map.
     std::uint32_t height = 0;
+    std::uint32_t planetCount = 0;
+    std::uint32_t padding[3] = {};
+    PlanetRecord planets[kMaxPlanets] = {};  // RenderSky::planets, farthest first.
 };
-static_assert(sizeof(SkyRecord) == 96, "std430 layout of SkyRecord in sky.glsl");
+static_assert(sizeof(SkyRecord) == 752, "std430 layout of SkyRecord in sky.glsl");
 
 /** @brief An acceleration structure and the buffer holding it. */
 struct AccelerationStructure

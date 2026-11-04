@@ -39,6 +39,9 @@ layout(push_constant) uniform Draw
     float brightness;  // SpaceSky::brightness.
     vec2 depthScale;   // particle.frag's.
     vec4 galacticToWorld[3];  // Rows.
+    // Planets in front of the stars: the direction to the center, the cosine of the angular
+    // radius (above 1: none).
+    vec4 planets[4];
 }
 draw;
 
@@ -88,7 +91,11 @@ void main()
                                  frameData.cameraRight.xyz, frameData.cameraUp.xyz);
     vec2 size = viewportSize();
     const float kMargin = 64.0;
-    if (head.z <= 1e-3 || any(lessThan(head.xy, vec2(-kMargin))) ||
+    bool hidden = false;
+    for (int i = 0; i < 4; ++i) {
+        hidden = hidden || dot(direction, draw.planets[i].xyz) > draw.planets[i].w;
+    }
+    if (hidden || head.z <= 1e-3 || any(lessThan(head.xy, vec2(-kMargin))) ||
         any(greaterThan(head.xy, size + kMargin))) {
         gl_Position = vec4(2.0, 2.0, 0.0, 1.0);  // Off screen, zero area.
         outHead = vec2(0.0);

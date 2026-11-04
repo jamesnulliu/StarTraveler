@@ -463,6 +463,77 @@ TEST_CASE("GPU: a space sky, as the CPU sees it", "[gpu]")
     }
 }
 
+TEST_CASE("GPU: planets, as the CPU sees them", "[gpu][planet]")
+{
+    const GpuTest gpu;
+    // A planet of each kind over the Milky Way, lit by a sun far beyond them: a ringed giant
+    // in a hazy atmosphere, an earth, a moon and an icy moon.
+    Scene scene;
+    scene.environment().skyColor = Vec3(0.0F);
+    scene.environment().space = SpaceSky{.enabled = true, .seed = 3, .brightness = 4.0F};
+    Entity sun = scene.createEntity("Sun");
+    sun.get<TransformComponent>().translation = {60000.0F, 30000.0F, -20000.0F};
+    sun.add<SphereComponent>(500.0F);
+    sun.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(0.0F), .emissionColor = {1.0F, 0.95F, 0.9F}, .emissionPower = 10000.0F});
+    auto add = [&](Vec3 center, float radius, const PlanetLook& look) {
+        Entity planet = scene.createEntity("Planet");
+        planet.get<TransformComponent>().translation = center;
+        planet.get<TransformComponent>().rotation = Quat(Vec3(0.4F, 0.0F, 0.3F));
+        planet.add<PlanetComponent>(PlanetComponent{.radius = radius, .look = look});
+    };
+    add({-3000.0F, 500.0F, -12000.0F}, 1500.0F,
+        PlanetLook{.kind = PlanetKind::Gas,
+                   .seed = 3,
+                   .color = {0.8F, 0.7F, 0.55F},
+                   .secondaryColor = {0.5F, 0.35F, 0.25F},
+                   .atmosphere = 0.3F,
+                   .atmosphereHeight = 0.01F,
+                   .haze = 0.6F,
+                   .ringInner = 1.4F,
+                   .ringOuter = 2.2F});
+    add({2500.0F, -800.0F, -10000.0F}, 900.0F,
+        PlanetLook{.kind = PlanetKind::Terrestrial,
+                   .seed = 7,
+                   .color = {0.3F, 0.33F, 0.18F},
+                   .secondaryColor = {0.01F, 0.035F, 0.085F},
+                   .atmosphere = 0.25F,
+                   .atmosphereHeight = 0.015F});
+    add({600.0F, 1500.0F, -9000.0F}, 400.0F, PlanetLook{.kind = PlanetKind::Rocky, .seed = 11});
+    add({-200.0F, -1700.0F, -11000.0F}, 500.0F,
+        PlanetLook{.kind = PlanetKind::Ice, .color = {0.85F, 0.8F, 0.75F}});
+    constexpr std::uint32_t kWidth = 128;
+    constexpr std::uint32_t kHeight = 96;
+    const Camera camera = makeCamera(kWidth, kHeight);
+    const PathTracerSettings settings{.mode = RenderMode::Preview};
+
+    auto compare = [&](const GpuRenderOptions& options, float worstTolerance) {
+        const RenderScene renderScene = buildRenderScene(scene);
+        REQUIRE(renderScene.sky.planets.size() == 4);
+        CpuPathTracer cpu;
+        cpu.resize(kWidth, kHeight);
+        cpu.render(renderScene, camera, settings);
+        auto tracer = gpu.makeRenderer(kWidth, kHeight);
+        tracer->render(renderScene, camera, settings, options);
+        const BlockDifference difference = blockDifference(tracer->readImage(), cpu.image());
+        INFO("worst block " << difference.worst << ", mean " << difference.mean
+                            << "; mean linear " << meanLinear(cpu.image()));
+        CHECK(difference.worst < worstTolerance);
+        CHECK(difference.mean < 0.5F);
+        CHECK(meanLinear(cpu.image()) > 0.004);  // The planets are seen.
+    };
+    SECTION("path tracer (the same jitter)")
+    {
+        compare({}, 3.0F);
+    }
+    SECTION("raster (without the stars, which only it draws)")
+    {
+        // Its own jitter: the sharp limbs of bright moons on black fall on other pixels.
+        scene.environment().space.enabled = false;
+        compare(GpuRenderOptions{.pipeline = GpuPipeline::Raster}, 12.0F);
+    }
+}
+
 TEST_CASE("GPU: auto exposure meters as the CPU", "[gpu][exposure]")
 {
     const GpuTest gpu(false);
@@ -2526,6 +2597,21 @@ TEST_CASE("GPU effects: a space sky's stars are points, hidden by surfaces", "[g
         }
     }
     CHECK(coveredPeak < 0.1F * seen.peak);
+
+    // So does a planet, in the sky far behind the camera's surroundings (unlit: its disc dark).
+    Scene eclipsed;
+    eclipsed.environment() = scene.environment();
+    Entity planet = eclipsed.createEntity("Planet");
+    planet.get<TransformComponent>().translation = direction * 1e5F;
+    planet.add<PlanetComponent>(PlanetComponent{.radius = 1500.0F});  // Some 10 pixels.
+    const std::vector<float> behindPlanet = render(buildRenderScene(eclipsed));
+    float eclipsedPeak = 0.0F;
+    for (std::uint32_t y = kHeight / 2 - 4; y < kHeight / 2 + 4; ++y) {
+        for (std::uint32_t x = kWidth / 2 - 4; x < kWidth / 2 + 4; ++x) {
+            eclipsedPeak = std::max(eclipsedPeak, behindPlanet[y * kWidth + x]);
+        }
+    }
+    CHECK(eclipsedPeak < 0.1F * seen.peak);
 }
 
 namespace

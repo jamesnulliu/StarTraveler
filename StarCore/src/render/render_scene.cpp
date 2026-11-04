@@ -91,6 +91,59 @@ auto anyInstance(const RenderScene& scene, const Ray& ray, float tMin, float tMa
     return false;
 }
 
+/**
+ * @brief The scene's planets (the nearest kMaxPlanets), farthest first, each lit by the
+ *        sphere light whose light at it is brightest.
+ */
+auto planetsOf(const Scene& scene, const std::vector<RenderLight>& lights)
+    -> std::vector<RenderPlanet>
+{
+    std::vector<RenderPlanet> planets;
+    for (const auto [entity, component] : scene.registry().view<const PlanetComponent>().each()) {
+        const Mat4 m = scene.worldTransform(entity);
+        const Vec3 axes{glm::length(Vec3(m[0])), glm::length(Vec3(m[1])), glm::length(Vec3(m[2]))};
+        if (component.radius <= 0.0F || std::min({axes.x, axes.y, axes.z}) <= 0.0F) {
+            continue;
+        }
+        RenderPlanet& planet = planets.emplace_back();
+        planet.center = Vec3(m[3]);
+        planet.radius = component.radius * std::max({axes.x, axes.y, axes.z});
+        planet.worldToLocal =
+            glm::transpose(Mat3(Vec3(m[0]) / axes.x, Vec3(m[1]) / axes.y, Vec3(m[2]) / axes.z));
+        planet.look = component.look;
+        float brightest = 0.0F;
+        for (const RenderLight& light : lights) {
+            if (light.triangleCount != 0) {
+                break;  // The meshes, after the spheres.
+            }
+            const Vec3 toLight = light.center - planet.center;
+            const float distance2 = glm::dot(toLight, toLight);
+            const float sine2 = light.radius * light.radius / distance2;
+            if (sine2 >= 1.0F) {
+                continue;  // Inside it.
+            }
+            // Its solid angle, 2 pi (1 - cos), without the cancellation of 1 - cos.
+            const float solidAngle = kTwoPi * sine2 / (1.0F + std::sqrt(1.0F - sine2));
+            const Vec3 irradiance = light.emission * solidAngle;
+            const float brightness = irradiance.r + irradiance.g + irradiance.b;
+            if (brightness > brightest) {
+                brightest = brightness;
+                planet.sunDirection = toLight / std::sqrt(distance2);
+                planet.sunIrradiance = irradiance;
+            }
+        }
+    }
+    auto distance = [](const RenderPlanet& planet) {
+        return glm::length(planet.center) - planet.radius;
+    };
+    std::ranges::stable_sort(planets, {}, distance);
+    if (planets.size() > kMaxPlanets) {
+        planets.resize(kMaxPlanets);
+    }
+    std::ranges::reverse(planets);
+    return planets;
+}
+
 }  // namespace
 
 auto nextRenderStamp() noexcept -> std::uint64_t
@@ -191,6 +244,9 @@ auto RenderSceneBuilder::update(const Scene& scene) -> const RenderScene&
         }
     }
 
+    if (update.lightsChanged) {
+        syncLights(update);
+    }
     const SceneEnvironment& environment = scene.environment();
     RenderSky sky;
     if (environment.space.enabled) {
@@ -199,15 +255,13 @@ auto RenderSceneBuilder::update(const Scene& scene) -> const RenderScene&
         sky.worldToGalactic = worldToGalactic(environment.space);
         sky.brightness = environment.space.brightness;
     }
+    sky.planets = planetsOf(scene, m_scene.lights);  // Lit by the lights as of now.
     if (environment.skyColor != m_scene.skyColor || sky != m_scene.sky) {
         m_scene.skyColor = environment.skyColor;
         m_scene.sky = std::move(sky);
         update.changed = true;
         update.contentChanged = true;
         m_scene.skyVersion = update.stampNow();
-    }
-    if (update.lightsChanged) {
-        syncLights(update);
     }
     if (update.changed) {
         m_scene.version = update.stampNow();
@@ -436,12 +490,16 @@ auto buildRenderScene(const Scene& scene) -> RenderScene
 
 auto skyRadiance(const RenderScene& scene, Vec3 direction) -> Vec3
 {
-    if (!scene.sky.map) {
-        return scene.skyColor;
+    Vec3 radiance = scene.skyColor;
+    if (scene.sky.map) {
+        radiance +=
+            scene.sky.map->radiance(glm::normalize(scene.sky.worldToGalactic * direction)) *
+            scene.sky.brightness;
     }
-    return scene.skyColor +
-           scene.sky.map->radiance(glm::normalize(scene.sky.worldToGalactic * direction)) *
-               scene.sky.brightness;
+    for (const RenderPlanet& planet : scene.sky.planets) {
+        radiance = planetRadiance(planet, direction, radiance);
+    }
+    return radiance;
 }
 
 auto skyAmbient(const RenderScene& scene) -> Vec3

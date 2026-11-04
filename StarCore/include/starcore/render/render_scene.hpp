@@ -29,6 +29,7 @@
 #include "starcore/math/bvh.hpp"
 #include "starcore/math/geometry.hpp"
 #include "starcore/math/types.hpp"
+#include "starcore/render/planet.hpp"
 #include "starcore/render/sky.hpp"
 
 namespace starcore
@@ -151,12 +152,14 @@ private:
     std::uint64_t m_value;
 };
 
-/** @brief A space sky (SpaceSky) as the renderers look it up. */
+/** @brief A space sky (SpaceSky) and planets (PlanetComponent) as the renderers look them up. */
 struct RenderSky
 {
     std::shared_ptr<const SkyMap> map;  // Null: none (the sky is RenderScene::skyColor).
     Mat3 worldToGalactic{1.0F};
     float brightness = 1.0F;
+    // In front of the rest, farthest first (each over the ones before); at most kMaxPlanets.
+    std::vector<RenderPlanet> planets;
 
     auto operator==(const RenderSky&) const -> bool = default;
 };

@@ -15,6 +15,7 @@
 #include "starcore/math/transform.hpp"
 #include "starcore/math/types.hpp"
 #include "starcore/raster/types.hpp"
+#include "starcore/render/planet.hpp"
 #include "starcore/scene/uuid.hpp"
 
 namespace starcore
@@ -238,6 +239,20 @@ struct ParticleEmitterComponent
     float rate = 60.0F;           // Particles per second.
     bool inheritVelocity = true;  // Add the entity's own velocity.
     bool enabled = true;
+};
+
+// Sky ----------------------------------------------------------------------------------------------
+
+/**
+ * @brief A planet out of reach (render/planet.hpp), centered at the entity: part of the sky,
+ *        drawn as seen from the world's origin. Its rotation tilts its spin axis (local y);
+ *        its scale multiplies the radius. Not geometry: nothing collides with it, and it
+ *        casts no shadows in the scene.
+ */
+struct PlanetComponent
+{
+    float radius = 10000.0F;
+    PlanetLook look;
 };
 
 // Gameplay -----------------------------------------------------------------------------------------

@@ -301,6 +301,24 @@ void writeEntity(YAML::Emitter& out, const Scene& scene, entt::entity entity,
         node["Acceleration"] = s.acceleration;
         out << YAML::Key << "ParticleEmitter" << YAML::Value << node;
     }
+    if (const auto* p = registry.try_get<PlanetComponent>(entity)) {
+        const PlanetLook& look = p->look;
+        YAML::Node node;
+        node["Radius"] = p->radius;
+        node["Kind"] = encodeEnum(look.kind);
+        node["Seed"] = look.seed;
+        node["Color"] = look.color;
+        node["SecondaryColor"] = look.secondaryColor;
+        node["Atmosphere"] = look.atmosphere;
+        node["AtmosphereColor"] = look.atmosphereColor;
+        node["AtmosphereHeight"] = look.atmosphereHeight;
+        node["Haze"] = look.haze;
+        node["RingInner"] = look.ringInner;
+        node["RingOuter"] = look.ringOuter;
+        node["RingOpacity"] = look.ringOpacity;
+        node["RingColor"] = look.ringColor;
+        out << YAML::Key << "Planet" << YAML::Value << node;
+    }
     out << YAML::EndMap;
 }
 
@@ -406,6 +424,24 @@ void readEntity(const YAML::Node& node, Scene& scene,
         s.drag = read(e["Drag"], s.drag);
         s.acceleration = read(e["Acceleration"], s.acceleration);
         entity.add<ParticleEmitterComponent>(emitter);
+    }
+    if (const auto p = node["Planet"]) {
+        PlanetComponent planet;
+        PlanetLook& look = planet.look;
+        planet.radius = read(p["Radius"], planet.radius);
+        look.kind = decodeEnum(p["Kind"], look.kind);
+        look.seed = read(p["Seed"], look.seed);
+        look.color = read(p["Color"], look.color);
+        look.secondaryColor = read(p["SecondaryColor"], look.secondaryColor);
+        look.atmosphere = read(p["Atmosphere"], look.atmosphere);
+        look.atmosphereColor = read(p["AtmosphereColor"], look.atmosphereColor);
+        look.atmosphereHeight = read(p["AtmosphereHeight"], look.atmosphereHeight);
+        look.haze = read(p["Haze"], look.haze);
+        look.ringInner = read(p["RingInner"], look.ringInner);
+        look.ringOuter = read(p["RingOuter"], look.ringOuter);
+        look.ringOpacity = read(p["RingOpacity"], look.ringOpacity);
+        look.ringColor = read(p["RingColor"], look.ringColor);
+        entity.add<PlanetComponent>(planet);
     }
 }
 

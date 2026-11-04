@@ -1,5 +1,7 @@
 #include <algorithm>
+#include <cmath>
 
+#include <glm/geometric.hpp>
 #include <glm/matrix.hpp>
 
 #include "post_process.hpp"
@@ -76,7 +78,12 @@ struct StarParams
     float brightness = 1.0F;
     Vec2 depthScale{1.0F};
     Vec4 galacticToWorld[3] = {};  // Rows.
+    // The planets' discs, which hide the stars: the direction to the center from the origin,
+    // the cosine of the angular radius (above 1: none).
+    Vec4 planets[kMaxPlanets] = {Vec4(0.0F, 0.0F, 1.0F, 2.0F), Vec4(0.0F, 0.0F, 1.0F, 2.0F),
+                                 Vec4(0.0F, 0.0F, 1.0F, 2.0F), Vec4(0.0F, 0.0F, 1.0F, 2.0F)};
 };
+static_assert(sizeof(StarParams) <= 128, "Vulkan's guaranteed push constant size");
 
 /** @brief Push constants of bloom_prefilter.comp. */
 struct PrefilterParams
@@ -341,6 +348,16 @@ auto PostProcess::drawParticles(VkCommandBuffer commandBuffer, const PostFrame& 
         for (int row = 0; row < 3; ++row) {
             params.galacticToWorld[row] = Vec4(galacticToWorld[0][row], galacticToWorld[1][row],
                                                galacticToWorld[2][row], 0.0F);
+        }
+        const std::size_t planets = std::min(frame.sky->planets.size(), kMaxPlanets);
+        for (std::size_t i = 0; i < planets; ++i) {
+            const RenderPlanet& planet = frame.sky->planets[i];
+            const float distance = glm::length(planet.center);
+            if (distance > planet.radius) {
+                const float sine = planet.radius / distance;
+                params.planets[i] =
+                    Vec4(planet.center / distance, std::sqrt(1.0F - sine * sine));
+            }
         }
         m_starPipeline.pushConstants(commandBuffer, &params, sizeof(params));
         vkCmdDraw(commandBuffer, static_cast<std::uint32_t>(6 * m_starSource->stars.size()), 1,

@@ -18,10 +18,15 @@ layout(set = 0, binding = 3) uniform sampler2D bloom;  // Sum of the bloom level
 layout(set = 0, binding = 4, rgba8) uniform writeonly image2D outputImage;
 // Per motion tile: the largest blur nearby (motion_neighbors.comp).
 layout(set = 0, binding = 5, rgba32f) uniform readonly image2D neighborBlur;
+layout(set = 0, binding = 6, std430) readonly buffer Exposure  // exposure_adapt.comp's.
+{
+    float exposure;
+}
+exposureState;
 
 layout(push_constant) uniform Params
 {
-    float exposure;
+    float padding;
     uint toneMapper;
     uint flags;
     float bloomStrength;   // Fraction of the glow in the result.
@@ -126,7 +131,7 @@ void main()
         if ((params.flags & kParticles) != 0u) {
             color += imageLoad(particles, pixel).rgb;
         }
-        color *= params.exposure;
+        color *= exposureState.exposure;
         vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
         if ((params.flags & kBloom) != 0u) {
             color = mix(color, texture(bloom, uv).rgb * params.bloomScale, params.bloomStrength);

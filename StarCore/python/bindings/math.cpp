@@ -22,7 +22,9 @@ void bindMath(nb::module_& m)
     nb::enum_<ToneMapper>(m, "ToneMapper")
         .value("NONE", ToneMapper::None)
         .value("REINHARD", ToneMapper::Reinhard)
-        .value("ACES", ToneMapper::Aces);
+        .value("ACES", ToneMapper::Aces)
+        .value("AGX", ToneMapper::AgX)
+        .value("AGX_PUNCHY", ToneMapper::AgXPunchy);
 
     m.def("pack_rgba8", &packRgba8, "color"_a,
           "Pack a [0, 1] RGBA color into a uint32 (R in the lowest byte).");

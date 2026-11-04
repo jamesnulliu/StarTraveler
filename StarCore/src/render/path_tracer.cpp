@@ -3,9 +3,11 @@
 #include <chrono>
 #include <cmath>
 #include <optional>
+#include <vector>
 
 #include <glm/geometric.hpp>
 
+#include "starcore/render/exposure.hpp"
 #include "starcore/render/path_tracer.hpp"
 #include "starcore/render/sampling.hpp"
 
@@ -733,6 +735,12 @@ void CpuPathTracer::render(const RenderScene& scene, const Camera& camera,
     m_lastView = camera.view();
     m_lastProjection = camera.projection();
     m_lastSettings = settings;
+    if (!settings.autoExposure) {
+        m_adaptedExposure = 0.0F;
+    }
+    m_displayExposure = settings.autoExposure && m_adaptedExposure > 0.0F
+                            ? m_adaptedExposure * settings.exposure
+                            : settings.exposure;
 
     const std::uint32_t tileCount = ((width + kTileSize - 1) / kTileSize) *
                                     ((height + kTileSize - 1) / kTileSize);
@@ -760,10 +768,71 @@ void CpuPathTracer::render(const RenderScene& scene, const Camera& camera,
             }
             m_passStride = std::max(1U, m_passStride / 2U);
             if (budget <= 0.0F) {
-                return;  // One pass per call.
+                break;  // One pass per call.
             }
         }
     } while (timeLeft());
+    if (settings.autoExposure) {
+        updateExposure(settings);
+    }
+}
+
+auto CpuPathTracer::displayPixel(Vec4 accumulated, const PathTracerSettings& settings) const
+    -> std::uint32_t
+{
+    Vec3 display = Vec3(accumulated) / accumulated.a;
+    display = toneMap(display * m_displayExposure, settings.toneMapper);
+    if (settings.srgbOutput) {
+        display = linearToSrgb(display);
+    }
+    return packRgba8(Vec4(display, 1.0F));
+}
+
+void CpuPathTracer::updateExposure(const PathTracerSettings& settings)
+{
+    const std::uint32_t width = m_accumulation.width();
+    const std::uint32_t height = m_accumulation.height();
+    // The accumulated image's histogram (exposure.hpp), row by row.
+    std::vector<std::array<std::uint32_t, kExposureBins>> rows(height);
+    m_executor.parallelFor(height, [&](std::size_t y) {
+        auto& histogram = rows[y];
+        histogram.fill(0U);
+        for (std::uint32_t x = 0; x < width; ++x) {
+            const Vec4 accumulated = m_accumulation.at(x, static_cast<std::uint32_t>(y));
+            if (accumulated.a > 0.0F) {
+                const Vec3 color = Vec3(accumulated) / accumulated.a;
+                ++histogram[exposureBin(glm::dot(color, Vec3(0.2126F, 0.7152F, 0.0722F)))];
+            }
+        }
+    });
+    std::array<std::uint32_t, kExposureBins> histogram{};
+    for (const auto& row : rows) {
+        for (std::uint32_t bin = 0; bin < kExposureBins; ++bin) {
+            histogram[bin] += row[bin];
+        }
+    }
+    const float metered = meteredExposure(histogram);
+    const auto now = std::chrono::steady_clock::now();
+    const float seconds = std::clamp(
+        std::chrono::duration<float>(now - m_lastExposureTime).count(), 0.001F, 0.1F);
+    m_lastExposureTime = now;
+    m_adaptedExposure = m_adaptedExposure > 0.0F
+                            ? adaptExposure(m_adaptedExposure, metered, seconds)
+                            : metered;  // The first frame: no adapting from nothing.
+    const float exposure = m_adaptedExposure * settings.exposure;
+    if (exposure == m_displayExposure) {
+        return;
+    }
+    // The whole image at the new exposure.
+    m_displayExposure = exposure;
+    m_executor.parallelFor(height, [&](std::size_t y) {
+        for (std::uint32_t x = 0; x < width; ++x) {
+            const Vec4 accumulated = m_accumulation.at(x, static_cast<std::uint32_t>(y));
+            if (accumulated.a > 0.0F) {
+                m_image.at(x, static_cast<std::uint32_t>(y)) = displayPixel(accumulated, settings);
+            }
+        }
+    });
 }
 
 void CpuPathTracer::renderTiles(const RenderScene& scene, const Camera& camera,
@@ -810,12 +879,7 @@ void CpuPathTracer::renderTiles(const RenderScene& scene, const Camera& camera,
                     for (std::uint32_t x = bx; x < bx + bw; ++x) {
                         Vec4& accumulated = m_accumulation.at(x, y);
                         accumulated += Vec4(color, 1.0F);
-                        Vec3 display = Vec3(accumulated) / accumulated.a;
-                        display = toneMap(display * settings.exposure, settings.toneMapper);
-                        if (settings.srgbOutput) {
-                            display = linearToSrgb(display);
-                        }
-                        m_image.at(x, y) = packRgba8(Vec4(display, 1.0F));
+                        m_image.at(x, y) = displayPixel(accumulated, settings);
                         if (writeIds) {
                             m_entityIds.at(x, y) = entityId;
                         }

@@ -451,7 +451,7 @@ TEST_CASE("GPU: a space sky, as the CPU sees it", "[gpu]")
                             << "; mean linear " << meanLinear(cpu.image()));
         CHECK(difference.worst < 3.0F);
         CHECK(difference.mean < 0.5F);
-        CHECK(meanLinear(cpu.image()) > 0.02);  // The band and the ball it lights are seen.
+        CHECK(meanLinear(cpu.image()) > 0.01);  // The band and the ball it lights are seen.
     };
     SECTION("path traced")
     {
@@ -460,6 +460,39 @@ TEST_CASE("GPU: a space sky, as the CPU sees it", "[gpu]")
     SECTION("preview (the sky's mean light as the ambient)")
     {
         compare(PathTracerSettings{.mode = RenderMode::Preview}, 4);
+    }
+}
+
+TEST_CASE("GPU: auto exposure meters as the CPU", "[gpu][exposure]")
+{
+    const GpuTest gpu(false);
+    // A gray sky and a bright ball (the brightest few percent: not metered).
+    Scene scene;
+    scene.environment().skyColor = Vec3(0.5F);
+    Entity sun = scene.createEntity("Sun");
+    sun.get<TransformComponent>().translation = {3.0F, 2.0F, 0.0F};
+    sun.add<SphereComponent>(0.3F);
+    sun.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(0.0F), .emissionColor = Vec3(1.0F), .emissionPower = 500.0F});
+    const RenderScene renderScene = buildRenderScene(scene);
+    const Camera camera = makeCamera(64, 48);
+    for (const ToneMapper mapper : {ToneMapper::None, ToneMapper::AgXPunchy}) {
+        const PathTracerSettings settings{
+            .mode = RenderMode::Preview, .autoExposure = true, .toneMapper = mapper};
+        CpuPathTracer cpu;
+        cpu.resize(64, 48);
+        cpu.render(renderScene, camera, settings);
+        auto raster = gpu.makeRenderer(64, 48);
+        raster->render(renderScene, camera, settings,
+                       GpuRenderOptions{.pipeline = GpuPipeline::Raster});
+        const ColorImage image = raster->readImage();
+        INFO(enumToString(mapper) << ": CPU " << channel(cpu.image().at(5, 5), 1) << ", GPU "
+                                  << channel(image.at(5, 5), 1));
+        CHECK(std::abs(channel(image.at(5, 5), 1) - channel(cpu.image().at(5, 5), 1)) <= 1);
+        if (mapper == ToneMapper::None) {
+            // 0.5 exposed to middle gray: sRGB 118 (within a third of a stop).
+            CHECK(std::abs(channel(image.at(5, 5), 1) - 118) < 10);
+        }
     }
 }
 

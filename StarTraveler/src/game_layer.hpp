@@ -80,7 +80,10 @@ struct RenderOptions
                     .shutter = 0.5F,
                     .vignette = 0.25F},
     };
-    starcore::PathTracerSettings tracer{.fireflyClamp = 8.0F};
+    // Exposed as a camera meters it, tone mapped as film (AgX, the Punchy look).
+    starcore::PathTracerSettings tracer{.autoExposure = true,
+                                        .toneMapper = starcore::ToneMapper::AgXPunchy,
+                                        .fireflyClamp = 8.0F};
     // GPU: draw particles (engine exhaust, sparks) and the space dust.
     bool particles = true;
     bool spaceDust = true;

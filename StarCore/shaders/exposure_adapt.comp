@@ -1,0 +1,83 @@
+#version 460
+// Auto exposure, second pass (one invocation): the exposure the histogram meters
+// (render/exposure.hpp's meteredExposure), and the exposure in use moved towards it
+// (adaptExposure); or, without auto exposure, the settings' exposure. The post-process passes
+// read the result.
+
+#extension GL_GOOGLE_include_directive : require
+
+#include "exposure.glsl"
+
+layout(local_size_x = 1) in;
+
+layout(set = 0, binding = 0, std430) readonly buffer Histogram
+{
+    uint bins[kExposureBins];
+}
+histogram;
+
+layout(set = 0, binding = 1, std430) buffer Exposure
+{
+    float exposure;  // In use: the metered one, adapted, times the compensation.
+    float adapted;   // The metered one, adapted (without the compensation).
+    float metered;   // This frame's.
+    float padding;
+}
+state;
+
+layout(push_constant) uniform Params
+{
+    float seconds;       // Since the last frame.
+    uint flags;          // kAutomatic, kReset.
+    float exposure;      // The settings': a compensation with auto exposure.
+    float padding;
+}
+params;
+
+const uint kAutomatic = 1u;
+const uint kReset = 2u;  // Jump to the metered exposure.
+
+void main()
+{
+    if ((params.flags & kAutomatic) == 0u) {
+        state.exposure = params.exposure;
+        state.adapted = 1.0;
+        state.metered = 1.0;
+        return;
+    }
+    float total = 0.0;
+    for (uint bin = 0u; bin < kExposureBins; ++bin) {
+        total += float(histogram.bins[bin]);
+    }
+    float metered = 1.0;
+    if (total > 0.0) {
+        float low = kExposureLowPercentile * total;
+        float high = kExposureHighPercentile * total;
+        float below = 0.0;
+        float sum = 0.0;
+        float weight = 0.0;
+        for (uint bin = 0u; bin < kExposureBins; ++bin) {
+            float count = float(histogram.bins[bin]);
+            float overlap = max(0.0, min(below + count, high) - max(below, low));
+            float log2Luminance =
+                bin == 0u ? kExposureMinLog2
+                          : kExposureMinLog2 + (float(bin) - 0.5) / float(kExposureBins - 1u) *
+                                                   (kExposureMaxLog2 - kExposureMinLog2);
+            sum += overlap * log2Luminance;
+            weight += overlap;
+            below += count;
+        }
+        float mean = weight > 0.0 ? sum / weight : log2(kExposureKey);
+        metered = clamp(kExposureKey / exp2(mean), kMinExposure, kMaxExposure);
+    }
+    float adapted = metered;
+    float current = state.adapted;
+    if ((params.flags & kReset) == 0u && current > 0.0) {
+        float rate = metered < current ? kDarkeningRate : kBrighteningRate;
+        float left = exp(-rate * max(params.seconds, 0.0));
+        adapted = exp2(log2(metered) + (log2(current) - log2(metered)) * left);
+    }
+    state.adapted = adapted;
+    state.metered = metered;
+    state.exposure = adapted * params.exposure;
+}

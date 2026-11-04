@@ -22,6 +22,7 @@
 #include <CLI/CLI.hpp>
 
 #include <starcore/asset/model.hpp>
+#include <starcore/common/enum_names.hpp>
 #include <starcore/common/log.hpp>
 #include <starcore/render/camera.hpp>
 #include <starcore/render/overlay.hpp>
@@ -274,7 +275,18 @@ auto main(int argc, char** argv) -> int
     app.add_option("--sharpness", gpuOptions.sharpness, "Upscaler: FSR's sharpening, 0-1");
     app.add_option("--camera", cameraPosition, "Camera position x y z")->expected(3);
     app.add_option("--look-at", cameraLookAt, "Camera target x y z")->expected(3);
+    float verticalFov = 0.0F;
+    app.add_option("--fov", verticalFov, "Vertical field of view, degrees (default 45)");
+    app.add_option("--exposure", settings.exposure,
+                   "Exposure (a factor; with --auto-exposure, a compensation)");
+    app.add_flag("--auto-exposure", settings.autoExposure, "Meter the exposure");
+    std::string toneMapper = "None";
+    app.add_option("--tone-mapper", toneMapper, "None, Reinhard, ACES, AgX");
     CLI11_PARSE(app, argc, argv);
+    if (!starcore::enumFromString(toneMapper, settings.toneMapper)) {
+        SC_ERROR("Unknown tone mapper \"{}\"", toneMapper);
+        return EXIT_FAILURE;
+    }
     gpuOptions.spatial = !noSpatial;
     gpuOptions.temporal = !noTemporal;
     gpuOptions.shadows.enabled = !noShadows;
@@ -310,6 +322,9 @@ auto main(int argc, char** argv) -> int
 
     starcore::Camera camera;
     camera.setViewport(width, height);
+    if (verticalFov > 0.0F) {
+        camera.setVerticalFov(verticalFov);
+    }
     camera.setPosition({cameraPosition[0], cameraPosition[1], cameraPosition[2]});
     if (cameraLookAt.size() == 3) {
         camera.lookAt({cameraLookAt[0], cameraLookAt[1], cameraLookAt[2]});

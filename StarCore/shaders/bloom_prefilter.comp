@@ -1,7 +1,9 @@
 #version 460
-// Bloom, first downsample: the frame (radiance plus particles, times the
-// exposure) to half resolution, a 4x4 box per texel with Karis' weights
-// (1 / (1 + luminance)) so single bright pixels do not flicker into the glow.
+// Bloom, first downsample: the frame (radiance plus particles and stars, times the exposure)
+// to half resolution, a 4x4 box per texel. Its energy is kept (no Karis weights): the glow
+// is the lens's glare, as bright as what causes it -- a star or a sun of a few pixels glows
+// as much as a large surface of the same flux. Paths' fireflies are clamped where they are
+// traced (PathTracerSettings::fireflyClamp).
 
 #extension GL_GOOGLE_include_directive : require
 
@@ -12,13 +14,21 @@ layout(local_size_x = 8, local_size_y = 8) in;
 layout(set = 0, binding = 0, rgba32f) uniform readonly image2D radiance;
 layout(set = 0, binding = 1, rgba16f) uniform readonly image2D particles;
 layout(set = 0, binding = 2, rgba16f) uniform writeonly image2D target;
+layout(set = 0, binding = 3, std430) readonly buffer Exposure  // exposure_adapt.comp's.
+{
+    float exposure;
+}
+exposureState;
 
 layout(push_constant) uniform Params
 {
-    float exposure;
     uint particles;  // Add the particle image.
+    uint padding;
 }
 params;
+
+// Keeps the half floats of the levels finite (a sun's disc, exposed, is some 1e4).
+const float kMaxLuminance = 6e4;
 
 void main()
 {
@@ -28,7 +38,6 @@ void main()
     }
     ivec2 last = imageSize(radiance) - 1;
     vec3 sum = vec3(0.0);
-    float weights = 0.0;
     for (int y = -1; y <= 2; ++y) {
         for (int x = -1; x <= 2; ++x) {
             ivec2 source = clamp(2 * pixel + ivec2(x, y), ivec2(0), last);
@@ -36,11 +45,11 @@ void main()
             if (params.particles != 0u) {
                 color += imageLoad(particles, source).rgb;
             }
-            color *= params.exposure;
-            float weight = 1.0 / (1.0 + dot(color, vec3(0.2126, 0.7152, 0.0722)));
-            sum += color * weight;
-            weights += weight;
+            sum += any(isnan(color)) || any(isinf(color)) ? vec3(0.0) : max(color, vec3(0.0));
         }
     }
-    imageStore(target, pixel, vec4(sum / weights, 0.0));
+    vec3 color = sum / 16.0 * exposureState.exposure;
+    float luminance = dot(color, vec3(0.2126, 0.7152, 0.0722));
+    imageStore(target, pixel,
+               vec4(luminance > kMaxLuminance ? color * (kMaxLuminance / luminance) : color, 0.0));
 }

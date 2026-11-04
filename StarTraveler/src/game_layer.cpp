@@ -964,14 +964,20 @@ void GameLayer::drawRenderPanel()
             settings.samplesPerPixel = static_cast<std::uint32_t>(samples);
         }
     }
-    ImGui::DragFloat("Exposure", &settings.exposure, 0.01F, 0.01F, 16.0F);
+    ImGui::Checkbox("Auto exposure", &settings.autoExposure);
+    if (ImGui::IsItemHovered()) {
+        ImGui::SetTooltip("Meter the view and adapt to it, as a camera or an eye (Exposure "
+                          "then brightens or darkens what it meters)");
+    }
+    ImGui::DragFloat(settings.autoExposure ? "Exposure compensation" : "Exposure",
+                     &settings.exposure, 0.01F, 0.01F, 16.0F);
     ImGui::DragFloat("Firefly clamp", &settings.fireflyClamp, 0.1F, 0.0F, 100.0F,
                      settings.fireflyClamp > 0.0F ? "%.1f" : "off");
     enumCombo("Tone mapper", settings.toneMapper);
     ImGui::Checkbox("sRGB output", &settings.srgbOutput);
     bool skyChanged = color3Edit("Sky", m_scene.environment().skyColor);
     // A space sky: brightness and orientation apply at once; seed, Milky Way and stars
-    // generate it anew (a fraction of a second) once edited.
+    // generate it anew (under a second) once edited.
     SpaceSky& space = m_scene.environment().space;
     skyChanged |= ImGui::Checkbox("Space sky", &space.enabled);
     if (ImGui::IsItemHovered()) {

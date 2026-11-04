@@ -153,6 +153,7 @@ void bindTracer(nb::module_& m)
             .def_rw("accumulate", &PathTracerSettings::accumulate)
             .def_rw("seed", &PathTracerSettings::seed)
             .def_rw("exposure", &PathTracerSettings::exposure)
+            .def_rw("auto_exposure", &PathTracerSettings::autoExposure)
             .def_rw("tone_mapper", &PathTracerSettings::toneMapper)
             .def_rw("srgb_output", &PathTracerSettings::srgbOutput);
     }

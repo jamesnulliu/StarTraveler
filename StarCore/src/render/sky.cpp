@@ -37,8 +37,9 @@ constexpr float kZeroMagnitudeFlux = 2e-5F;
 constexpr float kMilkyWayRadiance = 0.075F;
 // What is left between the stars (galaxies too faint to see one by one).
 constexpr float kBackgroundRadiance = 1e-4F;
-// Dust dims blue more than red (extinction per optical depth in green).
-const Vec3 kReddening{0.62F, 0.82F, 1.12F};
+// Dust dims blue more than red: extinction per optical depth in green (Cardelli et al.'s law,
+// R_V = 3.1, at some 610, 550 and 465 nm).
+const Vec3 kReddening{0.84F, 1.0F, 1.24F};
 // Of a star's color: perceived star colors are pale (bright points saturate the eye and
 // sensors alike).
 constexpr float kStarSaturation = 0.7F;
@@ -277,8 +278,8 @@ public:
             const bool magenta = rng.nextFloat() < 0.25F;
             m_emission.push_back(makeBlob(
                 fromGalacticDegrees(longitude, latitude), logUniform(0.35F, 3.2F) * kDegree,
-                uniform(1.0F, 2.2F), uniform(0.0F, kPi), uniform(0.12F, 0.5F), 0.9F,
-                magenta ? Vec3(1.0F, 0.32F, 0.52F) : Vec3(1.0F, 0.24F, 0.30F), rng.nextUint()));
+                uniform(1.0F, 2.2F), uniform(0.0F, kPi), uniform(0.06F, 0.3F), 0.9F,
+                magenta ? Vec3(1.0F, 0.45F, 0.6F) : Vec3(1.0F, 0.4F, 0.42F), rng.nextUint()));
         }
         // Reflection nebulae: dust lit by nearby stars, blue, off the band.
         for (int i = 0; i < 4; ++i) {
@@ -331,16 +332,20 @@ public:
     {
         float clouds = 0.0F;  // Star clouds, long along the band (-1 to 1).
         float young = 0.0F;   // Where the young (bluer) star clouds are (-1 to 1).
-        float cirrus = 0.0F;  // Faint dust anywhere (-1 to 1).
+        float cirrus = 0.0F;  // Faint dust (-1 to 1).
         float wave = 0.0F;    // How the dust lane meanders (-1 to 1).
+        Vec3 warp{0.0F};      // Displacement of the dust's noise: its lanes curl.
     };
 
     [[nodiscard]] auto smooth(Vec3 g) const -> Smooth
     {
-        return {.clouds = fbm(alongBand(g, 2.0F) * 7.0F, 5, m_seed + 1U),
+        const Vec3 band = alongBand(g, 2.0F);
+        return {.clouds = fbm(band * 7.0F, 5, m_seed + 1U),
                 .young = fbm(g * 3.0F, 4, m_seed + 3U),
                 .cirrus = fbm(g * 3.5F, 4, m_seed + 14U),
-                .wave = noise(alongBand(g, 1.5F) * 3.0F, m_seed + 11U)};
+                .wave = noise(alongBand(g, 1.5F) * 3.0F, m_seed + 11U),
+                .warp = {fbm(band * 4.0F, 4, m_seed + 21U), fbm(band * 4.0F, 4, m_seed + 22U),
+                         fbm(band * 4.0F, 4, m_seed + 23U)}};
     }
 
     /** @brief Optical depth (in green) of the dust in front of the band's light towards g. */
@@ -348,33 +353,34 @@ public:
     {
         const float longitude = c.longitude / kDegree;
         const float latitude = c.latitude / kDegree;
-        // The main lane: thinner than the stars' disk, thicker towards the center, wavy.
-        const float wave = 1.2F * smooth.wave;
-        const float thickness = 1.1F + 1.4F * std::exp(-square(longitude / 45.0F));
+        // The main layer: thinner than the stars' disk, thicker towards the center (the
+        // nearer clouds there look larger), wavy.
+        const float wave = smooth.wave;
+        const float thickness = 0.9F + 1.4F * std::exp(-square(longitude / 50.0F));
         float depth = 0.0F;
         const float lane = sech2((latitude - wave) / thickness);
         // The great rift: a broad dark lane over the inner galaxy on one side of the center.
-        const float rift = smoothstep(-22.0F, -4.0F, longitude) *
-                           (1.0F - smoothstep(55.0F, 88.0F, longitude)) *
-                           sech2((latitude - 1.4F - 0.6F * wave) / 2.4F);
-        // Filaments branching off the plane, and dark clouds off it.
-        const float spurs = smoothstep(12.0F, 0.0F, std::abs(latitude)) *
-                            std::exp(-square(longitude / 70.0F));
-        if (lane + rift + spurs > 1e-3F) {
-            // Long along the band: clumps and filaments squeezed across it.
-            const Vec3 p = alongBand(g, 2.5F);
-            const float clumps = std::clamp(0.55F + 2.4F * fbm(p * 9.0F, 6, m_seed + 12U), 0.0F,
-                                            2.4F);
-            const float filaments = ridged(p * 22.0F, 5, m_seed + 13U);
-            depth += (2.8F * lane + 1.8F * rift) * clumps * (0.15F + 1.5F * filaments);
-            depth += 1.2F * spurs * square(std::max(0.0F, filaments - 0.55F) / 0.45F) *
-                     std::max(0.0F, clumps - 0.6F);
+        const float rift = smoothstep(-25.0F, -5.0F, longitude) *
+                           (1.0F - smoothstep(50.0F, 85.0F, longitude)) *
+                           sech2((latitude - 1.8F - 0.5F * wave) / 3.0F);
+        // Near the center, a few clouds off the plane.
+        const float off = std::exp(-square(longitude / 60.0F)) *
+                          smoothstep(16.0F, 2.0F, std::abs(latitude));
+        if (lane + rift + off > 1e-3F) {
+            // Patchy, with soft but definite edges (most of the light between the patches
+            // gets through: the star clouds), curled and laced with filaments.
+            const Vec3 p = alongBand(g, 2.5F) * 9.0F + smooth.warp * 1.1F;
+            const float noise = fbm(p, 6, m_seed + 12U);
+            const float patches = smoothstep(-0.3F, 0.25F, noise);
+            const float filaments = ridged(p * 2.4F, 5, m_seed + 13U);
+            depth += (4.5F * lane + 3.5F * rift) * patches * (0.35F + 1.6F * filaments);
+            depth += 3.0F * off * smoothstep(0.3F, 0.55F, noise) * (0.5F + filaments);
         }
         for (const Blob& cloud : m_dark) {
             depth += cloud.strength * blobShape(g, cloud);
         }
-        // Faint cirrus anywhere.
-        depth += 0.25F * std::max(0.0F, 2.0F * smooth.cirrus - 0.25F);
+        // Faint cirrus, near the plane.
+        depth += 0.15F * std::max(0.0F, smooth.cirrus) * std::exp(-square(latitude / 20.0F));
         return depth;
     }
 
@@ -383,40 +389,41 @@ public:
      *        the dust's optical depth there.
      * @param c Of g.
      * @param smooth Of g (interpolated).
+     * @param speckle The texel's unresolved stars: random, mean 1 (they are few, the light of
+     *        a texel varies).
      */
-    [[nodiscard]] auto diffuse(Vec3 g, Galactic c, const Smooth& smooth, float& depth) const
-        -> Vec3
+    [[nodiscard]] auto diffuse(Vec3 g, Galactic c, const Smooth& smooth, float speckle,
+                               float& depth) const -> Vec3
     {
         const float longitude = c.longitude / kDegree;
         const float latitude = c.latitude / kDegree;
-        // The disk: brightest towards the center, a thin layer and a thick one.
-        const float along = 0.13F + 0.42F * std::exp(-square(longitude / 25.0F)) +
-                            0.45F * std::exp(-square(longitude / 80.0F));
-        const float thin = 2.4F + 2.6F * std::exp(-square(longitude / 40.0F));
-        float disk = along * (0.7F * sech2(latitude / thin) + 0.3F * sech2(latitude / 9.0F));
+        // The disk: brightest towards the center, a thin layer and a fainter thick one.
+        const float along = 0.12F + 0.38F * std::exp(-square(longitude / 28.0F)) +
+                            0.5F * std::exp(-square(longitude / 95.0F));
+        const float thin = 1.7F + 1.3F * std::exp(-square(longitude / 35.0F));
+        float disk = along * (0.85F * sech2(latitude / thin) + 0.15F * sech2(latitude / 6.0F));
         // The bulge: boxy, around the center.
         float bulge = 0.0F;
         if (std::abs(longitude) < 90.0F && std::abs(latitude) < 60.0F) {
-            const float r = std::pow(std::pow(std::abs(longitude / 9.0F), 2.4F) +
-                                         std::pow(std::abs(latitude / 6.5F), 2.4F),
+            const float r = std::pow(std::pow(std::abs(longitude / 11.0F), 2.4F) +
+                                         std::pow(std::abs(latitude / 7.5F), 2.4F),
                                      1.0F / 2.4F);
-            bulge = 1.2F * std::exp(-std::pow(r, 1.5F));
+            bulge = 1.1F * std::exp(-std::pow(r, 1.4F));
         }
         Vec3 light{0.0F};
         // Far from the band (above some 50 degrees) its light, even where its clouds and grain
         // brighten it most (8 times), is a percent of the background's: none of that is needed.
         if (std::max(disk, bulge) > 2e-6F) {
-            // Star clouds, long along the band, then their grain: clumps of stars too faint
-            // to see one by one, down to a fraction of a degree.
-            disk *= square(std::clamp(0.85F + 1.6F * smooth.clouds, 0.25F, 1.6F));
-            const float grain = fbm(alongBand(g, 2.0F) * 70.0F, 3, m_seed + 2U);
-            disk *= square(std::max(0.0F, 1.0F + 0.8F * grain));
-            bulge *= (0.85F + 0.5F * smooth.clouds) * (1.0F + 0.5F * grain);
-            // Old stars warm, the young star clouds bluer.
-            const float young = smoothstep(-0.05F, 0.3F, smooth.young);
-            const Vec3 diskColor =
-                glm::mix(Vec3(1.0F, 0.91F, 0.78F), Vec3(0.78F, 0.87F, 1.0F), young);
-            light = diskColor * disk + Vec3(1.0F, 0.76F, 0.48F) * bulge;
+            // Star clouds, long along the band, and their grain down to half a degree.
+            const float clouds = smoothstep(-0.45F, 0.4F, smooth.clouds);
+            disk *= 0.3F + 1.4F * clouds * clouds;
+            const float grain = fbm(alongBand(g, 2.0F) * 35.0F, 3, m_seed + 2U);
+            disk *= square(std::max(0.0F, 1.0F + 0.6F * grain));
+            bulge *= (0.9F + 0.2F * clouds) * (1.0F + 0.3F * grain);
+            // Old stars warm (the bulge's most), young star clouds bluer, in patches.
+            const float young = 0.7F * smoothstep(0.05F, 0.45F, smooth.young);
+            const Vec3 diskColor = glm::mix(m_diskColor, m_youngColor, young);
+            light = (diskColor * disk + m_bulgeColor * bulge) * (0.6F + 0.4F * speckle);
         }
         for (const Blob& nebula : m_emission) {
             light += nebula.color * (nebula.strength * along * blobShape(g, nebula));
@@ -436,6 +443,11 @@ public:
 
 private:
     std::uint32_t m_seed;
+    // The integrated light of the disk's old stars, of young star clouds, of the bulge's
+    // giants (luminance 1).
+    Vec3 m_diskColor = blackbodyColor(5600.0F);
+    Vec3 m_youngColor = blackbodyColor(9000.0F);
+    Vec3 m_bulgeColor = blackbodyColor(4700.0F);
     std::vector<Blob> m_emission;
     std::vector<Blob> m_reflection;
     std::vector<Blob> m_dark;
@@ -526,7 +538,7 @@ void generateStars(ParallelExecutor& executor, const DustMap& dust, const SpaceS
                 kBrightestMagnitude,
                 static_cast<float>((std::log10(u * total) - kCountOffset) / kCountSlope));
             // Fainter stars, farther on average, crowd towards the band.
-            const float crowding = 6.0F * smoothstep(2.0F, 11.0F, magnitude);
+            const float crowding = 10.0F * smoothstep(2.0F, 11.0F, magnitude);
             Vec3 direction;
             Galactic c{};
             do {
@@ -558,6 +570,18 @@ void generateStars(ParallelExecutor& executor, const DustMap& dust, const SpaceS
 
 // Of the grid of what varies over degrees (Galaxy::Smooth): some 0.35 degrees per texel.
 constexpr std::uint32_t kSmoothWidth = 1024;
+
+// How much the light of a texel's unresolved stars varies (Galaxy::diffuse's speckle).
+constexpr float kSpeckleSigma = 1.6F;
+
+/** @brief Log-normal of mean 1 (kSpeckleSigma) from a hash. */
+auto logNormal(std::uint32_t hash) -> float
+{
+    const float u1 = (static_cast<float>(hash >> 8U) + 0.5F) * (1.0F / 16777216.0F);
+    const float u2 = static_cast<float>(pcgHash(hash) >> 8U) * (1.0F / 16777216.0F);
+    const float gaussian = std::sqrt(-2.0F * std::log(u1)) * std::cos(kTwoPi * u2);
+    return std::exp(kSpeckleSigma * gaussian - 0.5F * kSpeckleSigma * kSpeckleSigma);
+}
 
 /** @brief Solid angle of a texel of a row of an equirectangular map. */
 auto texelSolidAngle(std::uint32_t row, std::uint32_t width, std::uint32_t height) -> float
@@ -629,6 +653,7 @@ auto buildSkyMap(const SpaceSky& settings, std::uint32_t width) -> std::shared_p
     // The diffuse light and the dust, row by row.
     std::vector<Vec3> image(static_cast<std::size_t>(w) * h);
     std::vector<float> depth(image.size());
+    const std::uint32_t speckleSeed = pcgHash(settings.seed ^ 0x5bd1e995U);
     std::vector<float> longitudes(w);
     std::vector<Vec2> longitudeCosSin(w);
     for (std::uint32_t column = 0; column < w; ++column) {
@@ -656,11 +681,14 @@ auto buildSkyMap(const SpaceSky& settings, std::uint32_t width) -> std::shared_p
                 s.young += texel.young * coarse.weight[k];
                 s.cirrus += texel.cirrus * coarse.weight[k];
                 s.wave += texel.wave * coarse.weight[k];
+                s.warp += texel.warp * coarse.weight[k];
             }
             const std::size_t i = row * w + column;
-            image[i] = galaxy.diffuse(g, {longitudes[column], latitude}, s, depth[i]) *
-                           settings.milkyWay +
-                       Vec3(kBackgroundRadiance);
+            const float speckle = logNormal(pcgHash(static_cast<std::uint32_t>(i) ^ speckleSeed));
+            image[i] =
+                galaxy.diffuse(g, {longitudes[column], latitude}, s, speckle, depth[i]) *
+                    settings.milkyWay +
+                Vec3(kBackgroundRadiance);
         }
     });
 

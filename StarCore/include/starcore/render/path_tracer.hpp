@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <chrono>
 #include <cstdint>
 
 #include "starcore/common/enum_names.hpp"
@@ -40,7 +41,10 @@ struct PathTracerSettings
     // Sample sphere lights directly (off: BSDF sampling only, for testing).
     bool nextEventEstimation = true;
     std::uint32_t seed = 0;
+    // A factor; with autoExposure, a compensation of the metered exposure.
     float exposure = 1.0F;
+    // Meter the exposure and adapt to it over time (render/exposure.hpp).
+    bool autoExposure = false;
     ToneMapper toneMapper = ToneMapper::None;
     // Encode the output as sRGB (the legacy tracer wrote linear values).
     bool srgbOutput = true;
@@ -152,6 +156,11 @@ private:
     void renderTiles(const RenderScene& scene, const Camera& camera,
                      const PathTracerSettings& settings, std::uint32_t firstTile,
                      std::uint32_t tileCount);
+    /** @brief An accumulated pixel exposed (m_displayExposure), tone mapped and packed. */
+    [[nodiscard]] auto displayPixel(Vec4 accumulated, const PathTracerSettings& settings) const
+        -> std::uint32_t;
+    /** @brief Auto exposure: meter the image, adapt, show the image at the new exposure. */
+    void updateExposure(const PathTracerSettings& settings);
 
     ParallelExecutor m_executor;
     Image2D<Vec4> m_accumulation;  // rgb = sum of samples, a = sample count.
@@ -161,6 +170,10 @@ private:
     std::uint32_t m_nextTile = 0;    // Next tile of the pass in progress.
     std::uint32_t m_passStride = 1;
     std::uint32_t m_idStride = 0;    // Stride the ids were last written at (0 = never).
+    // The exposure of the image; auto exposure's adapted one (0: none yet), and when.
+    float m_displayExposure = 1.0F;
+    float m_adaptedExposure = 0.0F;
+    std::chrono::steady_clock::time_point m_lastExposureTime;
 
     // State of the previous frame, for automatic accumulation resets.
     std::uint64_t m_lastSceneVersion = ~0ULL;

@@ -1,8 +1,9 @@
 // Automatic exposure, as render/exposure.hpp (the same constants and metering).
 
-const uint kExposureBins = 64u;
+const uint kExposureBins = 96u;
 const float kExposureMinLog2 = -14.0;
-const float kExposureMaxLog2 = 6.0;
+const float kExposureMaxLog2 = 18.0;
+const float kVeilingGlare = 0.05;
 const float kExposureLowPercentile = 0.5;
 const float kExposureHighPercentile = 0.96;
 const float kExposureKey = 0.18;

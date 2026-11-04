@@ -2,9 +2,10 @@
 // Automatic exposure (PathTracerSettings::autoExposure), as a camera meters: a histogram of
 // the frame's log2 luminance; the exposure that brings the mean of its brighter part (the
 // darkest half and the brightest few percent left out: black space, a sun in view) to middle
-// gray, within the camera's range; the exposure in use moving towards it over time, faster
-// towards darker than towards brighter, as eyes adapt. The CPU path tracer and the GPU
-// renderer (shaders/exposure.glsl) meter alike.
+// gray -- or, if brighter, the veiling glare of all the frame's light (a sun in view floods
+// the lens and the eye: the stars fade) -- within the camera's range; the exposure in use
+// moving towards it over time, faster towards darker than towards brighter, as eyes adapt.
+// The CPU path tracer and the GPU renderer (shaders/exposure.glsl) meter alike.
 
 #include <algorithm>
 #include <cmath>
@@ -14,10 +15,14 @@
 namespace starcore
 {
 
-inline constexpr std::uint32_t kExposureBins = 64;
-// Bin 0: darker than 2^kExposureMinLog2; bins 1 to 63 split the range up to 2^kExposureMaxLog2.
+inline constexpr std::uint32_t kExposureBins = 96;
+// Bin 0: darker than 2^kExposureMinLog2; bins 1 to 95 split the range up to 2^kExposureMaxLog2
+// (a third of a stop each; up to a sun's disc).
 inline constexpr float kExposureMinLog2 = -14.0F;
-inline constexpr float kExposureMaxLog2 = 6.0F;
+inline constexpr float kExposureMaxLog2 = 18.0F;
+// The share of all the light a lens spreads over the frame as glare: the metered luminance
+// is at least this much of the frame's mean.
+inline constexpr float kVeilingGlare = 0.05F;
 // The part of the pixels metered (fractions of them, darkest first).
 inline constexpr float kExposureLowPercentile = 0.5F;
 inline constexpr float kExposureHighPercentile = 0.96F;
@@ -62,6 +67,7 @@ inline constexpr float kBrighteningRate = 1.2F;  // Towards a higher one.
     double below = 0.0;
     double sum = 0.0;
     double weight = 0.0;
+    double light = 0.0;  // Of all the pixels.
     for (std::uint32_t bin = 0; bin < kExposureBins; ++bin) {
         const double count = histogram[bin];
         const double overlap = std::max(0.0, std::min(below + count, high) - std::max(below, low));
@@ -73,9 +79,11 @@ inline constexpr float kBrighteningRate = 1.2F;  // Towards a higher one.
         sum += overlap * log2Luminance;
         weight += overlap;
         below += count;
+        light += bin == 0 ? 0.0 : count * std::exp2(log2Luminance);
     }
-    const float mean = weight > 0.0 ? static_cast<float>(sum / weight) : std::log2(kExposureKey);
-    return std::clamp(kExposureKey / std::exp2(mean), kMinExposure, kMaxExposure);
+    const double metered = std::max(weight > 0.0 ? std::exp2(sum / weight) : kExposureKey,
+                                    kVeilingGlare * light / total);
+    return std::clamp(static_cast<float>(kExposureKey / metered), kMinExposure, kMaxExposure);
 }
 
 /** @brief The exposure in use, `seconds` later, moving from `current` towards `target`. */

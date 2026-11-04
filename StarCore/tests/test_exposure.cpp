@@ -74,11 +74,16 @@ TEST_CASE("Auto exposure: metering", "[exposure]")
         const auto histogram = histogramOf(std::array{std::pair{radiance, 1000U}});
         CHECK(meteredExposure(histogram) * radiance == Approx(kExposureKey).epsilon(bin - 1.0F));
     }
-    // Half of it black space, a sun in a few percent: the rest is metered.
+    // Half of it black space, highlights in a few percent: the rest is metered...
     const auto histogram =
         histogramOf(std::array{std::pair{0.0F, 500U}, std::pair{0.5F, 470U},
-                               std::pair{1e4F, 30U}});
+                               std::pair{20.0F, 30U}});
     CHECK(meteredExposure(histogram) * 0.5F == Approx(kExposureKey).epsilon(bin - 1.0F));
+    // ... unless they are a sun, whose glare floods the view: 1% at 4000, its glare 2.
+    const auto sun = histogramOf(std::array{std::pair{0.0F, 500U}, std::pair{0.5F, 490U},
+                                            std::pair{4000.0F, 10U}});
+    const float glare = kVeilingGlare * (490.0F * 0.5F + 10.0F * 4000.0F) / 1000.0F;
+    CHECK(meteredExposure(sun) * glare == Approx(kExposureKey).epsilon(bin - 1.0F));
     // Within the camera's range.
     CHECK(meteredExposure(histogramOf(std::array{std::pair{1e-5F, 10U}})) == kMaxExposure);
     CHECK(meteredExposure(histogramOf(std::array{std::pair{50.0F, 10U}})) == kMinExposure);

@@ -1,12 +1,15 @@
 #version 460
 // Bloom, upsamples: a level plus the next smaller one through a 3x3 tent
-// filter; from the smallest level up, level 0 ends up with the sum of all
-// levels -- blurs of growing radius.
+// filter, weighted by kFalloff; from the smallest level up, level 0 ends up
+// with the sum of all levels -- blurs of growing radius, each wider one
+// fainter (a lens's glare is brightest near what causes it).
 
 layout(local_size_x = 8, local_size_y = 8) in;
 
 layout(set = 0, binding = 0) uniform sampler2D source;  // The smaller level.
 layout(set = 0, binding = 1, rgba16f) uniform image2D target;
+
+const float kFalloff = 0.6;  // post_process.cpp's kBloomFalloff.
 
 void main()
 {
@@ -22,5 +25,5 @@ void main()
             2.0;
     tent += texture(source, uv + t).rgb + texture(source, uv - t).rgb +
             texture(source, uv + vec2(t.x, -t.y)).rgb + texture(source, uv + vec2(-t.x, t.y)).rgb;
-    imageStore(target, pixel, imageLoad(target, pixel) + vec4(tent / 16.0, 0.0));
+    imageStore(target, pixel, imageLoad(target, pixel) + vec4(tent * (kFalloff / 16.0), 0.0));
 }

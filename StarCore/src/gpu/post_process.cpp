@@ -29,6 +29,7 @@ constexpr VkFormat kParticleFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr VkFormat kBloomFormat = VK_FORMAT_R16G16B16A16_SFLOAT;
 constexpr std::uint32_t kMaxBloomLevels = 6;
 constexpr std::uint32_t kMinBloomSize = 8;  // Pixels of the smallest level.
+constexpr float kBloomFalloff = 0.6F;       // bloom_up.comp's: each wider level's weight.
 constexpr std::uint32_t kMotionTile = 16;   // motion_blur.glsl.
 // The reconstruction filter looks one tile around: larger blurs would be cut.
 constexpr float kMaxBlurRadius = 1.5F * static_cast<float>(kMotionTile);
@@ -421,6 +422,18 @@ void PostProcess::recordMotionTiles(VkCommandBuffer commandBuffer, const PostFra
     computeBarrier(commandBuffer);
 }
 
+auto PostProcess::bloomScale() const -> float
+{
+    // The levels' weights sum (1, kBloomFalloff, kBloomFalloff^2, ...) to an average.
+    float sum = 0.0F;
+    float weight = 1.0F;
+    for (std::size_t level = 0; level < m_bloom.size(); ++level) {
+        sum += weight;
+        weight *= kBloomFalloff;
+    }
+    return sum > 0.0F ? 1.0F / sum : 1.0F;
+}
+
 void PostProcess::record(VkCommandBuffer commandBuffer, const PostFrame& frame,
                          const vulkan::Image& radiance, const vulkan::Image& output)
 {
@@ -441,7 +454,7 @@ void PostProcess::record(VkCommandBuffer commandBuffer, const PostFrame& frame,
     FinalParams params{
         .toneMapper = static_cast<std::uint32_t>(frame.settings.toneMapper),
         .bloomStrength = effects.bloomStrength,
-        .bloomScale = m_bloom.empty() ? 1.0F : 1.0F / static_cast<float>(m_bloom.size()),
+        .bloomScale = bloomScale(),
         .shutter = effects.shutter,
         .maxRadius = blurRadius(effects),
         .vignette = frame.raw ? 0.0F : std::clamp(effects.vignette, 0.0F, 1.0F),

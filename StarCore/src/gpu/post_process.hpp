@@ -83,6 +83,8 @@ private:
     void recordBloom(VkCommandBuffer commandBuffer, const vulkan::Image& radiance,
                      bool particles);
     void recordMotionTiles(VkCommandBuffer commandBuffer, const PostFrame& frame);
+    /** @brief post.comp's bloomScale: the bloom levels' sum to an average. */
+    [[nodiscard]] auto bloomScale() const -> float;
 
     vulkan::Context* m_context;
     vulkan::GraphicsPipeline m_particlePipeline;

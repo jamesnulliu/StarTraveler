@@ -5,8 +5,7 @@ tracers on the CPU and on the GPU (Vulkan ray queries), the classic 2D raster
 algorithms and collision detection, usable from C++ and from Python.
 **StarTraveler** is a game built on it in C++: fly a ship through a
 path-traced universe from its 3D cockpit, draw shapes in space and open
-portals. It is the modern rewrite of
-[XDrawBoard](https://github.com/jamesnulliu/XDrawBoard-Legacy).
+portals.
 
 ```
 StarTraveler/                 repository root: a CMake workspace
@@ -301,8 +300,7 @@ the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
   particles along the path they moved, bursts), drawn by the GPU renderer.
 - **2D raster**: Bresenham/midpoint/DDA lines, midpoint ellipses, Bezier and
   B-spline curves, Cohen-Sutherland / midpoint-subdivision / Sutherland-Hodgman
-  clipping, scan-line and flood fill -- the algorithms of the original drawing
-  board, drawn as a world-space overlay.
+  clipping, scan-line and flood fill, drawn as a world-space overlay.
 - **Physics**: sphere, box and mesh colliders; raycasts, continuous sphere
   casts, overlaps and collide-and-slide, filtered by the layer collision matrix.
 - **Runtime**: GLFW window, Vulkan (vk-bootstrap, VMA), Dear ImGui docking with

@@ -96,10 +96,9 @@ enum class ViewMode : std::uint8_t
 };
 
 /**
- * @brief The StarTraveler game/editor (port of the legacy XDrawBoard Layer):
- *        fly a ship through a path-traced scene from its 3D cockpit, draw 2D
- *        shapes with the classic raster algorithms, edit and group them, open
- *        portals.
+ * @brief The StarTraveler game/editor: fly a ship through a path-traced
+ *        scene from its 3D cockpit, draw 2D shapes with the classic raster
+ *        algorithms, edit and group them, open portals.
  */
 class GameLayer final : public starcore::Layer
 {

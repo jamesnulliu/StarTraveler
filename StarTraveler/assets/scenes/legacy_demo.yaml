@@ -1,5 +1,5 @@
-# The demo scene from XDrawBoard-Legacy (origin/dev, Layer::Layer()),
-# ported to the StarCore scene format. Colliders were added for the ship.
+# The legacy demo scene: a few spheres, a light and a tetrahedron, with colliders
+# for the ship.
 StarCoreScene: 1
 Environment:
   SkyColor: [0.0392156877, 0, 0.235294119]

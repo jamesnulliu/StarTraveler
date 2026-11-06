@@ -20,8 +20,8 @@ StarTraveler/                 repository root: a CMake workspace
 │  └─ python/                    the `starcore` package: bindings/, starcore/, tests/
 └─ StarTraveler/              the game (C++ frontend of StarCore)
    ├─ src/  tests/
-   ├─ assets/                 scenes/ (YAML), models/cockpit.glb
-   └─ tools/build_cockpit.py  generates the ship model with the Python API
+   ├─ assets/                 scenes/ (YAML), models/ (cockpit.glb, strange_rocks.glb)
+   └─ tools/                  generate those models and the default scene with the Python API
 ```
 
 ## Building
@@ -136,10 +136,11 @@ performance (1/3); `--upscaler Off|TAAU|FSR|DLSS|DLSS-RR` and `--quality` set th
 at start. DLSS-RR (NVIDIA's Ray Reconstruction) also denoises: less noise and lag
 while flying than the engine's denoiser, for more GPU time (every pixel traced);
 with Balanced or Performance it costs about as much as DLSS at Quality.
-The sphere lights' direct light is shadowed with shadow maps every frame, as
-games do ("Direct shadows" in the Render panel; Traced accumulates shadow rays
-instead, converging to the path tracer's image when still); "Radiance cache"
-turns on the cache of bounced light (see below).
+The sphere lights' shadows are traced, soft as far as the light's size makes
+them and accumulated, converging to the path tracer's image when still
+("Direct shadows" in the Render panel; Shadow maps, as games do, take no rays but
+reach only 64 units by default); "Radiance cache" turns on the cache of bounced
+light (see below).
 The Render panel switches to plain path tracing (the reference, which restarts
 whenever anything moves), traces every pixel every frame (Trace resolution
 Full: less noise while moving, almost twice the GPU time), tunes the denoiser
@@ -149,10 +150,22 @@ Turning "Ray tracing" off (or `--raster`) rasterizes on the GPU instead: direct
 light with soft shadows from shadow maps, no reflections or bounced light, no
 rays at all, about 2 ms per frame in the cockpit (0.4 ms without the shadows).
 On the GPU the game adds bloom, motion blur (the cockpit stays sharp while the
-world rushes by) and a vignette, and draws particles: engine exhaust that
-follows the thrust, sparks when the hull scrapes something and space dust that
-streaks past when flying fast (panel "Effects"; particle emitters can be added
-to any entity in the inspector or with Create > Particle emitter).
+world rushes by) and a vignette; what a sun in view does inside a lens (ghosts of
+the aperture, a halo, thin rays, an anamorphic streak, dust on the glass lit against
+the light), all of it gone when a rock passes in front of the sun; its light on
+thin dust, traced, dark in the shadows of the rocks; chromatic aberration and film
+grain. It draws particles: engine exhaust that follows the thrust, sparks when the
+hull scrapes something and space dust that streaks past when flying fast (panel
+"Effects"; particle emitters can be added to any entity in the inspector or with
+Create > Particle emitter). The pilot feels the flight: the head is thrown against
+the acceleration and trails the turns, and the view widens and shakes with speed;
+all of it comes to rest with the ship, so that a resting image still converges.
+
+The default scene, `blue_star.yaml`, is made to show what tracing rays can do: a
+mirror that holds a second sun, liquid metal that shows everything at once, glass
+that bends the star's corona, cracked rocks lit from within whose glow falls on
+what is near them, a lattice of bone the light passes through, and a ring wide enough
+to fly through. `deep_space.yaml`, with planets under a Milky Way, is still there.
 Layers (panel "Layers") control visibility, locking and which layers collide;
 the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
 
@@ -289,12 +302,15 @@ the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
   sprites, streaked along their screen motion, tested against the rasterized
   depth), adds bloom (a downsampled chain of blurs, Jimenez's filters), motion
   blur (McGuire et al.'s reconstruction filter over the motion vectors and
-  depths) and a vignette, and tone maps. With every effect off the image is
-  exactly the tone-mapped one, as the CPU's.
+  depths), a vignette, chromatic aberration, a sun's flares (drawn where the sun
+  is, and as visible as the taps over its disc on the image say), light shafts
+  (hybrid pipeline: ray queries from steps along each view ray at a quarter of the
+  resolution, averaged over frames) and film grain, and tone maps. With every effect
+  off the image is exactly the tone-mapped one, as the CPU's.
   `starcore-render scene.yaml --gpu` (or `--hybrid`, with `--move`,
   `--turn-entity`, `--view`, `--half`, `--shadow-maps`, `--cache`, `--filter-passes`, or
   `--raster`, `--no-shadows`;
-  `--bloom`, `--motion-blur`, `--vignette`; `--upscaler`, `--quality`,
+  `--bloom`, `--motion-blur`, `--vignette`, `--lens`, `--light-shafts`; `--upscaler`, `--quality`,
   `--sharpness`) renders offscreen.
 - **Particles**: a CPU particle system (emitter components spreading their
   particles along the path they moved, bursts), drawn by the GPU renderer.
@@ -319,3 +335,14 @@ The script assembles the cockpit and hull from StarCore primitives and writes
 `StarTraveler/assets/models/cockpit.glb`. Any glTF with a "Cockpit" and a "Hull"
 root node in the same ship-local frame (-Z forward, eyes at (0, 0.42, 0.15)) can
 replace it, e.g. a model exported from Blender.
+
+## Regenerating the blue star scene
+
+```powershell
+uv run python StarTraveler/tools/build_blue_star.py               # Under a minute.
+uv run python StarTraveler/tools/build_blue_star.py --scene-only  # Only where things float.
+```
+
+The rocks are signed distance functions meshed with surface nets; the crystals and
+the mirror are cut by hand. It writes `assets/models/strange_rocks.glb` and
+`assets/scenes/blue_star.yaml`.

@@ -90,7 +90,7 @@ auto main(int argc, char** argv) -> int
     }
     const std::filesystem::path assetRoot = findAssetRoot(argv[0]);
     if (scenePath.empty()) {
-        scenePath = assetRoot / "scenes" / "deep_space.yaml";
+        scenePath = assetRoot / "scenes" / "blue_star.yaml";
     }
 
     int exitCode = EXIT_SUCCESS;

@@ -124,10 +124,59 @@ TEST_CASE("Ships fly where they point, coast to a stop and steer with the mouse"
     REQUIRE_THAT(ship.get<ShipComponent>().yaw, WithinAbs(0.0, 1e-3));
     Camera camera;
     ships.attachCamera(camera, ship);
+    // The pilot's eyes are behind the turn at first, and soon catch up.
+    REQUIRE(glm::distance(camera.forward(), Vec3{1, 0, 0}) > 0.01F);
+    fly(scene, ships, ship, ShipInput{}, 2.0F);
+    ships.attachCamera(camera, ship);
     REQUIRE(glm::distance(camera.forward(), Vec3{1, 0, 0}) < 1e-4F);
     // The eyes are inside the cockpit, rotated with the ship.
     const Vec3 eye = positionOf(ship) + Vec3(-ships.settings.eye.z, ships.settings.eye.y, 0.0F);
     REQUIRE(glm::distance(camera.position(), eye) < 1e-4F);
+}
+
+TEST_CASE("The pilot feels the flight, and nothing of it at rest", "[gameplay][ship]")
+{
+    Scene scene;
+    AssetLibrary assets;
+    ShipSystem ships;
+    Entity ship = *ships.spawn(scene, assets, kCockpit, {0, 0, 0}, -90.0F);
+    Camera camera;
+    ships.attachCamera(camera, ship);
+    REQUIRE(camera.verticalFov() == ships.settings.fieldOfView);
+
+    // Flat out with boost: thrown back while speeding up, the view wider, the head shaking.
+    fly(scene, ships, ship, ShipInput{.thrust = {0, 0, 1}, .boost = true}, 0.5F);
+    REQUIRE(ship.get<ShipComponent>().lean.z > 0.01F);  // Ship space: +Z is back.
+    fly(scene, ships, ship, ShipInput{.thrust = {0, 0, 1}, .boost = true}, 4.0F);
+    ships.attachCamera(camera, ship);
+    const float wide = camera.verticalFov();
+    REQUIRE(wide > ships.settings.fieldOfView + 5.0F);
+    const Vec3 shaken = camera.position() - positionOf(ship);
+    fly(scene, ships, ship, ShipInput{.thrust = {0, 0, 1}, .boost = true}, kStep);
+    ships.attachCamera(camera, ship);
+    REQUIRE(glm::distance(camera.position() - positionOf(ship), shaken) > 1e-4F);
+
+    // Bolted to the ship, none of that.
+    ShipSystem bolted;
+    bolted.settings.bodyMotion = 0.0F;
+    bolted.attachCamera(camera, ship);
+    REQUIRE(camera.verticalFov() == bolted.settings.fieldOfView);
+
+    // At rest, all of it gone exactly, and the scene (the image) stops changing.
+    fly(scene, ships, ship, ShipInput{}, 10.0F);
+    const ShipComponent& state = ship.get<ShipComponent>();
+    REQUIRE(state.velocity == Vec3(0.0F));
+    REQUIRE(state.lean == Vec3(0.0F));
+    REQUIRE(state.lookLag == Vec2(0.0F));
+    REQUIRE(state.fovKick == 0.0F);
+    ships.attachCamera(camera, ship);
+    REQUIRE(camera.verticalFov() == ships.settings.fieldOfView);
+    REQUIRE(glm::distance(camera.position(), positionOf(ship) + Vec3(0.0F, ships.settings.eye.y,
+                                                                     ships.settings.eye.z)) <
+            1e-4F);
+    const auto version = scene.version();
+    fly(scene, ships, ship, ShipInput{}, 0.5F);
+    REQUIRE(scene.version() == version);
 }
 
 TEST_CASE("Ships collide with planets but not with their own cockpit", "[gameplay][ship]")

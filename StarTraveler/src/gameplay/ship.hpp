@@ -32,6 +32,11 @@ struct ShipComponent
     starcore::Vec3 velocity{0.0F};
     float yaw = -90.0F;  // Degrees, same convention as Camera.
     float pitch = 0.0F;
+    // The pilot's body, which all come to rest with the ship (a resting image still converges):
+    starcore::Vec3 lean{0.0F};   // Head, ship space: thrown against the acceleration.
+    starcore::Vec2 lookLag{0.0F};  // Degrees of yaw, pitch the eyes are behind a turn.
+    float fovKick = 0.0F;        // Degrees the view widens with speed.
+    float travel = 0.0F;         // Seconds under way (what shakes the head).
 };
 
 struct ShipSettings
@@ -43,6 +48,9 @@ struct ShipSettings
     float lookSensitivity = 0.12F;   // Degrees per pixel.
     float radius = 1.6F;             // Hull collision sphere.
     starcore::Vec3 eye{0.0F, 0.42F, 0.15F};  // Pilot's eyes in ship space.
+    float fieldOfView = 70.0F;       // Vertical, degrees: wider than a free camera's.
+    // How the pilot feels the flight (0: a camera bolted to the ship, 1 as designed).
+    float bodyMotion = 1.0F;
 };
 
 /** @brief Per-frame controls (decoupled from the input backend). */
@@ -90,7 +98,7 @@ public:
                 const starcore::PhysicsWorld& physics, const ShipInput& input,
                 float deltaSeconds) -> ShipEvents;
 
-    /** @brief Put the camera at the pilot's eyes, looking where the ship points. */
+    /** @brief Put the camera at the pilot's eyes, looking about where the ship points. */
     void attachCamera(starcore::Camera& camera, starcore::Entity ship) const;
 
     /** @brief Ship rotation for a yaw/pitch (no roll); local -Z is forward. */

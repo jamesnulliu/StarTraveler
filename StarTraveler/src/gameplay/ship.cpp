@@ -2,6 +2,7 @@
 #include <cmath>
 #include <format>
 
+#include <glm/common.hpp>
 #include <glm/geometric.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <glm/trigonometric.hpp>
@@ -23,6 +24,15 @@ const Vec3 kCabinLightPosition{0.0F, 0.62F, 0.55F};
 const Vec3 kNozzles[] = {{-0.62F, -0.8F, 3.75F}, {0.62F, -0.8F, 3.75F}};
 constexpr float kIdleExhaust = 30.0F;  // Particles per second and engine.
 constexpr float kFullExhaust = 400.0F;
+// The pilot's body (ShipSettings::bodyMotion). Units of ship space, degrees, per second.
+constexpr float kLeanPerAcceleration = 0.0035F;  // Of the head, per unit / s^2.
+constexpr float kMaxLean = 0.07F;
+constexpr float kLeanRate = 7.0F;
+constexpr float kMaxLookLag = 2.5F;
+constexpr float kLookLagRate = 12.0F;
+constexpr float kMaxFovKick = 9.0F;  // At top speed with boost.
+constexpr float kFovKickRate = 3.0F;
+constexpr float kMaxShake = 0.006F;  // Likewise.
 
 /** @brief Hot, fast and short-lived blue exhaust. */
 auto exhaust() -> ParticleEmitterComponent
@@ -187,11 +197,43 @@ auto ShipSystem::update(Scene& scene, Entity ship, const PhysicsWorld& physics,
         events.teleported = true;
     }
 
+    // The pilot's body. Each of these settles to exactly nothing with the ship.
+    const ShipComponent& previous = ship.get<ShipComponent>();
+    {
+        const float dt = std::max(deltaSeconds, 1e-4F);
+        const Vec3 acceleration = (state.velocity - previous.velocity) / dt;
+        const Vec3 lean = glm::clamp(glm::inverse(rotation) * acceleration * -kLeanPerAcceleration,
+                                     Vec3(-kMaxLean), Vec3(kMaxLean));
+        state.lean += (lean - state.lean) * (1.0F - std::exp(-kLeanRate * dt));
+        state.lookLag += Vec2(std::remainder(state.yaw - previous.yaw, 360.0F),
+                              state.pitch - previous.pitch);
+        state.lookLag = glm::clamp(state.lookLag * std::exp(-kLookLagRate * dt), Vec2(-kMaxLookLag),
+                                   Vec2(kMaxLookLag));
+        const float speed = glm::length(state.velocity);
+        const float fraction = speed / (settings.maxSpeed * settings.boostFactor);
+        const float kick = kMaxFovKick * std::pow(fraction, 1.5F);
+        state.fovKick += (kick - state.fovKick) * (1.0F - std::exp(-kFovKickRate * dt));
+        if (speed > 0.0F) {
+            state.travel += dt;
+        } else {
+            if (glm::dot(state.lean, state.lean) < 1e-8F) {
+                state.lean = Vec3(0.0F);
+            }
+            if (glm::dot(state.lookLag, state.lookLag) < 1e-5F) {
+                state.lookLag = Vec2(0.0F);
+            }
+            if (state.fovKick < 1e-3F) {
+                state.fovKick = 0.0F;
+            }
+        }
+    }
+
     // Only touch the components when something changed: a resting ship keeps
     // the scene version (and so the path tracer's accumulation) unchanged.
-    const ShipComponent& previous = ship.get<ShipComponent>();
     if (state.velocity != previous.velocity || state.yaw != previous.yaw ||
-        state.pitch != previous.pitch) {
+        state.pitch != previous.pitch || state.lean != previous.lean ||
+        state.lookLag != previous.lookLag || state.fovKick != previous.fovKick ||
+        state.travel != previous.travel) {
         ship.patch<ShipComponent>([&](ShipComponent& s) { s = state; });
     }
     const TransformComponent& transform = ship.get<TransformComponent>();
@@ -207,8 +249,18 @@ auto ShipSystem::update(Scene& scene, Entity ship, const PhysicsWorld& physics,
 void ShipSystem::attachCamera(Camera& camera, Entity ship) const
 {
     const ShipComponent& state = ship.get<ShipComponent>();
-    camera.setPosition(Vec3(ship.worldTransform() * Vec4(settings.eye, 1.0F)));
-    camera.setRotation(state.yaw, state.pitch);
+    // Engines and speed through the hull: faster, and it shakes more; nothing at rest.
+    const float fraction =
+        glm::length(state.velocity) / (settings.maxSpeed * settings.boostFactor);
+    const float t = state.travel;
+    const Vec3 shake = Vec3(std::sin(t * 37.1F) + 0.5F * std::sin(t * 53.3F),
+                            std::sin(t * 41.7F + 1.3F) + 0.5F * std::sin(t * 61.9F), 0.0F) *
+                       (kMaxShake * fraction * fraction);
+    const Vec3 eye = settings.eye + (state.lean + shake) * settings.bodyMotion;
+    camera.setPosition(Vec3(ship.worldTransform() * Vec4(eye, 1.0F)));
+    camera.setRotation(state.yaw - state.lookLag.x * settings.bodyMotion,
+                       state.pitch - state.lookLag.y * settings.bodyMotion);
+    camera.setVerticalFov(settings.fieldOfView + state.fovKick * settings.bodyMotion);
 }
 
 }  // namespace startraveler

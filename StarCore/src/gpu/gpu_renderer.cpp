@@ -598,6 +598,7 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
         .particles = particles,
         .sky = &scene.sky,
         .renderScale = Vec2(renderSize) / Vec2(outputSize),
+        .lights = scene.lights,
         .frameSlot = slotIndex,
     };
     switch (pipeline) {
@@ -626,6 +627,8 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
         if (options.view == HybridView::Final) {
             post.depth = &m_visibility->depth();
             post.motion = &m_hybrid->motion();
+            post.tlas = m_scene.tlas();
+            post.instanceMask = settings.instanceMask;
         } else {
             // Intermediate images as they are.
             post.raw = rawView(options.view);

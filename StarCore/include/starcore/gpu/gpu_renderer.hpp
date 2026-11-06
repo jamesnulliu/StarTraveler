@@ -159,6 +159,19 @@ struct EffectSettings
     float maxBlur = 48.0F;  // Pixels.
     // Darker corners (0: none, 1: black).
     float vignette = 0.0F;
+    // What the brightest sphere light small enough to be a sun does inside a lens, while it is
+    // in view and not hidden (each a strength, 1 as designed; 0: none).
+    float lensGhosts = 0.0F;  // Images of the aperture, strung across the image.
+    float lensHalo = 0.0F;    // A ring around the sun.
+    float starburst = 0.0F;   // Thin rays, diffraction on the aperture's struts.
+    float anamorphic = 0.0F;  // A long horizontal line through it.
+    float lensDirt = 0.0F;    // Dust on the glass, seen only against the light.
+    // Of the whole image (likewise).
+    float chromaticAberration = 0.0F;  // Red and blue apart, towards the corners.
+    float filmGrain = 0.0F;
+    // Dust lit by that sun, dark in the shadows of what is in its way: rays traced through the
+    // view (the Hybrid pipeline; a strength, 1 as designed; 0: none).
+    float lightShafts = 0.0F;
 
     auto operator==(const EffectSettings&) const -> bool = default;
 };

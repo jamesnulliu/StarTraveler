@@ -67,18 +67,27 @@ struct RenderOptions
     float gpuBudgetMs = 8.0F;
     // GPU: the hybrid pipeline (rasterized first hits, reprojection and
     // denoising) by default, paths from a quarter of the pixels per frame
-    // (each in turn), the sphere lights' direct light shadowed with shadow
-    // maps; plain path tracing converges to the reference. Bloom, motion blur
-    // and a vignette.
+    // (each in turn), the sphere lights' shadows traced (shadow maps reach 64
+    // units, and the rocks of a scene in open space float farther off than
+    // that); plain path tracing converges to the reference. Bloom, motion blur,
+    // a vignette, what a sun does inside a lens and its light on the dust.
     starcore::GpuRenderOptions gpuRender{
         .pipeline = starcore::GpuPipeline::Hybrid,
         .traceResolution = starcore::TraceResolution::Half,
-        .directShadows = starcore::DirectShadows::ShadowMaps,
+        .directShadows = starcore::DirectShadows::Traced,
         .effects = {.bloom = true,
                     .bloomStrength = 0.05F,
                     .motionBlur = true,
                     .shutter = 0.5F,
-                    .vignette = 0.25F},
+                    .vignette = 0.25F,
+                    .lensGhosts = 1.0F,
+                    .lensHalo = 1.0F,
+                    .starburst = 1.0F,
+                    .anamorphic = 0.7F,
+                    .lensDirt = 1.0F,
+                    .chromaticAberration = 1.0F,
+                    .filmGrain = 1.0F,
+                    .lightShafts = 1.0F},
     };
     // Exposed as a camera meters it, tone mapped as film (AgX, the Punchy look).
     starcore::PathTracerSettings tracer{.autoExposure = true,

@@ -1,0 +1,147 @@
+#version 460
+// Light shafts: thin dust everywhere, lit by the sun wherever a ray to it is free, and dark in
+// the shadow of whatever is in the way (traced against the scene, unlike the screen-space kind:
+// a rock behind the camera casts its shadow into the view too). Along each view ray up to the
+// surface it meets, a few steps closer together near the camera; a low resolution, and the
+// noise of the jittered steps averaged over frames (reprojected as a turning camera moves the
+// image: the dust's light has no edges of its own for moving through it to smear).
+
+#extension GL_EXT_ray_query : require
+#extension GL_GOOGLE_include_directive : require
+
+#include "noise.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+
+layout(set = 0, binding = 0) uniform accelerationStructureEXT tlas;
+layout(set = 0, binding = 1) uniform FrameData  // FrameUniforms, its start.
+{
+    vec4 cameraPosition;  // w: near plane of the visibility pass.
+    vec4 cameraForward;
+    vec4 cameraRight;
+    vec4 cameraUp;
+    vec4 previousPosition;
+    vec4 previousForward;
+    vec4 previousRight;
+    vec4 previousUp;
+}
+frameData;
+layout(set = 0, binding = 2) uniform sampler2D depth;  // Reversed: near / z, 0 where nothing is.
+layout(set = 0, binding = 3) uniform sampler2D history;
+layout(set = 0, binding = 4, rgba16f) uniform writeonly image2D target;
+
+layout(push_constant) uniform Params
+{
+    vec4 sunDirection;   // xyz: unit, towards it.
+    vec4 sunIrradiance;  // rgb; w: the dust's scattering per unit of length.
+    uint frame;
+    uint mask;           // Instances that cast shadows.
+    float historyWeight;
+    float padding;
+}
+params;
+
+const int kSteps = 10;
+const float kStart = 6.0;       // Clear of the ship.
+const float kReach = 450.0;     // How far along the ray the dust is counted.
+const float kReachShadow = 2500.0;  // How far towards the sun anything can be in its way.
+
+/** Henyey-Greenstein: g > 0 scatters forwards, so that dust glows most around the sun. */
+float scatterPhase(float cosine, float g)
+{
+    float g2 = g * g;
+    float denominator = 1.0 + g2 - 2.0 * g * cosine;
+    return (1.0 - g2) / (4.0 * kPi * denominator * sqrt(denominator));
+}
+
+/** Clouds of it, large enough not to read as noise. */
+float dustAt(vec3 p)
+{
+    float clouds = gradientNoise(p * 0.009, 3u) + 0.5 * gradientNoise(p * 0.027, 5u);
+    return 0.3 + 0.7 * smoothstep(-0.25, 0.35, clouds);
+}
+
+bool sunlit(vec3 p, vec3 toSun)
+{
+    rayQueryEXT query;
+    rayQueryInitializeEXT(query, tlas, gl_RayFlagsTerminateOnFirstHitEXT, params.mask & 0xFFu, p,
+                          0.0, toSun, kReachShadow);
+    while (rayQueryProceedEXT(query)) {
+        // See-through panes are not opaque in the TLAS: they let it through. Spheres are boxes
+        // to it, and have to be tested.
+        if (rayQueryGetIntersectionTypeEXT(query, false) ==
+            gl_RayQueryCandidateIntersectionAABBEXT) {
+            vec3 o = rayQueryGetIntersectionObjectRayOriginEXT(query, false);
+            vec3 d = rayQueryGetIntersectionObjectRayDirectionEXT(query, false);
+            float a = dot(d, d);
+            float b = dot(o, d);
+            float c = dot(o, o) - 1.0;
+            float discriminant = b * b - a * c;
+            if (discriminant > 0.0) {
+                float t = (-b - sqrt(discriminant)) / a;
+                if (t > 0.0 && t < kReachShadow) {
+                    rayQueryGenerateIntersectionEXT(query, t);
+                }
+            }
+        }
+    }
+    return rayQueryGetIntersectionTypeEXT(query, true) == gl_RayQueryCommittedIntersectionNoneEXT;
+}
+
+void main()
+{
+    ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(target);
+    if (any(greaterThanEqual(pixel, size))) {
+        return;
+    }
+    vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
+    vec3 ray = frameData.cameraForward.xyz + frameData.cameraRight.xyz * (2.0 * uv.x - 1.0) +
+               frameData.cameraUp.xyz * (1.0 - 2.0 * uv.y);
+    float rayLength = length(ray);
+    vec3 direction = ray / rayLength;
+    vec3 origin = frameData.cameraPosition.xyz;
+
+    float stored = texture(depth, uv).r;
+    float end = stored > 0.0 ? min(frameData.cameraPosition.w / stored * rayLength, kReach) : kReach;
+
+    vec3 light = vec3(0.0);
+    if (end > kStart) {
+        // Interleaved gradient noise, another pattern every frame.
+        vec2 shifted = vec2(pixel) + 5.588238 * float(params.frame & 63u);
+        float jitter = fract(52.9829189 * fract(dot(shifted, vec2(0.06711056, 0.00583715))));
+        float ratio = end / kStart;
+        float sum = 0.0;
+        float previous = kStart;
+        for (int i = 0; i < kSteps; ++i) {
+            float next = kStart * pow(ratio, float(i + 1) / float(kSteps));
+            float t = previous + (next - previous) * jitter;
+            vec3 p = origin + direction * t;
+            if (sunlit(p, params.sunDirection.xyz)) {
+                sum += dustAt(p) * (next - previous);
+            }
+            previous = next;
+        }
+        float cosine = dot(direction, params.sunDirection.xyz);
+        float phase = 0.35 * scatterPhase(cosine, 0.78) + 0.65 * scatterPhase(cosine, 0.2);
+        light = params.sunIrradiance.rgb * (sum * phase * params.sunIrradiance.w);
+    }
+
+    // Where this direction was on the image last frame.
+    float weight = 0.0;
+    vec2 previousUv = uv;
+    float previousZ = dot(ray, frameData.previousForward.xyz);
+    if (params.historyWeight > 0.0 && previousZ > 0.0) {
+        vec3 right = frameData.previousRight.xyz;
+        vec3 up = frameData.previousUp.xyz;
+        vec2 ndc = vec2(dot(ray, right) / dot(right, right), dot(ray, up) / dot(up, up)) / previousZ;
+        previousUv = vec2(0.5 + 0.5 * ndc.x, 0.5 - 0.5 * ndc.y);
+        if (all(greaterThanEqual(previousUv, vec2(0.0))) && all(lessThan(previousUv, vec2(1.0)))) {
+            weight = params.historyWeight;
+        }
+    }
+    if (weight > 0.0) {
+        light = mix(light, texture(history, previousUv).rgb, weight);
+    }
+    imageStore(target, pixel, vec4(light, 0.0));
+}

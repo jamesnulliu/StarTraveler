@@ -12,9 +12,11 @@
 //      chain of half-size levels, then upsampled back summing them;
 //   3. motion tiles (motion_tiles/neighbors.comp): the largest blur per 16x16
 //      tile and its neighborhood;
-//   4. final (post.comp): motion blur of the radiance (McGuire's
-//      reconstruction filter), particles, bloom, vignette, tone mapping into
-//      the RGBA8 output.
+//   4. light shafts (light_shafts.comp): dust lit by the sun along the view rays, traced;
+//   5. how much of the sun is seen (lens_visibility.comp), for
+//   6. final (post.comp): motion blur of the radiance (McGuire's
+//      reconstruction filter), chromatic aberration, particles, the shafts, bloom, the sun's
+//      flares (lens.glsl), vignette, tone mapping into the RGBA8 output, film grain.
 
 #include <array>
 #include <cstdint>
@@ -54,7 +56,24 @@ struct PostFrame
     const vulkan::Image* motion = nullptr;
     // The size of those (rendered) over the output's: less than 1 when upscaled.
     Vec2 renderScale{1.0F};
+    // The scene's lights (RenderScene::lights): the sun of the lens effects is among them.
+    std::span<const RenderLight> lights;
+    // What light shafts are traced against; none: no shafts.
+    VkAccelerationStructureKHR tlas = VK_NULL_HANDLE;
+    std::uint32_t instanceMask = kAllInstances;
     std::uint32_t frameSlot = 0;
+};
+
+/** @brief A sun on the image (the lens effects'). */
+struct LensSun
+{
+    Vec2 uv{0.5F};
+    float radius = 0.0F;     // Of its disc, image heights.
+    Vec3 color{1.0F};        // Brightest component 1.
+    float luminance = 0.0F;  // Of its radiance.
+    Vec3 direction{0.0F, 0.0F, -1.0F};  // From the camera, unit.
+    Vec3 irradiance{0.0F};              // At the camera.
+    bool inFront = false;               // Of the camera: `uv` and `radius` mean something.
 };
 
 class PostProcess
@@ -83,6 +102,13 @@ private:
     void recordBloom(VkCommandBuffer commandBuffer, const vulkan::Image& radiance,
                      bool particles);
     void recordMotionTiles(VkCommandBuffer commandBuffer, const PostFrame& frame);
+    /** @brief Into m_lensState: how much of the sun shows, from `sun` (its place). */
+    void recordLensVisibility(VkCommandBuffer commandBuffer, const PostFrame& frame,
+                              const vulkan::Image& radiance, const LensSun& sun);
+    /** @brief Into m_shafts[m_shaftTarget]: the sun's light on the dust along the view. */
+    void recordLightShafts(VkCommandBuffer commandBuffer, const PostFrame& frame,
+                           const LensSun& sun);
+    void writeFrameUniforms(const PostFrame& frame);
     /** @brief post.comp's bloomScale: the bloom levels' sum to an average. */
     [[nodiscard]] auto bloomScale() const -> float;
 
@@ -96,17 +122,24 @@ private:
     vulkan::ComputePipeline m_bloomUp;
     vulkan::ComputePipeline m_motionTiles;
     vulkan::ComputePipeline m_motionNeighbors;
+    vulkan::ComputePipeline m_lensVisibility;
     vulkan::ComputePipeline m_final;
+    std::unique_ptr<vulkan::ComputePipeline> m_lightShafts;  // Created when first used.
     vulkan::Sampler m_sampler;
     vulkan::Sampler m_nearest;  // The depth.
     vulkan::Image m_particles;           // RGBA16F, cleared and drawn each frame.
     std::vector<vulkan::Image> m_bloom;  // RGBA16F, half the size of the one before.
+    std::array<vulkan::Image, 2> m_shafts;  // RGBA16F, a quarter of the size: this frame's, the last.
+    std::uint32_t m_shaftTarget = 0;
+    bool m_shaftHistory = false;  // The other one holds the last frame's.
     vulkan::Image m_tileBlur;            // RGBA32F per motion tile: its largest blur...
     vulkan::Image m_neighborBlur;        // ... and its neighborhood's.
     std::array<vulkan::Buffer, kFramesInFlight> m_uniforms;
     std::array<vulkan::Buffer, kFramesInFlight> m_particleBuffers;
     vulkan::Buffer m_histogram;  // kExposureBins counts.
     vulkan::Buffer m_exposure;   // exposure_adapt.comp's state: the exposure first.
+    vulkan::Buffer m_lensState;  // lens_visibility.comp's.
+    std::uint32_t m_frames = 0;  // Recorded so far: the film grain's seed.
     vulkan::Buffer m_stars;                       // SkyStar[] of m_starSource.
     std::shared_ptr<const SkyMap> m_starSource;
 };

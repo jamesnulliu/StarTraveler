@@ -7,6 +7,7 @@
 #extension GL_GOOGLE_include_directive : require
 
 #include "common.glsl"
+#include "lens.glsl"
 #include "motion_blur.glsl"
 
 layout(local_size_x = 8, local_size_y = 8) in;
@@ -23,10 +24,16 @@ layout(set = 0, binding = 6, std430) readonly buffer Exposure  // exposure_adapt
     float exposure;
 }
 exposureState;
+layout(set = 0, binding = 7, std430) readonly buffer LensState  // lens_visibility.comp's.
+{
+    float visibility;
+}
+lensState;
+layout(set = 0, binding = 8) uniform sampler2D shafts;  // light_shafts.comp's: radiance.
 
 layout(push_constant) uniform Params
 {
-    float padding;
+    float grain;           // Of the film: its strength (0: none).
     uint toneMapper;
     uint flags;
     float bloomStrength;   // Fraction of the glow in the result.
@@ -35,6 +42,12 @@ layout(push_constant) uniform Params
     float maxRadius;       // Of the blur, pixels.
     float vignette;        // Darkening of the corners (0: none).
     vec2 motionScale;      // The motion image's size over the output's (outputMotion).
+    float chromatic;       // Aberration: uv shift of red and blue at the corners (0: none).
+    uint frame;            // The film's grain changes with it.
+    vec4 sun;              // lens.glsl: its place (uv); the image's aspect in w.
+    vec4 sunLight;         // Its color (brightest 1), how exposed its disc is (0 to 1).
+    vec4 lens;             // Strengths: ghosts, starburst, anamorphic streak, dirt.
+    float halo;            // Strength.
 }
 params;
 
@@ -50,6 +63,8 @@ const uint kSrgb = 2u;
 const uint kParticles = 4u;
 const uint kMotionBlur = 8u;
 const uint kBloom = 16u;
+const uint kLens = 32u;
+const uint kShafts = 64u;
 const int kBlurTaps = 15;  // Odd: the middle one is the pixel itself.
 
 /** 1 if depth a is in front of depth b (or about as far), 0 well behind it. */
@@ -112,6 +127,28 @@ vec3 motionBlur(ivec2 pixel, ivec2 size, vec3 center)
     return sum / weight;
 }
 
+/** The radiance between pixels. */
+vec3 radianceAt(vec2 uv, ivec2 size)
+{
+    vec2 position = uv * vec2(size) - 0.5;
+    vec2 cell = floor(position);
+    vec2 f = position - cell;
+    ivec2 a = clamp(ivec2(cell), ivec2(0), size - 1);
+    ivec2 b = clamp(ivec2(cell) + 1, ivec2(0), size - 1);
+    return mix(mix(imageLoad(radiance, a).rgb, imageLoad(radiance, ivec2(b.x, a.y)).rgb, f.x),
+               mix(imageLoad(radiance, ivec2(a.x, b.y)).rgb, imageLoad(radiance, b).rgb, f.x), f.y);
+}
+
+/** Film grain, in the display's values: least in the blacks and the whites. */
+vec3 addGrain(vec3 display, ivec2 pixel)
+{
+    uint hash = pcgHash(uint(pixel.x) + uint(pixel.y) * 16384u + params.frame * 7919u);
+    float noise = float(hash & 65535u) / 65535.0 + float(hash >> 16u) / 65535.0 - 1.0;
+    float level = dot(display, vec3(0.2126, 0.7152, 0.0722));
+    float response = 0.3 + 0.7 * min(level * 7.0, 1.0) * (1.0 - level);
+    return display + vec3(params.grain * 0.028 * noise * response);
+}
+
 void main()
 {
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
@@ -127,14 +164,39 @@ void main()
         if ((params.flags & kMotionBlur) != 0u) {
             color = motionBlur(pixel, size, color);
         }
+        vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
+        // Chromatic aberration: red and blue land apart, more so towards the corners.
+        vec2 split = vec2(0.0);
+        if (params.chromatic > 0.0) {
+            vec2 fromCenter = uv - 0.5;
+            split = fromCenter * dot(fromCenter, fromCenter) * 2.0 * params.chromatic;
+        }
+        bool splits = dot(split * vec2(size), split * vec2(size)) > 0.04;
+        if (splits) {
+            vec3 here = imageLoad(radiance, pixel).rgb;
+            color.r = max(color.r + radianceAt(uv + split, size).r - here.r, 0.0);
+            color.b = max(color.b + radianceAt(uv - split, size).b - here.b, 0.0);
+        }
         // Particles are drawn as streaks already.
         if ((params.flags & kParticles) != 0u) {
-            color += imageLoad(particles, pixel).rgb;
+            vec3 drawn = imageLoad(particles, pixel).rgb;
+            if (splits) {
+                ivec2 shift = ivec2(round(split * vec2(size)));
+                drawn.r = imageLoad(particles, clamp(pixel + shift, ivec2(0), size - 1)).r;
+                drawn.b = imageLoad(particles, clamp(pixel - shift, ivec2(0), size - 1)).b;
+            }
+            color += drawn;
+        }
+        if ((params.flags & kShafts) != 0u) {
+            color += texture(shafts, uv).rgb;
         }
         color *= exposureState.exposure;
-        vec2 uv = (vec2(pixel) + 0.5) / vec2(size);
         if ((params.flags & kBloom) != 0u) {
             color = mix(color, texture(bloom, uv).rgb * params.bloomScale, params.bloomStrength);
+        }
+        if ((params.flags & kLens) != 0u && lensState.visibility > 0.001) {
+            color += lensLight(uv, params.sun.xy, params.sun.w, params.lens, params.halo) *
+                     params.sunLight.rgb * (lensState.visibility * params.sunLight.w);
         }
         if (params.vignette > 0.0) {
             color *= 1.0 - params.vignette * smoothstep(0.25, 0.75, length(uv - 0.5));
@@ -143,6 +205,9 @@ void main()
     }
     if ((params.flags & kSrgb) != 0u) {
         display = linearToSrgb(display);
+    }
+    if (params.grain > 0.0 && (params.flags & kRaw) == 0u) {
+        display = addGrain(display, pixel);
     }
     // Quantize like packRgba8 (round half up) whatever rounding the GPU uses for UNORM stores.
     vec3 quantized = floor(clamp(display, 0.0, 1.0) * 255.0 + 0.5);

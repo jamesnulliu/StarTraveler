@@ -534,6 +534,165 @@ TEST_CASE("GPU: planets, as the CPU sees them", "[gpu][planet]")
     }
 }
 
+TEST_CASE("GPU: a sun's flares, and what puts them out", "[gpu][effects]")
+{
+    const GpuTest gpu;
+    constexpr std::uint32_t kWidth = 160;
+    constexpr std::uint32_t kHeight = 90;
+    // A black sky and a sun ahead, up and to the left.
+    Scene scene;
+    scene.environment().skyColor = Vec3(0.0F);
+    Entity sun = scene.createEntity("Sun");
+    sun.get<TransformComponent>().translation = {-4000.0F, 2000.0F, -20000.0F};
+    sun.add<SphereComponent>(500.0F);
+    sun.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(0.0F), .emissionColor = {0.4F, 0.6F, 1.0F}, .emissionPower = 200.0F});
+    const Camera camera = makeCamera(kWidth, kHeight);
+    const PathTracerSettings settings{.mode = RenderMode::Preview,
+                                      .toneMapper = ToneMapper::AgX};
+    constexpr EffectSettings kFlares{.lensGhosts = 1.0F,
+                                     .lensHalo = 1.0F,
+                                     .starburst = 1.0F,
+                                     .anamorphic = 1.0F,
+                                     .lensDirt = 1.0F};
+    auto render = [&](const Scene& from, const EffectSettings& effects) {
+        auto tracer = gpu.makeRenderer(kWidth, kHeight);
+        tracer->render(buildRenderScene(from), camera, settings,
+                       GpuRenderOptions{.pipeline = GpuPipeline::Raster, .effects = effects});
+        return tracer->readImage();
+    };
+    const ColorImage plain = render(scene, {});
+    const ColorImage flared = render(scene, kFlares);
+    // Its light reaches far across the image, around the sun and opposite it.
+    INFO("mean linear: " << meanLinear(plain) << " plain, " << meanLinear(flared) << " flared");
+    CHECK(meanLinear(flared) > 1.5 * meanLinear(plain));
+    CHECK(meanDifference(plain, flared) > 0.5F);
+
+    SECTION("a rock in front of the sun puts them out")
+    {
+        Entity rock = scene.createEntity("Rock");
+        rock.get<TransformComponent>().translation = {-2.0F, 1.0F, 0.0F};
+        rock.add<SphereComponent>(0.8F);
+        rock.add<MaterialComponent>(MaterialComponent{.albedo = Vec3(0.1F)});
+        const ColorImage hidden = render(scene, {});
+        INFO("difference " << meanDifference(hidden, render(scene, kFlares)));
+        CHECK(meanDifference(hidden, render(scene, kFlares)) < 0.02F);
+    }
+    SECTION("a sun out of the image has none")
+    {
+        sun.get<TransformComponent>().translation = {20000.0F, 0.0F, -2000.0F};
+        scene.markDirty();
+        CHECK(meanDifference(render(scene, {}), render(scene, kFlares)) < 0.02F);
+    }
+    SECTION("a lamp nearby is not a sun")
+    {
+        sun.get<TransformComponent>().translation = {-4.0F, 2.0F, -20.0F};
+        sun.get<SphereComponent>().radius = 0.5F;
+        scene.markDirty();
+        CHECK(meanDifference(render(scene, {}), render(scene, kFlares)) < 0.02F);
+    }
+}
+
+TEST_CASE("GPU: chromatic aberration and film grain", "[gpu][effects]")
+{
+    const GpuTest gpu;
+    constexpr std::uint32_t kWidth = 512;
+    constexpr std::uint32_t kHeight = 384;
+    // A white ball towards a corner, where the aberration is largest.
+    Scene scene;
+    scene.environment().skyColor = Vec3(0.02F);
+    Entity ball = scene.createEntity("Ball");
+    ball.get<TransformComponent>().translation = {4.2F, 3.0F, 0.0F};
+    ball.add<SphereComponent>(0.6F);
+    ball.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(0.0F), .emissionColor = Vec3(1.0F), .emissionPower = 1.0F});
+    const RenderScene renderScene = buildRenderScene(scene);
+    const Camera camera = makeCamera(kWidth, kHeight);
+    const PathTracerSettings settings{.mode = RenderMode::Preview};
+    auto render = [&](const EffectSettings& effects) {
+        auto tracer = gpu.makeRenderer(kWidth, kHeight);
+        const GpuRenderOptions options{.pipeline = GpuPipeline::Raster, .effects = effects};
+        tracer->render(renderScene, camera, settings, options);
+        // The second frame: the grain changes with every frame.
+        tracer->render(renderScene, camera, settings, options);
+        return tracer->readImage();
+    };
+    const ColorImage plain = render({});
+    // Red and blue land apart: a fringe where the ball's edge is, the green as it was.
+    const ColorImage split = render({.chromaticAberration = 3.0F});
+    float colorSum = 0.0F;
+    float greenSum = 0.0F;
+    for (std::size_t i = 0; i < plain.pixels().size(); ++i) {
+        colorSum += static_cast<float>(
+            std::abs(channel(split.pixels()[i], 0) - channel(plain.pixels()[i], 0)));
+        greenSum += static_cast<float>(
+            std::abs(channel(split.pixels()[i], 1) - channel(plain.pixels()[i], 1)));
+    }
+    CHECK(colorSum > 200.0F);
+    CHECK(greenSum == 0.0F);
+    // The grain is noise around the same image, and another one next frame.
+    const ColorImage grainy = render({.filmGrain = 1.0F});
+    CHECK(meanDifference(plain, grainy) > 0.05F);
+    CHECK(std::abs(meanLinear(plain) - meanLinear(grainy)) < 0.01);
+    auto tracer = gpu.makeRenderer(kWidth, kHeight);
+    const GpuRenderOptions options{.pipeline = GpuPipeline::Raster,
+                                   .effects = {.filmGrain = 1.0F}};
+    tracer->render(renderScene, camera, settings, options);
+    const ColorImage first = tracer->readImage();
+    tracer->render(renderScene, camera, settings, options);
+    CHECK(meanDifference(first, tracer->readImage()) > 0.05F);
+}
+
+TEST_CASE("GPU: light shafts, in the shadows of what is in the sun's way", "[gpu][effects]")
+{
+    const GpuTest gpu;
+    constexpr std::uint32_t kWidth = 128;
+    constexpr std::uint32_t kHeight = 72;
+    // The sun straight ahead, a large ball off to the side between it and part of the dust.
+    Scene scene;
+    scene.environment().skyColor = Vec3(0.0F);
+    Entity sun = scene.createEntity("Sun");
+    sun.get<TransformComponent>().translation = {0.0F, 0.0F, -40000.0F};
+    sun.add<SphereComponent>(1500.0F);
+    sun.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(0.0F), .emissionColor = Vec3(1.0F), .emissionPower = 300.0F});
+    const Camera camera = makeCamera(kWidth, kHeight);
+    const PathTracerSettings settings{
+        .mode = RenderMode::Preview, .exposure = 8.0F, .toneMapper = ToneMapper::AgX};
+    auto render = [&](const Scene& from, float strength) {
+        auto tracer = gpu.makeRenderer(kWidth, kHeight);
+        const GpuRenderOptions options{
+            .pipeline = GpuPipeline::Hybrid,
+            .effects = {.lightShafts = strength},
+        };
+        const RenderScene renderScene = buildRenderScene(from);
+        for (int frame = 0; frame < 8; ++frame) {
+            tracer->render(renderScene, camera, settings, options);
+        }
+        return tracer->readImage();
+    };
+    const ColorImage dark = render(scene, 0.0F);
+    const ColorImage dusty = render(scene, 1.0F);
+    // Lit dust, brightest towards the sun; off it, none of that (nothing else is in the scene).
+    const float nearSun = blockMean(dusty, kWidth / 2 - 24, kHeight / 2 - 4, 8).b;
+    const float farSide = blockMean(dusty, 4, 4, 8).b;
+    INFO("near the sun " << nearSun << ", in the corner " << farSide);
+    CHECK(nearSun > blockMean(dark, kWidth / 2 - 24, kHeight / 2 - 4, 8).b + 8.0F);
+    CHECK(nearSun > farSide);
+
+    // The ball's shadow runs back from it along the view: darker around it than without it.
+    Entity ball = scene.createEntity("Ball");
+    ball.get<TransformComponent>().translation = {0.0F, 0.0F, -130.0F};
+    ball.add<SphereComponent>(14.0F);
+    ball.add<MaterialComponent>(MaterialComponent{.albedo = Vec3(0.0F)});
+    const ColorImage shadowed = render(scene, 1.0F);
+    const float beside = blockMean(shadowed, kWidth / 2 - 24, kHeight / 2 - 4, 8).b;
+    INFO("beside the ball " << beside);
+    CHECK(beside < nearSun - 2.0F);
+    // Not a shadow of everything: the corner, off the shadow's line, is as bright.
+    CHECK(std::abs(blockMean(shadowed, 4, 4, 8).b - farSide) < 4.0F);
+}
+
 TEST_CASE("GPU: auto exposure meters as the CPU", "[gpu][exposure]")
 {
     const GpuTest gpu(false);

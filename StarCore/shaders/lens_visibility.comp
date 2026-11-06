@@ -1,0 +1,50 @@
+#version 460
+// How much of the sun the image shows (one invocation): a fraction of the taps over its disc
+// bright enough to be it, followed quickly but not at once, so that the flares (lens.glsl) do
+// not flicker with whatever passes in front of it. Taps off the image count as hidden, which
+// fades them as the sun leaves it.
+
+layout(local_size_x = 1) in;
+
+layout(set = 0, binding = 0, rgba32f) uniform readonly image2D radiance;
+layout(set = 0, binding = 1, std430) buffer LensState
+{
+    float visibility;
+}
+state;
+
+layout(push_constant) uniform Params
+{
+    vec2 sun;         // Its place: uv.
+    float radius;     // Of its disc, image heights.
+    float threshold;  // Luminance of the radiance from which a tap is the sun.
+    float seconds;    // Since the last frame.
+    uint reset;       // Jump to what is seen.
+}
+params;
+
+const int kTaps = 64;
+const float kGoldenAngle = 2.39996323;
+const float kRate = 14.0;  // Per second.
+
+void main()
+{
+    ivec2 size = imageSize(radiance);
+    float aspect = float(size.x) / float(size.y);
+    int seen = 0;
+    for (int i = 0; i < kTaps; ++i) {
+        // Not to the very edge, where it meets its corona.
+        float r = 0.92 * params.radius * sqrt((float(i) + 0.5) / float(kTaps));
+        float angle = float(i) * kGoldenAngle;
+        vec2 uv = params.sun + r * vec2(cos(angle) / aspect, sin(angle));
+        ivec2 pixel = ivec2(floor(uv * vec2(size)));
+        if (all(greaterThanEqual(pixel, ivec2(0))) && all(lessThan(pixel, size)) &&
+            dot(imageLoad(radiance, pixel).rgb, vec3(0.2126, 0.7152, 0.0722)) > params.threshold) {
+            ++seen;
+        }
+    }
+    float fraction = float(seen) / float(kTaps);
+    state.visibility = params.reset != 0u
+                           ? fraction
+                           : mix(fraction, state.visibility, exp(-kRate * params.seconds));
+}

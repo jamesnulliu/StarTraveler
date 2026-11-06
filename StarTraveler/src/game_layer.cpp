@@ -239,7 +239,7 @@ void GameLayer::setViewMode(ViewMode mode)
     }
     m_viewMode = mode;
     // A wider view from the cockpit.
-    m_camera.setVerticalFov(mode == ViewMode::Pilot ? 70.0F : 45.0F);
+    m_camera.setVerticalFov(mode == ViewMode::Pilot ? m_ships.settings.fieldOfView : 45.0F);
     if (mode == ViewMode::Pilot) {
         m_ships.attachCamera(m_camera, m_ship);
     }
@@ -1009,6 +1009,13 @@ void GameLayer::drawRenderPanel()
         }
         ImGui::SliderFloat("Milky Way", &m_skyEdit.milkyWay, 0.0F, 4.0F, "%.2f");
         track();
+        ImGui::SliderFloat("Nebula", &m_skyEdit.nebula, 0.0F, 4.0F, "%.2f");
+        track();
+        ImGui::SliderFloat("Corona", &m_skyEdit.corona, 0.0F, 10.0F, "%.1f deg");
+        track();
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("The glow of a star at the nebula's center, of this angular radius");
+        }
         ImGui::SliderFloat("Faintest stars", &m_skyEdit.starMagnitude, 2.0F, 10.0F, "mag %.1f");
         track();
         if (ImGui::IsItemHovered()) {
@@ -1019,6 +1026,8 @@ void GameLayer::drawRenderPanel()
         if (edited) {
             space.seed = m_skyEdit.seed;
             space.milkyWay = m_skyEdit.milkyWay;
+            space.nebula = m_skyEdit.nebula;
+            space.corona = m_skyEdit.corona;
             space.starMagnitude = m_skyEdit.starMagnitude;
             skyChanged = true;
         }
@@ -1170,6 +1179,21 @@ void GameLayer::drawRenderPanel()
             ImGui::SetTooltip("Fraction of the frame the shutter is open (Hybrid and Raster)");
         }
         ImGui::SliderFloat("Vignette", &effects.vignette, 0.0F, 1.0F, "%.2f");
+        ImGui::SliderFloat("Light shafts", &effects.lightShafts, 0.0F, 3.0F, "%.2f");
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Dust lit by the sun, dark in the shadow of what is in its way: "
+                              "traced (Hybrid)");
+        }
+        if (ImGui::TreeNode("Lens")) {
+            ImGui::SliderFloat("Ghosts", &effects.lensGhosts, 0.0F, 3.0F, "%.2f");
+            ImGui::SliderFloat("Halo", &effects.lensHalo, 0.0F, 3.0F, "%.2f");
+            ImGui::SliderFloat("Starburst", &effects.starburst, 0.0F, 3.0F, "%.2f");
+            ImGui::SliderFloat("Anamorphic", &effects.anamorphic, 0.0F, 3.0F, "%.2f");
+            ImGui::SliderFloat("Dirt", &effects.lensDirt, 0.0F, 3.0F, "%.2f");
+            ImGui::SliderFloat("Chromatic", &effects.chromaticAberration, 0.0F, 3.0F, "%.2f");
+            ImGui::SliderFloat("Grain", &effects.filmGrain, 0.0F, 3.0F, "%.2f");
+            ImGui::TreePop();
+        }
         ImGui::Checkbox("Particles", &m_options.particles);
         ImGui::SameLine();
         ImGui::Checkbox("Space dust", &m_options.spaceDust);

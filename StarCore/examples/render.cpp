@@ -66,6 +66,8 @@ struct GpuOptions
     bool bloom = false;
     bool motionBlur = false;
     float vignette = 0.0F;
+    bool lens = false;
+    float lightShafts = 0.0F;
     // Upscaling (UpscalerSettings).
     std::string upscaler = "Off";
     std::string quality = "Quality";
@@ -104,6 +106,16 @@ auto renderOnGpu([[maybe_unused]] starcore::Scene& scene,
     options.effects.bloom = gpuOptions.bloom;
     options.effects.motionBlur = gpuOptions.motionBlur;
     options.effects.vignette = gpuOptions.vignette;
+    options.effects.lightShafts = gpuOptions.lightShafts;
+    if (gpuOptions.lens) {
+        options.effects.lensGhosts = 1.0F;
+        options.effects.lensHalo = 1.0F;
+        options.effects.starburst = 1.0F;
+        options.effects.anamorphic = 1.0F;
+        options.effects.lensDirt = 1.0F;
+        options.effects.chromaticAberration = 1.0F;
+        options.effects.filmGrain = 1.0F;
+    }
     if (!starcore::enumFromString(gpuOptions.upscaler, options.upscaling.upscaler)) {
         SC_ERROR("Unknown upscaler \"{}\"", gpuOptions.upscaler);
         return std::nullopt;
@@ -267,6 +279,10 @@ auto main(int argc, char** argv) -> int
     app.add_flag("--motion-blur", gpuOptions.motionBlur,
                  "GPU (hybrid, raster): blur along the motion, see --move");
     app.add_option("--vignette", gpuOptions.vignette, "GPU: darker corners, 0-1");
+    app.add_flag("--lens", gpuOptions.lens,
+                 "GPU: a sun's flares, chromatic aberration and film grain");
+    app.add_option("--light-shafts", gpuOptions.lightShafts,
+                   "Hybrid: dust lit by the sun, traced (a strength; 0: none)");
     app.add_option("--upscaler", gpuOptions.upscaler,
                    "GPU (hybrid, raster): Off, TAAU, FSR, DLSS (falls back to FSR, then TAAU), "
                    "DLSS-RR (also denoises the hybrid pipeline; falls back to DLSS)");

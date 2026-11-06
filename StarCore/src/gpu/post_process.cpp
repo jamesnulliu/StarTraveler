@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <cmath>
+#include <optional>
 
 #include <glm/geometric.hpp>
 #include <glm/matrix.hpp>
@@ -19,6 +20,8 @@ namespace
 #include "shaders/bloom_up.comp.spv.h"
 #include "shaders/exposure_adapt.comp.spv.h"
 #include "shaders/exposure_histogram.comp.spv.h"
+#include "shaders/lens_visibility.comp.spv.h"
+#include "shaders/light_shafts.comp.spv.h"
 #include "shaders/motion_neighbors.comp.spv.h"
 #include "shaders/motion_tiles.comp.spv.h"
 #include "shaders/particle.frag.spv.h"
@@ -48,8 +51,12 @@ constexpr VkDescriptorType kAdaptBindings[] = {kBuffer, kBuffer};
 constexpr VkDescriptorType kPrefilterBindings[] = {kImage, kImage, kImage, kBuffer};
 constexpr VkDescriptorType kResampleBindings[] = {kSampled, kImage};
 constexpr VkDescriptorType kTileBindings[] = {kImage, kImage};
-constexpr VkDescriptorType kFinalBindings[] = {kImage,   kImage, kImage,
-                                               kSampled, kImage, kImage, kBuffer};
+constexpr VkDescriptorType kFinalBindings[] = {kImage, kImage,  kImage,  kSampled, kImage,
+                                               kImage, kBuffer, kBuffer, kSampled};
+constexpr VkDescriptorType kLightShaftBindings[] = {
+    VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, kSampled,
+    kSampled, kImage};
+constexpr VkDescriptorType kLensVisibilityBindings[] = {kImage, kBuffer};
 constexpr std::uint32_t kHistogramGroup = 16;  // exposure_histogram.comp's local size.
 
 /** @brief Push constants of exposure_adapt.comp. */
@@ -100,10 +107,31 @@ struct TileParams
     Vec2 motionScale{1.0F};  // The motion image's size over the output's.
 };
 
+/** @brief Push constants of lens_visibility.comp. */
+struct LensVisibilityParams
+{
+    Vec2 sun{0.5F};
+    float radius = 0.0F;
+    float threshold = 0.0F;
+    float seconds = 0.0F;
+    std::uint32_t reset = 0;
+};
+
+/** @brief Push constants of light_shafts.comp. */
+struct LightShaftParams
+{
+    Vec4 sunDirection{0.0F};
+    Vec4 sunIrradiance{0.0F};  // w: the dust's scattering per unit of length.
+    std::uint32_t frame = 0;
+    std::uint32_t mask = kAllInstances;
+    float historyWeight = 0.0F;
+    float padding = 0.0F;
+};
+
 /** @brief Push constants of post.comp. */
 struct FinalParams
 {
-    float padding = 0.0F;  // The exposure is m_exposure's.
+    float grain = 0.0F;
     std::uint32_t toneMapper = 0;
     std::uint32_t flags = 0;
     float bloomStrength = 0.0F;
@@ -112,7 +140,14 @@ struct FinalParams
     float maxRadius = 0.0F;
     float vignette = 0.0F;
     Vec2 motionScale{1.0F};  // The motion image's size over the output's.
+    float chromatic = 0.0F;
+    std::uint32_t frame = 0;
+    Vec4 sun{0.5F, 0.5F, 0.0F, 1.0F};  // uv, unused, the image's aspect.
+    Vec4 sunLight{1.0F};               // Its color, how exposed its disc is (0 to 1).
+    Vec4 lens{0.0F};                   // Ghosts, starburst, anamorphic streak, dirt.
+    float halo = 0.0F;
 };
+static_assert(sizeof(FinalParams) <= 128, "Vulkan's guaranteed push constant size");
 
 auto blurRadius(const EffectSettings& effects) -> float
 {
@@ -125,6 +160,76 @@ constexpr std::uint32_t kPostSrgb = 2U;
 constexpr std::uint32_t kPostParticles = 4U;
 constexpr std::uint32_t kPostMotionBlur = 8U;
 constexpr std::uint32_t kPostBloom = 16U;
+constexpr std::uint32_t kPostLens = 32U;
+constexpr std::uint32_t kPostShafts = 64U;
+
+// Of light shafts at strength 1: the dust's scattering per unit of length, and how much of
+// each frame's light is the last frames' average.
+constexpr float kDustScattering = 0.00045F;
+constexpr float kShaftHistory = 0.88F;
+
+// Of the chromatic aberration's strength 1: uv shift of red and blue in the corners, half
+// of it from the corners' distance (post.comp).
+constexpr float kChromaticShift = 0.0028F;
+// A sphere light seen from the camera as large as this (sine of the angular radius), or as
+// near, is a lamp nearby, not a sun.
+constexpr float kLargestSun = 0.2F;
+constexpr float kNearestSun = 200.0F;
+// The exposed luminance of a sun's disc from which its flares have their full strength.
+constexpr float kFullFlare = 15.0F;
+
+auto lightLuminance(Vec3 color) -> float
+{
+    return glm::dot(color, Vec3(0.2126F, 0.7152F, 0.0722F));
+}
+
+/** @brief The sphere light that lights the camera most. */
+auto findSun(std::span<const RenderLight> lights, const Camera& camera) -> std::optional<LensSun>
+{
+    Vec4 position;
+    Vec4 forward;
+    Vec4 right;
+    Vec4 up;
+    cameraBasis(camera, position, forward, right, up);
+    const RenderLight* brightest = nullptr;
+    float most = 0.0F;
+    float brightestSine = 0.0F;
+    for (const RenderLight& light : lights) {
+        if (light.triangleCount != 0) {
+            break;  // The meshes, after the spheres.
+        }
+        const Vec3 toLight = light.center - Vec3(position);
+        const float distance2 = glm::dot(toLight, toLight);
+        const float sine2 = light.radius * light.radius / std::max(distance2, 1e-6F);
+        const float irradiance = lightLuminance(light.emission) * sine2;
+        if (sine2 < kLargestSun * kLargestSun && distance2 > kNearestSun * kNearestSun &&
+            irradiance > most) {
+            most = irradiance;
+            brightest = &light;
+            brightestSine = std::sqrt(sine2);
+        }
+    }
+    if (brightest == nullptr) {
+        return std::nullopt;
+    }
+    const Vec3 toSun = brightest->center - Vec3(position);
+    const Vec3 emission = brightest->emission;
+    LensSun sun{.color = emission / std::max({emission.r, emission.g, emission.b}),
+                .luminance = lightLuminance(emission),
+                .direction = glm::normalize(toSun),
+                .irradiance = emission * (kPi * brightestSine * brightestSine)};
+    const float depth = glm::dot(toSun, Vec3(forward));
+    if (depth > 0.0F) {
+        // Camera rays: forward + right * x + up * y, from image x, y of -1 to 1 (y up).
+        const float x = glm::dot(toSun, Vec3(right)) / (glm::dot(right, right) * depth);
+        const float y = glm::dot(toSun, Vec3(up)) / (glm::dot(up, up) * depth);
+        const float tangent = brightestSine / std::sqrt(1.0F - brightestSine * brightestSine);
+        sun.uv = {0.5F + 0.5F * x, 0.5F - 0.5F * y};
+        sun.radius = tangent / (2.0F * glm::length(Vec3(up)));
+        sun.inFront = true;
+    }
+    return sun;
+}
 
 auto groups(std::uint32_t size) -> std::uint32_t
 {
@@ -165,6 +270,8 @@ PostProcess::PostProcess(vulkan::Context& context)
       m_motionTiles(context, motion_tiles_comp_spv, kTileBindings,
                     static_cast<std::uint32_t>(sizeof(TileParams))),
       m_motionNeighbors(context, motion_neighbors_comp_spv, kTileBindings),
+      m_lensVisibility(context, lens_visibility_comp_spv, kLensVisibilityBindings,
+                       static_cast<std::uint32_t>(sizeof(LensVisibilityParams))),
       m_final(context, post_comp_spv, kFinalBindings,
               static_cast<std::uint32_t>(sizeof(FinalParams))),
       m_sampler(context), m_nearest(context, VK_FILTER_NEAREST)
@@ -176,12 +283,16 @@ PostProcess::PostProcess(vulkan::Context& context)
     // No exposure yet: the first frame meters it.
     m_exposure = vulkan::createDeviceBuffer(
         context, std::as_bytes(std::span(zeros).first(4)), kUsage);
+    m_lensState = vulkan::createDeviceBuffer(
+        context, std::as_bytes(std::span(zeros).first(1)), kUsage);
 }
 
 void PostProcess::resize(std::uint32_t width, std::uint32_t height)
 {
     m_particles = {};
     m_bloom.clear();
+    m_shafts = {};
+    m_shaftHistory = false;
     m_tileBlur = {};
     m_neighborBlur = {};
     if (width == 0 || height == 0) {
@@ -204,6 +315,10 @@ void PostProcess::resize(std::uint32_t width, std::uint32_t height)
         }
         m_bloom.emplace_back(*m_context, levelWidth, levelHeight, kBloomFormat, kReadWrite);
     }
+    for (vulkan::Image& shafts : m_shafts) {
+        shafts = vulkan::Image(*m_context, std::max(width / 4, 1U), std::max(height / 4, 1U),
+                               kBloomFormat, kReadWrite);
+    }
     // GENERAL from now on.
     m_context->submitAndWait([&](VkCommandBuffer commandBuffer) {
         auto toGeneral = [&](const vulkan::Image& image) {
@@ -215,6 +330,8 @@ void PostProcess::resize(std::uint32_t width, std::uint32_t height)
         toGeneral(m_particles);
         toGeneral(m_tileBlur);
         toGeneral(m_neighborBlur);
+        toGeneral(m_shafts[0]);
+        toGeneral(m_shafts[1]);
         for (const vulkan::Image& level : m_bloom) {
             toGeneral(level);
         }
@@ -235,6 +352,19 @@ void PostProcess::syncStars(const std::shared_ptr<const SkyMap>& map)
             *m_context, std::as_bytes(std::span<const SkyStar>(map->stars)),
             VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
     }
+}
+
+void PostProcess::writeFrameUniforms(const PostFrame& frame)
+{
+    FrameUniforms uniforms{};
+    cameraBasis(*frame.camera, uniforms.cameraPosition, uniforms.cameraForward,
+                uniforms.cameraRight, uniforms.cameraUp);
+    cameraBasis(*frame.previousCamera, uniforms.previousPosition, uniforms.previousForward,
+                uniforms.previousRight, uniforms.previousUp);
+    uniforms.cameraPosition.w = kNearPlane;
+    uniforms.viewport = Vec4(static_cast<float>(m_particles.width()),
+                             static_cast<float>(m_particles.height()), 0.5F, 0.5F);
+    writeUniforms(*m_context, m_uniforms[frame.frameSlot], uniforms);
 }
 
 void PostProcess::recordExposure(VkCommandBuffer commandBuffer, const PostFrame& frame,
@@ -283,15 +413,6 @@ auto PostProcess::drawParticles(VkCommandBuffer commandBuffer, const PostFrame& 
     }
     const std::uint32_t width = m_particles.width();
     const std::uint32_t height = m_particles.height();
-
-    FrameUniforms uniforms{};
-    cameraBasis(*frame.camera, uniforms.cameraPosition, uniforms.cameraForward,
-                uniforms.cameraRight, uniforms.cameraUp);
-    cameraBasis(*frame.previousCamera, uniforms.previousPosition, uniforms.previousForward,
-                uniforms.previousRight, uniforms.previousUp);
-    uniforms.cameraPosition.w = kNearPlane;
-    uniforms.viewport = Vec4(static_cast<float>(width), static_cast<float>(height), 0.5F, 0.5F);
-    writeUniforms(*m_context, m_uniforms[frame.frameSlot], uniforms);
 
     // The slot's previous submission completed: its buffer may be rewritten.
     vulkan::Buffer& buffer = m_particleBuffers[frame.frameSlot];
@@ -439,6 +560,54 @@ void PostProcess::recordMotionTiles(VkCommandBuffer commandBuffer, const PostFra
     computeBarrier(commandBuffer);
 }
 
+void PostProcess::recordLensVisibility(VkCommandBuffer commandBuffer, const PostFrame& frame,
+                                       const vulkan::Image& radiance, const LensSun& sun)
+{
+    vulkan::DescriptorWrites writes;
+    writes.storageImage(0, radiance.view()).storageBuffer(1, m_lensState.handle());
+    const LensVisibilityParams params{.sun = sun.uv,
+                                      .radius = sun.radius,
+                                      .threshold = 0.25F * sun.luminance,
+                                      .seconds = frame.seconds,
+                                      .reset = frame.resetExposure ? 1U : 0U};
+    m_lensVisibility.bind(commandBuffer);
+    m_lensVisibility.pushDescriptors(commandBuffer, writes.writes());
+    m_lensVisibility.pushConstants(commandBuffer, &params, sizeof(params));
+    vkCmdDispatch(commandBuffer, 1, 1, 1);
+    computeBarrier(commandBuffer);
+}
+
+void PostProcess::recordLightShafts(VkCommandBuffer commandBuffer, const PostFrame& frame,
+                                    const LensSun& sun)
+{
+    if (!m_lightShafts) {
+        m_lightShafts = std::make_unique<vulkan::ComputePipeline>(
+            *m_context, light_shafts_comp_spv, kLightShaftBindings,
+            static_cast<std::uint32_t>(sizeof(LightShaftParams)));
+    }
+    m_shaftTarget = 1U - m_shaftTarget;
+    const vulkan::Image& target = m_shafts[m_shaftTarget];
+    const vulkan::Image& history = m_shafts[1U - m_shaftTarget];
+    vulkan::DescriptorWrites writes;
+    writes.accelerationStructure(0, frame.tlas)
+        .uniformBuffer(1, m_uniforms[frame.frameSlot].handle())
+        .sampledImage(2, frame.depth->view(), m_nearest.handle())
+        .sampledImage(3, history.view(), m_sampler.handle())
+        .storageImage(4, target.view());
+    const LightShaftParams params{
+        .sunDirection = Vec4(sun.direction, 0.0F),
+        .sunIrradiance = Vec4(sun.irradiance, kDustScattering * frame.effects.lightShafts),
+        .frame = m_frames,
+        .mask = frame.instanceMask & kAllInstances,
+        .historyWeight = m_shaftHistory ? kShaftHistory : 0.0F};
+    m_lightShafts->bind(commandBuffer);
+    m_lightShafts->pushDescriptors(commandBuffer, writes.writes());
+    m_lightShafts->pushConstants(commandBuffer, &params, sizeof(params));
+    vkCmdDispatch(commandBuffer, groups(target.width()), groups(target.height()), 1);
+    computeBarrier(commandBuffer);
+    m_shaftHistory = true;
+}
+
 auto PostProcess::bloomScale() const -> float
 {
     // The levels' weights sum (1, kBloomFalloff, kBloomFalloff^2, ...) to an average.
@@ -456,6 +625,9 @@ void PostProcess::record(VkCommandBuffer commandBuffer, const PostFrame& frame,
 {
     const EffectSettings& effects = frame.effects;
     recordExposure(commandBuffer, frame, radiance);
+    if (frame.depth != nullptr && !frame.raw) {
+        writeFrameUniforms(frame);
+    }
     const bool particles = drawParticles(commandBuffer, frame);
     // The pipeline's radiance and motion vectors.
     computeBarrier(commandBuffer);
@@ -468,7 +640,26 @@ void PostProcess::record(VkCommandBuffer commandBuffer, const PostFrame& frame,
         recordMotionTiles(commandBuffer, frame);
     }
 
+    const bool wantsLens = !frame.raw && (effects.lensGhosts > 0.0F || effects.lensHalo > 0.0F ||
+                                          effects.starburst > 0.0F || effects.anamorphic > 0.0F ||
+                                          effects.lensDirt > 0.0F);
+    const bool wantsShafts = !frame.raw && effects.lightShafts > 0.0F && frame.depth != nullptr &&
+                             frame.tlas != VK_NULL_HANDLE;
+    const std::optional<LensSun> sun =
+        wantsLens || wantsShafts ? findSun(frame.lights, *frame.camera) : std::nullopt;
+    const bool lens = wantsLens && sun && sun->inFront;
+    if (lens) {
+        recordLensVisibility(commandBuffer, frame, radiance, *sun);
+    }
+    const bool shafts = wantsShafts && sun;
+    if (shafts) {
+        recordLightShafts(commandBuffer, frame, *sun);
+    } else {
+        m_shaftHistory = false;  // Whatever it holds, it is not the last frame's.
+    }
+
     FinalParams params{
+        .grain = frame.raw ? 0.0F : effects.filmGrain,
         .toneMapper = static_cast<std::uint32_t>(frame.settings.toneMapper),
         .bloomStrength = effects.bloomStrength,
         .bloomScale = bloomScale(),
@@ -476,10 +667,23 @@ void PostProcess::record(VkCommandBuffer commandBuffer, const PostFrame& frame,
         .maxRadius = blurRadius(effects),
         .vignette = frame.raw ? 0.0F : std::clamp(effects.vignette, 0.0F, 1.0F),
         .motionScale = frame.renderScale,
+        .chromatic = frame.raw ? 0.0F : effects.chromaticAberration * kChromaticShift,
+        .frame = m_frames++,
     };
     params.flags = (frame.raw ? kPostRaw : 0U) | (frame.settings.srgbOutput ? kPostSrgb : 0U) |
                    (particles ? kPostParticles : 0U) | (motionBlur ? kPostMotionBlur : 0U) |
-                   (bloom ? kPostBloom : 0U);
+                   (bloom ? kPostBloom : 0U) | (lens ? kPostLens : 0U) |
+                   (shafts ? kPostShafts : 0U);
+    if (lens) {
+        const float aspect = static_cast<float>(output.width()) / static_cast<float>(output.height());
+        params.sun = Vec4(sun->uv, 0.0F, aspect);
+        // The exposure is the GPU's own: the sun's flares fade with the settings' only.
+        const float exposed = sun->luminance * std::max(frame.settings.exposure, 1e-3F);
+        params.sunLight = Vec4(sun->color, std::min(exposed / kFullFlare, 1.0F));
+        params.lens = Vec4(effects.lensGhosts, effects.starburst, effects.anamorphic,
+                           effects.lensDirt);
+        params.halo = effects.lensHalo;
+    }
     // Unused inputs still need valid descriptors of the right kind.
     vulkan::DescriptorWrites writes;
     writes.storageImage(0, radiance.view())
@@ -488,7 +692,10 @@ void PostProcess::record(VkCommandBuffer commandBuffer, const PostFrame& frame,
         .sampledImage(3, (m_bloom.empty() ? m_particles : m_bloom[0]).view(), m_sampler.handle())
         .storageImage(4, output.view())
         .storageImage(5, m_neighborBlur.view())
-        .storageBuffer(6, m_exposure.handle());
+        .storageBuffer(6, m_exposure.handle())
+        .storageBuffer(7, m_lensState.handle())
+        .sampledImage(8, (shafts ? m_shafts[m_shaftTarget] : m_particles).view(),
+                      m_sampler.handle());
     m_final.bind(commandBuffer);
     m_final.pushDescriptors(commandBuffer, writes.writes());
     m_final.pushConstants(commandBuffer, &params, sizeof(params));

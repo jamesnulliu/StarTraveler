@@ -235,7 +235,13 @@ vec3 agx(vec3 color, bool punchy)
     if (punchy) {
         float luma = dot(x, vec3(0.2126, 0.7152, 0.0722));
         x = pow(max(x, vec3(0.0)), vec3(1.35));
-        x = vec3(luma) + 1.4 * (x - vec3(luma));
+        // Saturation 1.4, less where that would take a channel out of 0 to 1 (deep colors would
+        // flatten into areas of one value with hard edges).
+        float low = min(x.r, min(x.g, x.b));
+        float high = max(x.r, max(x.g, x.b));
+        float room = min(low < luma ? luma / (luma - low) : 1e3,
+                         high > luma ? max(1.0 - luma, 0.0) / (high - luma) : 1e3);
+        x = vec3(luma) + (1.0 + 0.4 * smoothstep(1.0, 1.8, room)) * (x - vec3(luma));
     }
     x = outset * x;
     return pow(clamp(x, 0.0, 1.0), vec3(2.2));

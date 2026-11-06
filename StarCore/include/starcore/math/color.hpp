@@ -116,7 +116,14 @@ namespace detail
         // The look, on the encoded values (ASC CDL power, then saturation about the luma).
         const float luma = glm::dot(x, Vec3(0.2126F, 0.7152F, 0.0722F));
         x = glm::pow(glm::max(x, Vec3(0.0F)), Vec3(1.35F));
-        x = Vec3(luma) + 1.4F * (x - Vec3(luma));
+        // Saturation 1.4, less where that would take a channel out of 0 to 1 (deep colors would
+        // flatten into areas of one value with hard edges).
+        const float low = std::min({x.r, x.g, x.b});
+        const float high = std::max({x.r, x.g, x.b});
+        const float room = std::min(low < luma ? luma / (luma - low) : 1e3F,
+                                    high > luma ? std::max(1.0F - luma, 0.0F) / (high - luma) : 1e3F);
+        const float t = std::clamp((room - 1.0F) / 0.8F, 0.0F, 1.0F);
+        x = Vec3(luma) + (1.0F + 0.4F * t * t * (3.0F - 2.0F * t)) * (x - Vec3(luma));
     }
     // The sigmoid's output is display-encoded (a 2.2 power): linear again for sRGB output.
     x = outset * x;

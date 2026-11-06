@@ -1,6 +1,8 @@
 #pragma once
 // Automatic exposure (PathTracerSettings::autoExposure), as a camera meters: a histogram of
-// the frame's log2 luminance; the exposure that brings the mean of its brighter part (the
+// the log2 of each pixel's brightest channel (film saturates channel by channel, and a deep
+// blue sky has little luminance but all the blue it can take); the exposure that brings the
+// mean of its brighter part (the
 // darkest half and the brightest few percent left out: black space, a sun in view) to middle
 // gray -- or, if brighter, the veiling glare of all the frame's light (a sun in view floods
 // the lens and the eye: the stars fade) -- within the camera's range; the exposure in use

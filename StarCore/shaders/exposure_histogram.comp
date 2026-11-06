@@ -1,6 +1,8 @@
 #version 460
-// Auto exposure, first pass: the frame's radiance (before exposure) into a histogram of its
-// log2 luminance (exposure.glsl), counted per workgroup in shared memory first.
+// Auto exposure, first pass: the frame's radiance (before exposure) into a histogram of the log2
+// of its brightest channel (exposure.glsl), counted per workgroup in shared memory first. Not of
+// its luminance: film saturates channel by channel, and a sky of deep blue, of little luminance,
+// would be exposed until its blue is lost.
 
 #extension GL_GOOGLE_include_directive : require
 
@@ -27,7 +29,7 @@ void main()
     ivec2 pixel = ivec2(gl_GlobalInvocationID.xy);
     if (all(lessThan(pixel, imageSize(radiance)))) {
         vec3 color = imageLoad(radiance, pixel).rgb;
-        atomicAdd(counts[exposureBin(dot(color, vec3(0.2126, 0.7152, 0.0722)))], 1u);
+        atomicAdd(counts[exposureBin(max(color.r, max(color.g, color.b)))], 1u);
     }
     barrier();
     if (index < kExposureBins && counts[index] != 0u) {

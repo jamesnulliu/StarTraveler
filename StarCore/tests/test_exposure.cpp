@@ -61,6 +61,24 @@ TEST_CASE("AgX: film-like tone mapping", "[color]")
           luminance(toneMap(Vec3(0.02F), ToneMapper::AgX)));
 }
 
+TEST_CASE("AgX Punchy: deep colors keep their gradients", "[color]")
+{
+    // A saturated color, brightening stop by stop, as in a nebula: every step shows and none of
+    // it clips (no flat areas with hard edges between them).
+    for (const Vec3 tint : {Vec3(0.05F, 0.17F, 0.68F), Vec3(0.36F, 0.12F, 0.74F),
+                            Vec3(0.8F, 0.1F, 0.42F), Vec3(0.03F, 0.5F, 0.6F)}) {
+        Vec3 previous = toneMap(tint * 0.02F, ToneMapper::AgXPunchy);
+        for (float stops = -4.5F; stops <= 2.0F; stops += 0.5F) {
+            const Vec3 display = toneMap(tint * std::exp2(stops), ToneMapper::AgXPunchy);
+            INFO("tint " << tint.r << ", " << tint.g << ", " << tint.b << " at " << stops
+                         << " stops: " << display.r << ", " << display.g << ", " << display.b);
+            CHECK(glm::length(display - previous) > 2e-3F);
+            CHECK(std::max({display.r, display.g, display.b}) < 1.0F);
+            previous = display;
+        }
+    }
+}
+
 TEST_CASE("Auto exposure: metering", "[exposure]")
 {
     CHECK(exposureBin(0.0F) == 0);

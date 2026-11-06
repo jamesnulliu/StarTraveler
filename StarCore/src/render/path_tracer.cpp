@@ -801,7 +801,7 @@ void CpuPathTracer::updateExposure(const PathTracerSettings& settings)
             const Vec4 accumulated = m_accumulation.at(x, static_cast<std::uint32_t>(y));
             if (accumulated.a > 0.0F) {
                 const Vec3 color = Vec3(accumulated) / accumulated.a;
-                ++histogram[exposureBin(glm::dot(color, Vec3(0.2126F, 0.7152F, 0.0722F)))];
+                ++histogram[exposureBin(std::max({color.r, color.g, color.b}))];
             }
         }
     });

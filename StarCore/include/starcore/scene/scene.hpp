@@ -37,6 +37,13 @@ struct SpaceSky
     // Euler angles (degrees, as transforms) of the galactic frame in the world: unrotated,
     // the galactic center is towards +x and the band lies in the xz plane.
     Vec3 orientation{0.0F};
+    // A nebula over the whole sky, gathered around nebulaCenter and lit from there, painted
+    // rather than modelled on the real sky (its strength; 0: none).
+    float nebula = 0.0F;
+    Vec3 nebulaCenter{0.0F, 0.0F, -1.0F};  // In the galactic frame.
+    // The angular radius (degrees) of a star at nebulaCenter whose corona is part of the sky,
+    // so that reflections have it too; the star itself is a sphere of the scene (0: none).
+    float corona = 0.0F;
 
     auto operator==(const SpaceSky&) const -> bool = default;
 };

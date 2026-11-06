@@ -368,6 +368,117 @@ private:
     std::vector<Blob> m_galaxies;
 };
 
+// The nebula ------------------------------------------------------------------------------------
+
+/**
+ * @brief SpaceSky::nebula and corona: clouds painted over the sky rather than modelled on the
+ *        real one. Noise of noise of the direction curls them; the side of a cloud that faces
+ *        the center is lit, and light gathers there.
+ */
+class Nebula
+{
+public:
+    explicit Nebula(const SpaceSky& settings)
+        : m_seed(pcgHash(settings.seed ^ 0x9D2C5680U)),
+          m_coronaRadius(settings.corona * kDegree)
+    {
+        const float length = glm::length(settings.nebulaCenter);
+        m_center = length > 0.0F ? settings.nebulaCenter / length : Vec3(0.0F, 0.0F, -1.0F);
+        const Vec3 helper = std::abs(m_center.y) < 0.9F ? Vec3(0.0F, 1.0F, 0.0F)
+                                                        : Vec3(1.0F, 0.0F, 0.0F);
+        m_right = glm::normalize(glm::cross(helper, m_center));
+        m_up = glm::cross(m_center, m_right);
+    }
+
+    struct Sample
+    {
+        Vec3 light{0.0F};  // Radiance at strength 1.
+        float dust = 0.0F;  // Optical depth (in green) in front of the stars.
+    };
+
+    [[nodiscard]] auto clouds(Vec3 g) const -> Sample
+    {
+        const Vec3 wide = g * 1.7F;
+        const Vec3 warp{fbm(wide, 4, m_seed), fbm(wide, 4, m_seed + 1U),
+                        fbm(wide, 4, m_seed + 2U)};
+        const Vec3 fine = g * 4.1F + warp * 2.2F;
+        const Vec3 curl{fbm(fine, 3, m_seed + 3U), fbm(fine, 3, m_seed + 4U),
+                        fbm(fine, 3, m_seed + 5U)};
+        const Vec3 p = g * 2.0F + warp * 1.15F + curl * 0.28F;
+        const float body = fbm(p, 6, m_seed + 6U);
+        // Thinner towards the center than here: this side of the cloud faces the light.
+        const float cosine = glm::dot(g, m_center);
+        const float nearer = fbm(p + (m_center - g * cosine) * 0.18F, 6, m_seed + 6U);
+        const float lit = std::clamp(0.5F + (body - nearer) * 3.5F, 0.0F, 1.0F);
+        const float filaments = ridged(p * 2.1F + curl, 5, m_seed + 7U);
+        const float cloud = 0.14F + 0.86F * smoothstep(-0.12F, 0.55F, body);
+        const float wisps = cloud * (0.45F + 0.8F * filaments * filaments);
+
+        const float angle = std::acos(std::clamp(cosine, -1.0F, 1.0F));
+        const float gathered = 0.2F + 0.9F * std::exp(-square(angle / 1.0F)) +
+                               1.5F * std::exp(-square(angle / 0.32F));
+
+        const float hue = fbm(g * 1.1F + warp * 0.8F, 3, m_seed + 8U);
+        const float tint = fbm(g * 1.9F - warp * 0.6F, 3, m_seed + 10U);
+        Vec3 color = glm::mix(kNebulaBlue, kNebulaTeal, smoothstep(-0.3F, 0.3F, tint));
+        color = glm::mix(color, kNebulaViolet, smoothstep(0.0F, 0.3F, hue));
+        color = glm::mix(color, kNebulaMagenta, smoothstep(0.22F, 0.55F, hue));
+        color = glm::mix(color, kNebulaIce, 0.75F * std::exp(-square(angle / 0.3F)) * lit);
+
+        const float lanes = fbm(p * 1.5F + warp, 6, m_seed + 9U);
+        const float dust = 2.4F * smoothstep(0.02F, 0.42F, lanes);
+        Sample sample;
+        sample.light =
+            color * (kNebulaRadiance * wisps * gathered * (0.35F + 1.3F * lit) * std::exp(-dust));
+        sample.dust = dust * 0.6F;
+        return sample;
+    }
+
+    /** @brief The light around the star at the center: streamers falling away from its limb. */
+    [[nodiscard]] auto corona(Vec3 g) const -> Vec3
+    {
+        if (m_coronaRadius <= 0.0F) {
+            return Vec3(0.0F);
+        }
+        const float cosine = glm::dot(g, m_center);
+        // Out to kCoronaReach radii: past that, nothing an image shows.
+        if (cosine < std::cos(std::min(m_coronaRadius * kCoronaReach, kPi))) {
+            return Vec3(0.0F);
+        }
+        const float r = std::max(std::acos(std::min(cosine, 1.0F)) / m_coronaRadius, 0.98F);
+        const float around = std::atan2(glm::dot(g, m_up), glm::dot(g, m_right));
+        // Around the limb on a circle, so that it joins up; slowly along the radius, so that
+        // features stretch outwards into streamers.
+        const Vec3 p{std::cos(around) * 4.5F, std::sin(around) * 4.5F, std::log(r) * 1.1F};
+        const float streamers = ridged(p, 4, m_seed + 11U);
+        // Smooth at the limb, which would look torn; the streamers start a little way out.
+        const float inner = 0.55F * std::pow(r, -7.0F);
+        const float outer = std::pow(r, -2.4F) *
+                            (0.12F + 0.55F * streamers * streamers * smoothstep(1.0F, 1.5F, r));
+        const float fade = 1.0F - smoothstep(0.55F * kCoronaReach, kCoronaReach, r);
+        const Vec3 color = glm::mix(kCoronaInner, kCoronaOuter, smoothstep(1.0F, 3.5F, r));
+        return color * (kCoronaRadiance * (inner + outer) * fade);
+    }
+
+private:
+    static constexpr float kNebulaRadiance = 0.16F;
+    static constexpr float kCoronaRadiance = 0.7F;  // At the limb, about.
+    static constexpr float kCoronaReach = 14.0F;    // Radii of the star.
+    static constexpr Vec3 kNebulaBlue{0.05F, 0.17F, 0.68F};
+    static constexpr Vec3 kNebulaTeal{0.03F, 0.5F, 0.6F};
+    static constexpr Vec3 kNebulaViolet{0.36F, 0.12F, 0.74F};
+    static constexpr Vec3 kNebulaMagenta{0.8F, 0.1F, 0.42F};
+    static constexpr Vec3 kNebulaIce{0.6F, 0.82F, 1.0F};
+    static constexpr Vec3 kCoronaInner{0.42F, 0.66F, 1.0F};
+    static constexpr Vec3 kCoronaOuter{0.08F, 0.27F, 1.0F};
+
+    std::uint32_t m_seed;
+    float m_coronaRadius;
+    Vec3 m_center{0.0F, 0.0F, -1.0F};
+    Vec3 m_right{1.0F, 0.0F, 0.0F};
+    Vec3 m_up{0.0F, 1.0F, 0.0F};
+};
+
 // Stars ------------------------------------------------------------------------------------------
 
 /** @brief Temperature range of a spectral class and its share of bright and of faint stars. */
@@ -451,8 +562,10 @@ void generateStars(ParallelExecutor& executor, const DustMap& dust, const SpaceS
             float magnitude = std::max(
                 kBrightestMagnitude,
                 static_cast<float>((std::log10(u * total) - kCountOffset) / kCountSlope));
-            // Fainter stars, farther on average, crowd towards the band.
-            const float crowding = 10.0F * smoothstep(2.0F, 11.0F, magnitude);
+            // Fainter stars, farther on average, crowd towards the band (a sky without one:
+            // all over it).
+            const float crowding = 10.0F * smoothstep(2.0F, 11.0F, magnitude) *
+                                   std::min(settings.milkyWay, 1.0F);
             Vec3 direction;
             Galactic c{};
             do {
@@ -606,6 +719,48 @@ auto buildSkyMap(const SpaceSky& settings, std::uint32_t width) -> std::shared_p
         }
     });
 
+    // The nebula's clouds, soft enough for half the texels (most of a map's work otherwise),
+    // and the star's corona, whose limb is sharp, at each.
+    if (settings.nebula > 0.0F || settings.corona > 0.0F) {
+        const Nebula nebula(settings);
+        const std::uint32_t cw = std::max(w / 2, 4U);
+        const std::uint32_t ch = cw / 2;
+        std::vector<Nebula::Sample> clouds(static_cast<std::size_t>(cw) * ch);
+        if (settings.nebula > 0.0F) {
+            executor.parallelFor(ch, [&](std::size_t row) {
+                const float latitude =
+                    kPi / 2.0F - (static_cast<float>(row) + 0.5F) / static_cast<float>(ch) * kPi;
+                for (std::uint32_t column = 0; column < cw; ++column) {
+                    const float longitude =
+                        (static_cast<float>(column) + 0.5F) / static_cast<float>(cw) * kTwoPi - kPi;
+                    clouds[row * cw + column] = nebula.clouds(fromGalactic(longitude, latitude));
+                }
+            });
+        }
+        executor.parallelFor(h, [&](std::size_t row) {
+            const float latitude =
+                kPi / 2.0F - (static_cast<float>(row) + 0.5F) / static_cast<float>(h) * kPi;
+            const float cosLatitude = std::cos(latitude);
+            const float sinLatitude = std::sin(latitude);
+            const float y = (static_cast<float>(row) + 0.5F) * (static_cast<float>(ch) / h) - 0.5F;
+            for (std::uint32_t column = 0; column < w; ++column) {
+                const std::size_t i = row * w + column;
+                image[i] += nebula.corona({cosLatitude * longitudeCosSin[column].x, sinLatitude,
+                                           cosLatitude * longitudeCosSin[column].y});
+                if (settings.nebula > 0.0F) {
+                    const float x =
+                        (static_cast<float>(column) + 0.5F) * (static_cast<float>(cw) / w) - 0.5F;
+                    const Bilinear coarse = bilinear({x, y}, cw, ch);
+                    for (std::size_t k = 0; k < 4; ++k) {
+                        const Nebula::Sample& texel = clouds[coarse.index[k]];
+                        image[i] += texel.light * (settings.nebula * coarse.weight[k]);
+                        depth[i] += texel.dust * coarse.weight[k];
+                    }
+                }
+            }
+        });
+    }
+
     // The stars: the faint ones spread over the texels around them, by bands of rows in
     // parallel (each adds what falls on its own rows, in the stars' order).
     std::vector<SkyStar> faint;
@@ -702,6 +857,9 @@ auto generateSkyMap(const SpaceSky& settings, std::uint32_t width) -> std::share
         std::uint32_t seed;
         float milkyWay;
         float starMagnitude;
+        float nebula;
+        Vec3 nebulaCenter;
+        float corona;
         std::uint32_t width;
         std::weak_ptr<const SkyMap> map;
     };
@@ -712,7 +870,9 @@ auto generateSkyMap(const SpaceSky& settings, std::uint32_t width) -> std::share
         std::erase_if(entries, [](const Entry& entry) { return entry.map.expired(); });
         for (const Entry& entry : entries) {
             if (entry.seed == settings.seed && entry.milkyWay == settings.milkyWay &&
-                entry.starMagnitude == settings.starMagnitude && entry.width == width) {
+                entry.starMagnitude == settings.starMagnitude &&
+                entry.nebula == settings.nebula && entry.nebulaCenter == settings.nebulaCenter &&
+                entry.corona == settings.corona && entry.width == width) {
                 if (auto map = entry.map.lock()) {
                     return map;
                 }
@@ -726,7 +886,8 @@ auto generateSkyMap(const SpaceSky& settings, std::uint32_t width) -> std::share
                  std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start)
                      .count());
     const std::scoped_lock lock(mutex);
-    entries.push_back({settings.seed, settings.milkyWay, settings.starMagnitude, width, map});
+    entries.push_back({settings.seed, settings.milkyWay, settings.starMagnitude, settings.nebula,
+                       settings.nebulaCenter, settings.corona, width, map});
     return map;
 }
 

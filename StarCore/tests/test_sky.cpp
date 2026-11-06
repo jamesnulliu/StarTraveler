@@ -138,6 +138,56 @@ TEST_CASE("Sky: the Milky Way's band and center on a black sky", "[sky]")
     CHECK(brighter->stars.size() == map->stars.size());
 }
 
+TEST_CASE("Sky: a nebula and a star's corona", "[sky]")
+{
+    constexpr std::uint32_t kWidth = 1024;
+    const Vec3 center = galactic(40.0F, 15.0F);
+    const SpaceSky plain{.enabled = true, .seed = 7, .milkyWay = 0.0F};
+    const SpaceSky clouded{.enabled = true,
+                           .seed = 7,
+                           .milkyWay = 0.0F,
+                           .nebula = 1.0F,
+                           .nebulaCenter = center};
+    const auto without = generateSkyMap(plain, kWidth);
+    const auto with = generateSkyMap(clouded, kWidth);
+    REQUIRE(with != without);
+    // Its dust hides some of the stars behind it.
+    CHECK(with->stars.size() < without->stars.size());
+    CHECK(with->stars.size() > without->stars.size() / 2);
+    // Gathered around its center, there all the same on the sky's far side.
+    const float near = patchLuminance(*with, 25.0F, 55.0F, 0.0F, 30.0F);
+    const float far = patchLuminance(*with, -160.0F, -130.0F, -30.0F, 0.0F);
+    INFO("near " << near << ", far " << far);
+    CHECK(near > 3.0F * far);
+    CHECK(far > patchLuminance(*without, -160.0F, -130.0F, -30.0F, 0.0F));
+    // Any other center is another map.
+    SpaceSky elsewhere = clouded;
+    elsewhere.nebulaCenter = galactic(-100.0F, 0.0F);
+    CHECK(generateSkyMap(elsewhere, kWidth) != with);
+
+    // The corona falls away from the star's limb, and has gone long before the far side.
+    SpaceSky star = plain;
+    star.nebulaCenter = center;
+    star.corona = 4.0F;
+    const auto corona = generateSkyMap(star, kWidth);
+    const auto at = [&](float radii) {
+        // Averaged around the star, whose streamers differ.
+        float sum = 0.0F;
+        for (int i = 0; i < 32; ++i) {
+            const float longitude = 40.0F + radii * 4.0F * std::cos(i * 0.19635F) /
+                                                std::cos(glm::radians(15.0F));
+            const float latitude = 15.0F + radii * 4.0F * std::sin(i * 0.19635F);
+            sum += luminance(corona->radiance(galactic(longitude, latitude)));
+        }
+        return sum / 32.0F;
+    };
+    INFO("1.2 radii: " << at(1.2F) << ", 3: " << at(3.0F) << ", 8: " << at(8.0F));
+    CHECK(at(1.2F) > 3.0F * at(3.0F));
+    CHECK(at(3.0F) > 3.0F * at(8.0F));
+    const float pole = patchLuminance(*corona, -180.0F, 180.0F, -90.0F, -70.0F);
+    CHECK(pole < 0.002F);
+}
+
 TEST_CASE("Sky: the map's lookup", "[sky]")
 {
     constexpr std::uint32_t kWidth = 256;

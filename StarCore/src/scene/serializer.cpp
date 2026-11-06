@@ -466,6 +466,9 @@ auto serializeScene(const Scene& scene, const std::filesystem::path& baseDirecto
         out << YAML::Key << "MilkyWay" << YAML::Value << space.milkyWay;
         out << YAML::Key << "StarMagnitude" << YAML::Value << space.starMagnitude;
         out << YAML::Key << "Orientation" << YAML::Value << YAML::Node(space.orientation);
+        out << YAML::Key << "Nebula" << YAML::Value << space.nebula;
+        out << YAML::Key << "NebulaCenter" << YAML::Value << YAML::Node(space.nebulaCenter);
+        out << YAML::Key << "Corona" << YAML::Value << space.corona;
         out << YAML::EndMap;
     }
     out << YAML::EndMap;
@@ -545,6 +548,9 @@ auto deserializeScene(std::string_view yaml, Scene& scene,
                 s.milkyWay = read(space["MilkyWay"], s.milkyWay);
                 s.starMagnitude = read(space["StarMagnitude"], s.starMagnitude);
                 s.orientation = read(space["Orientation"], s.orientation);
+                s.nebula = read(space["Nebula"], s.nebula);
+                s.nebulaCenter = read(space["NebulaCenter"], s.nebulaCenter);
+                s.corona = read(space["Corona"], s.corona);
             }
         }
 

@@ -127,7 +127,10 @@ TEST_CASE("Scene YAML round-trip", "[scene][serializer]")
                                          .brightness = 0.5F,
                                          .milkyWay = 1.5F,
                                          .starMagnitude = 7.0F,
-                                         .orientation = {10.0F, 20.0F, 30.0F}};
+                                         .orientation = {10.0F, 20.0F, 30.0F},
+                                         .nebula = 0.8F,
+                                         .nebulaCenter = {0.6F, 0.0F, 0.8F},
+                                         .corona = 3.5F};
 
     Entity ball = scene.createEntity("Ball");
     ball.get<TransformComponent>().translation = {1.0F, 2.0F, 3.0F};

@@ -124,14 +124,32 @@ TEST_CASE("Ships fly where they point, coast to a stop and steer with the mouse"
     REQUIRE_THAT(ship.get<ShipComponent>().yaw, WithinAbs(0.0, 1e-3));
     Camera camera;
     ships.attachCamera(camera, ship);
-    // The pilot's eyes are behind the turn at first, and soon catch up.
-    REQUIRE(glm::distance(camera.forward(), Vec3{1, 0, 0}) > 0.01F);
-    fly(scene, ships, ship, ShipInput{}, 2.0F);
-    ships.attachCamera(camera, ship);
     REQUIRE(glm::distance(camera.forward(), Vec3{1, 0, 0}) < 1e-4F);
     // The eyes are inside the cockpit, rotated with the ship.
     const Vec3 eye = positionOf(ship) + Vec3(-ships.settings.eye.z, ships.settings.eye.y, 0.0F);
     REQUIRE(glm::distance(camera.position(), eye) < 1e-4F);
+}
+
+TEST_CASE("The view turns exactly as the mouse does, from the first frame", "[gameplay][ship]")
+{
+    Scene scene;
+    AssetLibrary assets;
+    ShipSystem ships;
+    Entity ship = *ships.spawn(scene, assets, kCockpit, {0, 0, 0}, -90.0F);
+    Camera camera;
+
+    // A hand: starting, faster, slowing, stopped, and back the other way.
+    float yaw = -90.0F;
+    float pitch = 0.0F;
+    for (const float pixels : {0.0F, 3.0F, 12.0F, 40.0F, 40.0F, 3.0F, 0.0F, 0.0F, -25.0F}) {
+        ships.update(scene, ship, PhysicsWorld::build(scene),
+                     ShipInput{.look = {pixels, pixels * 0.5F}}, kStep);
+        ships.attachCamera(camera, ship);
+        yaw += pixels * ships.settings.lookSensitivity;
+        pitch -= pixels * 0.5F * ships.settings.lookSensitivity;
+        REQUIRE_THAT(camera.yaw(), WithinAbs(yaw, 1e-3));
+        REQUIRE_THAT(camera.pitch(), WithinAbs(pitch, 1e-3));
+    }
 }
 
 TEST_CASE("The pilot feels the flight, and nothing of it at rest", "[gameplay][ship]")
@@ -167,7 +185,6 @@ TEST_CASE("The pilot feels the flight, and nothing of it at rest", "[gameplay][s
     const ShipComponent& state = ship.get<ShipComponent>();
     REQUIRE(state.velocity == Vec3(0.0F));
     REQUIRE(state.lean == Vec3(0.0F));
-    REQUIRE(state.lookLag == Vec2(0.0F));
     REQUIRE(state.fovKick == 0.0F);
     ships.attachCamera(camera, ship);
     REQUIRE(camera.verticalFov() == ships.settings.fieldOfView);

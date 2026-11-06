@@ -24,12 +24,12 @@ const Vec3 kCabinLightPosition{0.0F, 0.62F, 0.55F};
 const Vec3 kNozzles[] = {{-0.62F, -0.8F, 3.75F}, {0.62F, -0.8F, 3.75F}};
 constexpr float kIdleExhaust = 30.0F;  // Particles per second and engine.
 constexpr float kFullExhaust = 400.0F;
-// The pilot's body (ShipSettings::bodyMotion). Units of ship space, degrees, per second.
+// The pilot's body (ShipSettings::bodyMotion). Units of ship space, degrees, per second. Where
+// the view points is not part of it: that is the mouse's, exactly, or turning stops feeling
+// connected to the hand.
 constexpr float kLeanPerAcceleration = 0.0035F;  // Of the head, per unit / s^2.
 constexpr float kMaxLean = 0.07F;
 constexpr float kLeanRate = 7.0F;
-constexpr float kMaxLookLag = 2.5F;
-constexpr float kLookLagRate = 12.0F;
 constexpr float kMaxFovKick = 9.0F;  // At top speed with boost.
 constexpr float kFovKickRate = 3.0F;
 constexpr float kMaxShake = 0.006F;  // Likewise.
@@ -205,10 +205,6 @@ auto ShipSystem::update(Scene& scene, Entity ship, const PhysicsWorld& physics,
         const Vec3 lean = glm::clamp(glm::inverse(rotation) * acceleration * -kLeanPerAcceleration,
                                      Vec3(-kMaxLean), Vec3(kMaxLean));
         state.lean += (lean - state.lean) * (1.0F - std::exp(-kLeanRate * dt));
-        state.lookLag += Vec2(std::remainder(state.yaw - previous.yaw, 360.0F),
-                              state.pitch - previous.pitch);
-        state.lookLag = glm::clamp(state.lookLag * std::exp(-kLookLagRate * dt), Vec2(-kMaxLookLag),
-                                   Vec2(kMaxLookLag));
         const float speed = glm::length(state.velocity);
         const float fraction = speed / (settings.maxSpeed * settings.boostFactor);
         const float kick = kMaxFovKick * std::pow(fraction, 1.5F);
@@ -219,9 +215,7 @@ auto ShipSystem::update(Scene& scene, Entity ship, const PhysicsWorld& physics,
             if (glm::dot(state.lean, state.lean) < 1e-8F) {
                 state.lean = Vec3(0.0F);
             }
-            if (glm::dot(state.lookLag, state.lookLag) < 1e-5F) {
-                state.lookLag = Vec2(0.0F);
-            }
+
             if (state.fovKick < 1e-3F) {
                 state.fovKick = 0.0F;
             }
@@ -232,8 +226,7 @@ auto ShipSystem::update(Scene& scene, Entity ship, const PhysicsWorld& physics,
     // the scene version (and so the path tracer's accumulation) unchanged.
     if (state.velocity != previous.velocity || state.yaw != previous.yaw ||
         state.pitch != previous.pitch || state.lean != previous.lean ||
-        state.lookLag != previous.lookLag || state.fovKick != previous.fovKick ||
-        state.travel != previous.travel) {
+        state.fovKick != previous.fovKick || state.travel != previous.travel) {
         ship.patch<ShipComponent>([&](ShipComponent& s) { s = state; });
     }
     const TransformComponent& transform = ship.get<TransformComponent>();
@@ -258,8 +251,7 @@ void ShipSystem::attachCamera(Camera& camera, Entity ship) const
                        (kMaxShake * fraction * fraction);
     const Vec3 eye = settings.eye + (state.lean + shake) * settings.bodyMotion;
     camera.setPosition(Vec3(ship.worldTransform() * Vec4(eye, 1.0F)));
-    camera.setRotation(state.yaw - state.lookLag.x * settings.bodyMotion,
-                       state.pitch - state.lookLag.y * settings.bodyMotion);
+    camera.setRotation(state.yaw, state.pitch);
     camera.setVerticalFov(settings.fieldOfView + state.fovKick * settings.bodyMotion);
 }
 

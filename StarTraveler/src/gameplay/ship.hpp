@@ -34,7 +34,6 @@ struct ShipComponent
     float pitch = 0.0F;
     // The pilot's body, which all come to rest with the ship (a resting image still converges):
     starcore::Vec3 lean{0.0F};   // Head, ship space: thrown against the acceleration.
-    starcore::Vec2 lookLag{0.0F};  // Degrees of yaw, pitch the eyes are behind a turn.
     float fovKick = 0.0F;        // Degrees the view widens with speed.
     float travel = 0.0F;         // Seconds under way (what shakes the head).
 };

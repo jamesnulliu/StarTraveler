@@ -41,6 +41,13 @@ struct Application::Frame
 {
     ImGui_ImplVulkanH_Window window;
     bool swapchainRebuild = false;
+    std::uint32_t frameSlot = 0;  // The last frame's commands in window.Frames.
+
+    /** The slot whose commands the next frame reuses. */
+    [[nodiscard]] auto nextFrameSlot() const -> std::uint32_t
+    {
+        return (frameSlot + 1) % window.ImageCount;
+    }
 };
 
 Application::Application(ApplicationConfig config) : m_config(std::move(config))
@@ -206,6 +213,11 @@ void Application::run()
     auto lastTime = std::chrono::steady_clock::now();
 
     while (m_running && !m_window->shouldClose()) {
+        // Wait for the GPU before reading the input, not after: this frame then shows the
+        // mouse as it is now, and the time between frames is what the GPU took.
+        vulkan::check(vkWaitForFences(m_vulkan->device(), 1,
+                                      &m_frame->window.Frames[m_frame->nextFrameSlot()].Fence,
+                                      VK_TRUE, UINT64_MAX));
         Window::pollEvents();
         rebuildSwapchainIfNeeded();
         if (m_window->isMinimized()) {
@@ -270,7 +282,12 @@ void Application::renderFrame()
     // only lets go of it once that image is acquired again.
     VkSemaphore renderComplete = wd.FrameSemaphores[wd.FrameIndex].RenderCompleteSemaphore;
 
-    ImGui_ImplVulkanH_Frame& fd = wd.Frames[wd.FrameIndex];
+    // Commands take turns, whichever image this is. The presentation may hand back the same
+    // image many times in a row, or each in turn: waiting for what last drew to the image
+    // would wait for the last frame or the one before, by chance, and every change between
+    // them would make one frame very short and another very long.
+    m_frame->frameSlot = m_frame->nextFrameSlot();
+    ImGui_ImplVulkanH_Frame& fd = wd.Frames[m_frame->frameSlot];
     vulkan::check(vkWaitForFences(device, 1, &fd.Fence, VK_TRUE, UINT64_MAX));
     vulkan::check(vkResetFences(device, 1, &fd.Fence));
     vulkan::check(vkResetCommandPool(device, fd.CommandPool, 0));
@@ -281,12 +298,12 @@ void Application::renderFrame()
     vulkan::check(vkBeginCommandBuffer(fd.CommandBuffer, &beginInfo));
 
     // CPU-rendered images (path tracer output) -> GPU, before the UI samples them.
-    m_vulkan->recordFrame(fd.CommandBuffer, wd.FrameIndex);
+    m_vulkan->recordFrame(fd.CommandBuffer, m_frame->frameSlot);
 
     VkRenderPassBeginInfo passInfo{};
     passInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
     passInfo.renderPass = wd.RenderPass;
-    passInfo.framebuffer = fd.Framebuffer;
+    passInfo.framebuffer = wd.Frames[wd.FrameIndex].Framebuffer;
     passInfo.renderArea.extent.width = static_cast<std::uint32_t>(wd.Width);
     passInfo.renderArea.extent.height = static_cast<std::uint32_t>(wd.Height);
     wd.ClearValue.color = {{0.1F, 0.105F, 0.11F, 1.0F}};

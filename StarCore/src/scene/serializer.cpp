@@ -15,10 +15,10 @@
 namespace YAML
 {
 
-template <glm::length_t L>
-struct convert<glm::vec<L, float, glm::defaultp>>
+template <glm::length_t L, typename T>
+struct convert<glm::vec<L, T, glm::defaultp>>
 {
-    static auto encode(const glm::vec<L, float, glm::defaultp>& v) -> Node
+    static auto encode(const glm::vec<L, T, glm::defaultp>& v) -> Node
     {
         Node node(NodeType::Sequence);
         for (glm::length_t i = 0; i < L; ++i) {
@@ -28,14 +28,13 @@ struct convert<glm::vec<L, float, glm::defaultp>>
         return node;
     }
 
-    static auto decode(const Node& node, glm::vec<L, float, glm::defaultp>& v)
-        -> bool
+    static auto decode(const Node& node, glm::vec<L, T, glm::defaultp>& v) -> bool
     {
         if (!node.IsSequence() || node.size() != static_cast<std::size_t>(L)) {
             return false;
         }
         for (glm::length_t i = 0; i < L; ++i) {
-            v[i] = node[static_cast<std::size_t>(i)].as<float>();
+            v[i] = node[static_cast<std::size_t>(i)].as<T>();
         }
         return true;
     }
@@ -319,6 +318,13 @@ void writeEntity(YAML::Emitter& out, const Scene& scene, entt::entity entity,
         node["RingColor"] = look.ringColor;
         out << YAML::Key << "Planet" << YAML::Value << node;
     }
+    if (const auto* p = registry.try_get<ProbeVolumeComponent>(entity)) {
+        YAML::Node node;
+        node["Center"] = p->center;
+        node["Size"] = p->size;
+        node["Probes"] = p->probes;
+        out << YAML::Key << "ProbeVolume" << YAML::Value << node;
+    }
     out << YAML::EndMap;
 }
 
@@ -442,6 +448,12 @@ void readEntity(const YAML::Node& node, Scene& scene,
         look.ringOpacity = read(p["RingOpacity"], look.ringOpacity);
         look.ringColor = read(p["RingColor"], look.ringColor);
         entity.add<PlanetComponent>(planet);
+    }
+    if (const auto p = node["ProbeVolume"]) {
+        auto& volume = entity.add<ProbeVolumeComponent>();
+        volume.center = read(p["Center"], volume.center);
+        volume.size = read(p["Size"], volume.size);
+        volume.probes = read(p["Probes"], volume.probes);
     }
 }
 

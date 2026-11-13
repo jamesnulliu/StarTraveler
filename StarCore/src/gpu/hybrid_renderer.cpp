@@ -59,8 +59,8 @@ enum class TraceStage : std::uint32_t
 constexpr std::size_t kTraceStages = 5;
 // hybrid_trace.comp's specialization constants: 0 the stage, then what the paths do (a
 // variant, a pipeline per stage each): 1 the light candidates (GpuRenderOptions::
-// lightCandidates).
-using TraceConstants = std::array<std::uint32_t, 2>;
+// lightCandidates), 2 whether they look up the irradiance probes (ProbeSettings::enabled).
+using TraceConstants = std::array<std::uint32_t, 3>;
 constexpr std::uint32_t kCacheBlock = 4;  // hybrid_trace.comp's.
 
 // Pixels per side of a temporal gradient's stratum (kGradientStratum in hybrid.glsl).
@@ -262,9 +262,9 @@ namespace
 {
 
 /** @brief What the paths do (the variant of hybrid_trace.comp) with some options. */
-auto traceVariant(const GpuRenderOptions& options) -> TraceConstants
+auto traceVariant(const GpuRenderOptions& options, bool probes) -> TraceConstants
 {
-    return {0, std::clamp(options.lightCandidates, 1U, kMaxLightCandidates)};
+    return {0, std::clamp(options.lightCandidates, 1U, kMaxLightCandidates), probes ? 1U : 0U};
 }
 
 auto makeTracePipelines(vulkan::Context& context, const TraceConstants& variant)
@@ -307,14 +307,15 @@ HybridRenderer::HybridRenderer(vulkan::Context& context)
       m_gradient(context, gradient_comp_spv, kGradientBindings, sizeof(std::int32_t)),
       m_composite(context, composite_comp_spv, kCompositeBindings)
 {
-    m_trace.push_back(makeTracePipelines(context, traceVariant(GpuRenderOptions{})));
+    m_trace.push_back(makeTracePipelines(context, traceVariant(GpuRenderOptions{}, false)));
 }
 
 HybridRenderer::~HybridRenderer() = default;
 
-auto HybridRenderer::tracePipelines(const GpuRenderOptions& options) -> const TracePipelines&
+auto HybridRenderer::tracePipelines(const GpuRenderOptions& options, bool probes)
+    -> const TracePipelines&
 {
-    const TraceConstants variant = traceVariant(options);
+    const TraceConstants variant = traceVariant(options, probes);
     for (const std::unique_ptr<TracePipelines>& pipelines : m_trace) {
         if (pipelines->variant == variant) {
             return *pipelines;
@@ -478,6 +479,18 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
         }
         m_cache->describe(uniforms);
     }
+    const bool probes = frame.options.probes.enabled && settings.mode != RenderMode::Preview;
+    if (probes) {
+        if (!m_probes) {
+            m_probes = std::make_unique<ProbeField>(*m_context);
+        }
+        m_probes->prepare(ProbeFrame{.scene = frame.scene,
+                                     .camera = frame.camera,
+                                     .settings = frame.options.probes,
+                                     .frameSlot = frame.frameSlot,
+                                     .frameIndex = frame.frameIndex},
+                          uniforms);
+    }
     const std::uint32_t samples =
         settings.mode == RenderMode::Preview ? 1U : std::max(1U, settings.samplesPerPixel);
     uniforms.frame[0] = frame.frameIndex;
@@ -502,6 +515,10 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
     writeUniforms(*m_context, uniformBuffer, uniforms);
     if (cached && frame.reset) {
         m_cache->clear(commandBuffer);  // New content: what it learnt is wrong.
+    }
+    // 0. The irradiance probes, learning (all over again with new content).
+    if (probes) {
+        m_probes->record(commandBuffer, scene, uniformBuffer.handle());
     }
 
     // 1. Shadow maps (none unless the direct layer looks its shadows up), visibility ----------
@@ -556,7 +573,7 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
             .storageImage(29, images.reflectionSamples[current].view())
             .storageImage(30, images.gradients[std::to_underlying(Layer::Glass)][0].view())
             .storageImage(31, images.gradients[std::to_underlying(Layer::Specular)][0].view());
-        const TracePipelines& trace = tracePipelines(frame.options);
+        const TracePipelines& trace = tracePipelines(frame.options, probes);
         auto bindStage = [&](TraceStage stage) {
             const vulkan::ComputePipeline& pipeline =
                 trace.stages[static_cast<std::size_t>(stage)];

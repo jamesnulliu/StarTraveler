@@ -14,7 +14,9 @@
 //      the temporal gradients of each layer (filtered by gradient.comp);
 //      With the radiance cache (GpuRenderOptions::radianceCache), first the paths
 //      of a few pixels teach it the light their vertices reflect (radiance_cache
-//      .hpp), and the other paths end at their first vertex it knows;
+//      .hpp), and the other paths end at their first vertex it knows; with the
+//      irradiance probes (ProbeSettings, probe_field.hpp: updated before all of
+//      this), at a diffuse vertex inside their volumes;
 //   3. temporal (temporal.comp, per layer): reproject and accumulate (the
 //      pixels not traced borrow from the traced ones around them);
 //   4. a-trous (atrous.comp): the SVGF spatial filter, a few iterations (the primary
@@ -33,6 +35,7 @@
 
 #include <vulkan/vulkan.h>
 
+#include "probe_field.hpp"
 #include "radiance_cache.hpp"
 #include "rasterization.hpp"
 #include "shadow_maps.hpp"
@@ -113,12 +116,17 @@ public:
 private:
     struct Images;
 
-    /** @brief The trace pipelines of the variant `options` ask for (created when first used). */
-    [[nodiscard]] auto tracePipelines(const GpuRenderOptions& options) -> const TracePipelines&;
+    /**
+     * @brief The trace pipelines of the variant `options` ask for, `probes` whether the
+     *        paths look the irradiance probes up (created when first used).
+     */
+    [[nodiscard]] auto tracePipelines(const GpuRenderOptions& options, bool probes)
+        -> const TracePipelines&;
 
     vulkan::Context* m_context;
     std::vector<std::unique_ptr<TracePipelines>> m_trace;
     std::unique_ptr<RadianceCache> m_cache;  // Created when first used.
+    std::unique_ptr<ProbeField> m_probes;    // Created when first used.
     // temporal.comp: every pixel traced, and some borrowing (TraceResolution::Half).
     std::array<vulkan::ComputePipeline, 2> m_temporal;
     // atrous.comp: reading the taps from the images, and tiled; each of one layer, and of

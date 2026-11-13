@@ -100,6 +100,10 @@ auto ShipSystem::spawn(Scene& scene, AssetLibrary& assets, const std::filesystem
     for (const Entity root : *roots) {
         scene.setLayer(root, root.name() == "Hull" ? kShipLayer : kCockpitLayer, true);
     }
+    // Irradiance probes moving with the ship, for the cockpit's (cockpit.glb's bounds, some
+    // 0.3 apart): used only with the renderer's experimental probes on (ProbeSettings).
+    ship.add<ProbeVolumeComponent>(ProbeVolumeComponent{
+        .center = {0.0F, 0.155F, -0.15F}, .size = {1.65F, 1.09F, 3.05F}, .probes = {6, 4, 10}});
 
     // A small sphere light (sampled directly by the path tracer) for the cabin.
     Entity light = scene.createEntity("Cabin light");

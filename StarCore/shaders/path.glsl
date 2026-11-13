@@ -20,6 +20,13 @@ float fireflyClamp();  // 0 = off.
 // one light sampled, the reference's estimator). A constant: the code for more is compiled
 // out where it is 1.
 uint lightCandidates();
+#ifdef STARCORE_HYBRID_PATHS
+// The hybrid pipeline's irradiance probes (probes.glsl): whether diffuse vertices take the
+// light of other surfaces from them (a constant: compiled out when off), and that light (per
+// unit albedo) with how much of it they give (`coverage`, 0-1).
+bool probesEnabled();
+vec3 probeLight(vec3 position, vec3 normal, vec3 toViewer, out float coverage);
+#endif
 
 const uint kRussianRouletteStart = 3u;
 // Thin surfaces a shadow ray (or a preview ray) may pass through.
@@ -592,9 +599,12 @@ vec3 evaluateReflection(Material material, vec3 wo, SurfaceHit hit, vec3 wi, uin
  * against the lobe's sampling as if each were a sample of its own: where
  * sampling the lights finds little (a big light beside the surface), the lobe
  * finds it (the weights still add up to one: unbiased).
+ *
+ * Without `mis`, not weighted: nothing else finds the lights from here (a path that ends
+ * at the irradiance probes, a probe's ray).
  */
 vec3 sampleLobeLight(Material material, vec3 wo, SurfaceHit hit, bool reflection, uint lobes,
-                     uint kinds, uint candidates, inout uint rng)
+                     uint kinds, uint candidates, bool mis, inout uint rng)
 {
     uint index = 0u;
     vec3 direction = vec3(0.0);
@@ -682,8 +692,8 @@ vec3 sampleLobeLight(Material material, vec3 wo, SurfaceHit hit, bool reflection
     if (maxComponent(transmittance) <= 0.0) {
         return vec3(0.0);
     }
-    return lights[index].emission * transmittance * value *
-           (powerHeuristic(float(candidates) * lightPdf, bsdfPdf) / lightPdf * resampling);
+    float weight = mis ? powerHeuristic(float(candidates) * lightPdf, bsdfPdf) : 1.0;
+    return lights[index].emission * transmittance * value * (weight / lightPdf * resampling);
 }
 
 /**
@@ -694,6 +704,9 @@ vec3 sampleLobeLight(Material material, vec3 wo, SurfaceHit hit, bool reflection
 struct PathState
 {
     vec3 radiance;
+    // Of the radiance, the light the irradiance probes gave (it changes as they learn, not
+    // as the scene does: not the temporal gradients').
+    vec3 cached;
     vec3 throughput;
     // Scattering events so far (straight passes through window panes don't count).
     uint scatterings;
@@ -716,6 +729,9 @@ struct PathState
     // (the radiance cache is looked up where it is as wide as the cache's cells).
     float spread;
     uint lobe;  // The lobe the last vertex sampled (kNoLobe: none, absorbed).
+    // The last vertex took the light of other surfaces from the irradiance probes: the
+    // next one gives only the light of a light it is (reachLights), and the path ends.
+    bool lightsOnly;
 };
 
 const uint kNoLobe = 0xFFu;
@@ -724,6 +740,7 @@ PathState newPath()
 {
     PathState path;
     path.radiance = vec3(0.0);
+    path.cached = vec3(0.0);
     path.throughput = vec3(1.0);
     path.scatterings = 0u;
     path.mis = false;
@@ -737,6 +754,7 @@ PathState newPath()
     path.skipLights = 0u;
     path.spread = 0.0;
     path.lobe = kNoLobe;
+    path.lightsOnly = false;
     return path;
 }
 
@@ -789,8 +807,22 @@ void addVertexEmission(SurfaceHit hit, Material material, int lightIndex, inout 
 }
 
 /**
+ * The vertex a path reached after the irradiance probes gave it the light of other
+ * surfaces (PathState::lightsOnly): the light of a light it is (sampled by next event
+ * estimation before, MIS-weighted), not of others, nor the sky's if it found none (the
+ * probes' rays found those). The path ends there.
+ */
+void reachLights(SurfaceHit hit, Material material, int lightIndex, inout PathState path)
+{
+    if (lightIndex >= 0 && nextEventEnabled() && lightCount() > 0u) {
+        addVertexEmission(hit, material, lightIndex, path);
+    }
+}
+
+/**
  * One vertex of a path reached along `direction`: emission (MIS-weighted),
- * BSDF sampling, next event estimation and Russian roulette. Returns false
+ * BSDF sampling, next event estimation and Russian roulette (and maybe the
+ * irradiance probes' light: then the next ray finds only lights). Returns false
  * when the path ends, else the next ray.
  */
 bool pathVertex(SurfaceHit hit, Material material, int lightIndex, vec3 direction, uint bounce,
@@ -829,14 +861,35 @@ bool pathVertex(SurfaceHit hit, Material material, int lightIndex, vec3 directio
                        ? kLightMeshes
                        : kLightsAll;
     uint candidates = scatter.lobe == kLobeDiffuse ? lightCandidates() : 1u;
+    // The diffuse lobe, with the hybrid pipeline's irradiance probes: the light of other
+    // surfaces may come from them (inside their volumes; at their edges by chance, as much
+    // as they give), which ends the path at its next vertex: there, only a light's own light
+    // (the lobe finding the lights, MIS-weighted against next event estimation here as
+    // always: small lights nearby, a mesh's buttons, are found far more often so).
+    bool probed = false;
+    vec3 probe = vec3(0.0);
+#ifdef STARCORE_HYBRID_PATHS
+    if (probesEnabled() && scatter.lobe == kLobeDiffuse) {
+        float coverage;
+        probe = probeLight(hit.position, hit.normal, wo, coverage);
+        probed = coverage > 0.0 && nextFloat(rng) < coverage;
+    }
+#endif
     if (nextEvent && (scatter.lobe == kLobeDiffuse || glossy)) {
         // The reflection's, when the microfacet picked reflection: weighted up by that
         // chance.
         vec3 weight = glossy ? vec3(1.0 / scatter.probability) : scatter.weight;
         path.radiance += clampContribution(path.throughput * weight *
                                                sampleLobeLight(material, wo, hit, glossy, lobes,
-                                                               sampled, candidates, rng),
+                                                               sampled, candidates, true, rng),
                                            path.scatterings + 1u, path.scale);
+    }
+    if (probed) {
+        // An expectation: no firefly to clamp.
+        vec3 light = path.throughput * scatter.weight * probe;
+        path.radiance += light;
+        path.cached += light;
+        path.lightsOnly = true;
     }
     path.throughput *= scatter.weight;
     path.scale *= scatter.scale;
@@ -916,7 +969,10 @@ bool cachedReflection(SurfaceHit hit, Material material, vec3 wo, float footprin
  * call, and each copy of a vertex (light sampling, shadow rays) takes
  * registers. `firstRadiance`: the path's radiance after the first vertex;
  * `firstDirection`: the ray it continued with (0: none); `secondRadiance`:
- * the radiance after the second vertex (or the sky it found instead).
+ * the radiance after the second vertex (or the sky it found instead). Both
+ * without the irradiance probes' light (PathState::cached): the temporal
+ * gradients compare them, and that light changes as the probes learn, not as
+ * the scene does.
  *
  * Each vertex after the first draws its random numbers from a stream of its
  * own, seeded from the path's: the hybrid pipeline's temporal gradients
@@ -928,19 +984,21 @@ void tracePathFrom(SurfaceHit hit, vec3 direction, uint bounce, uint end, uint f
                    inout PathState path, inout uint rng, out vec3 firstRadiance,
                    out vec3 firstDirection, out vec3 secondRadiance)
 {
-    firstRadiance = path.radiance;
+    firstRadiance = path.radiance - path.cached;
     firstDirection = vec3(0.0);
-    secondRadiance = path.radiance;
+    secondRadiance = path.radiance - path.cached;
     Instance instance = instances[hit.instanceIndex];
     vec3 origin = vec3(0.0);
     uint stream = rng;
     for (uint vertex = 0u; bounce < end; ++bounce, ++vertex) {
         if (vertex > 0u) {
             if (!traceClosestHit(origin, direction, instanceMask(), hit)) {
-                path.radiance += clampContribution(path.throughput * skyRadiance(direction),
-                                                   path.scatterings, path.scale);
+                if (!path.lightsOnly) {  // (Else the probes' light holds the sky's.)
+                    path.radiance += clampContribution(path.throughput * skyRadiance(direction),
+                                                       path.scatterings, path.scale);
+                }
                 if (vertex < 2u) {
-                    secondRadiance = path.radiance;
+                    secondRadiance = path.radiance - path.cached;
                 }
                 return;
             }
@@ -949,6 +1007,13 @@ void tracePathFrom(SurfaceHit hit, vec3 direction, uint bounce, uint end, uint f
             rng = pcgHash(stream + vertex * 0x9E3779B9u);
 #ifdef STARCORE_HYBRID_PATHS
             Material material = materials[instance.materialIndex];
+            if (path.lightsOnly) {
+                reachLights(hit, material, instance.lightIndex, path);
+                if (vertex < 2u) {
+                    secondRadiance = path.radiance - path.cached;
+                }
+                return;
+            }
             vec3 reflected;
             // Of the sphere lights' shadow rays (sphere_light.glsl): numbers of a stream of
             // their own, the vertex's as it was.
@@ -961,7 +1026,7 @@ void tracePathFrom(SurfaceHit hit, vec3 direction, uint bounce, uint end, uint f
                 path.radiance += clampContribution(path.throughput * reflected,
                                                    path.scatterings + 1u, path.scale);
                 if (vertex < 2u) {
-                    secondRadiance = path.radiance;
+                    secondRadiance = path.radiance - path.cached;
                 }
                 return;
             }
@@ -991,11 +1056,11 @@ void tracePathFrom(SurfaceHit hit, vec3 direction, uint bounce, uint end, uint f
         bool more = pathVertex(hit, materials[instance.materialIndex], instance.lightIndex,
                                direction, bounce, flags, path, rng, origin, direction);
         if (vertex == 0u) {
-            firstRadiance = path.radiance;
+            firstRadiance = path.radiance - path.cached;
             firstDirection = direction;
         }
         if (vertex < 2u) {
-            secondRadiance = path.radiance;
+            secondRadiance = path.radiance - path.cached;
         }
         if (!more) {
             return;

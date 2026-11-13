@@ -1103,6 +1103,31 @@ void GameLayer::drawRenderPanel()
                                   "sampling, as ReSTIR's candidates): a little less noise for "
                                   "more GPU time (4: some 5 %% less for 1.7 ms in the cockpit)");
             }
+            ProbeSettings& probes = gpu.probes;
+            ImGui::Checkbox("Irradiance probes", &probes.enabled);
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("Diffuse surfaces get the light of other surfaces from grids of "
+                                  "probes (DDGI) learning over the frames, around the camera and "
+                                  "in the cockpit: smoother shadowed parts, but smoothed between "
+                                  "probes, lagging a little, and some 3.3 ms more");
+            }
+            if (probes.enabled) {
+                ImGui::SliderFloat("Probe spacing", &probes.spacing, 0.25F, 16.0F, "%.2f",
+                                   ImGuiSliderFlags_Logarithmic);
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Between the probes around the camera (%d x %d x %d of them)",
+                                      probes.probes.x, probes.probes.y, probes.probes.z);
+                }
+                int rays = static_cast<int>(probes.raysPerProbe);
+                if (ImGui::SliderInt("Rays per probe", &rays, 32, 256)) {
+                    probes.raysPerProbe = static_cast<std::uint32_t>(std::max(rays, 32));
+                }
+                ImGui::SliderFloat("Probe hysteresis", &probes.hysteresis, 0.5F, 0.995F, "%.3f");
+                if (ImGui::IsItemHovered()) {
+                    ImGui::SetTooltip("Of the probes' light, what the earlier frames keep: more "
+                                      "is smoother, less follows changing light faster");
+                }
+            }
         }
     }
 

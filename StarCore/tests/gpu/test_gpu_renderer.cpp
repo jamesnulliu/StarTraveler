@@ -1711,6 +1711,78 @@ TEST_CASE("GPU hybrid: light candidates (resampled lights) converge to the same 
     CHECK(resampled.mean < 0.5F);
 }
 
+TEST_CASE("GPU hybrid: irradiance probes", "[gpu][hybrid][probes]")
+{
+    const GpuTest gpu;
+    GpuRenderOptions options = hybridOptions();
+    options.probes.enabled = true;
+    options.probes.hysteresis = 0.5F;  // Learning within a few frames.
+    {
+        // Every surface of a white ball under a sky of 0.5 gets 0.5 from everywhere, as
+        // does every probe: 0.5 everywhere, looked up in the probes or not.
+        Scene scene;
+        scene.environment().skyColor = Vec3(0.5F);
+        Entity ball = scene.createEntity("Ball");
+        ball.add<SphereComponent>(3.0F);
+        ball.add<MaterialComponent>(MaterialComponent{.albedo = Vec3(1.0F)});
+        auto renderer = gpu.makeRenderer(32, 32);
+        const RenderScene renderScene = buildRenderScene(scene);
+        const PathTracerSettings settings{.maxBounces = 16, .srgbOutput = false};
+        for (int i = 0; i < 64; ++i) {
+            renderer->render(renderScene, makeCamera(32, 32), settings, options);
+        }
+        const ColorImage image = renderer->readImage();
+        int worst = 0;
+        for (const std::uint32_t pixel : image.pixels()) {
+            for (int c = 0; c < 3; ++c) {
+                worst = std::max(worst, std::abs(channel(pixel, c) - 128));
+            }
+        }
+        CHECK(worst <= 2);
+    }
+    // A room, still: near the path tracer's image (the probes' light is smoothed between
+    // them: not the same).
+    TestScene test;
+    const RenderScene renderScene = buildRenderScene(test.scene);
+    constexpr std::uint32_t kWidth = 96;
+    constexpr std::uint32_t kHeight = 72;
+    const Camera camera = makeCamera(kWidth, kHeight);
+    const PathTracerSettings settings{.samplesPerPixel = 8, .fireflyClamp = 8.0F};
+    auto reference = gpu.makeRenderer(kWidth, kHeight);
+    auto probed = gpu.makeRenderer(kWidth, kHeight);
+    for (int i = 0; i < 128; ++i) {
+        reference->render(renderScene, camera, settings);
+        probed->render(renderScene, camera, settings, options);
+    }
+    const BlockDifference difference = blockDifference(probed->readImage(), reference->readImage());
+    INFO("against the path tracer: worst block " << difference.worst << ", mean "
+                                                 << difference.mean);
+    CHECK(difference.worst < 24.0F);
+    CHECK(difference.mean < 3.0F);
+
+    // The bounced light of a frame's own samples (no reuse, no filter: the hybrid pipeline
+    // starts over every frame, the probes keep learning): the probes' far less noisy than
+    // paths traced on.
+    GpuRenderOptions single = hybridOptions(false);
+    single.denoiser.temporal = false;
+    single.view = HybridView::Lighting;
+    GpuRenderOptions singleProbed = single;
+    singleProbed.probes.enabled = true;
+    singleProbed.probes.spacing = 2.0F;  // Around all of the room the camera sees.
+    auto lastFrame = [&](const GpuRenderOptions& frameOptions, std::uint32_t seed) {
+        auto renderer = gpu.makeRenderer(kWidth, kHeight);
+        for (int i = 0; i < 64; ++i) {
+            renderer->render(renderScene, camera, PathTracerSettings{.seed = seed}, frameOptions);
+        }
+        return renderer->readImage();
+    };
+    const float pathNoise = meanDifference(lastFrame(single, 1), lastFrame(single, 2));
+    const float probeNoise = meanDifference(lastFrame(singleProbed, 1), lastFrame(singleProbed, 2));
+    INFO("one frame's bounced light, seed 1 against 2: paths " << pathNoise << ", probes "
+                                                               << probeNoise);
+    CHECK(probeNoise < 0.7F * pathNoise);
+}
+
 TEST_CASE("GPU hybrid: shadow-mapped direct light has no noise", "[gpu][hybrid]")
 {
     const GpuTest gpu;

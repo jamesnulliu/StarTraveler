@@ -105,6 +105,20 @@ struct RenderInstance
 };
 
 /**
+ * @brief A ProbeVolumeComponent where it is: probes (i, j, k) of the grid
+ *        `probes` are at gridToWorld * (i, j, k) (spacing and placement in the
+ *        matrix, which may scale each axis, not shear).
+ */
+struct RenderProbeVolume
+{
+    Mat4 gridToWorld{1.0F};
+    IVec3 probes{2, 2, 2};
+    std::uint32_t entityId = 0;
+
+    auto operator==(const RenderProbeVolume&) const -> bool = default;
+};
+
+/**
  * @brief A new change stamp: one counter for all render scenes, so equal
  *        stamps mean equal data (never 0).
  */
@@ -184,6 +198,9 @@ struct RenderScene
     // What rays that escape the scene see (skyRadiance): this, plus the space sky's map.
     Vec3 skyColor{0.0F};
     RenderSky sky;
+    // Probe volumes moving with entities, by entity id: the GPU renderer's irradiance
+    // probes (ProbeSettings; not traced: no stamps, placed anew every update).
+    std::vector<RenderProbeVolume> probeVolumes;
 
     // Change tracking (RenderSceneBuilder): stamps of nextRenderStamp(), 0
     // for never. Equal stamps mean equal data, also across copies.

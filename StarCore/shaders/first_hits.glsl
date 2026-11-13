@@ -1,50 +1,16 @@
 // Shared by the hybrid renderer's shaders that trace from the rasterized first
 // hits (hybrid_trace.comp, direct.comp): path.glsl's parameters from the frame
-// uniforms, and the hits of a pixel's camera ray. The including shader declares
-// `visibility` and `glassVisibility` (the visibility buffers) and
-// `previousTransforms` (GpuScene::previousTransformBuffer()) before including it.
+// uniforms (hybrid_path.glsl), and the hits of a pixel's camera ray. The
+// including shader declares `visibility` and `glassVisibility` (the visibility
+// buffers) and `previousTransforms` (GpuScene::previousTransformBuffer()) before
+// including it.
 
 #ifndef STARCORE_FIRST_HITS_GLSL
 #define STARCORE_FIRST_HITS_GLSL
 
 #include "hybrid.glsl"
 #include "path.glsl"
-#include "sky.glsl"
-
-uint instanceMask()
-{
-    return frameData.options.y;
-}
-
-uint lightCount()
-{
-    return frameData.options.z;
-}
-
-vec3 skyRadiance(vec3 direction)
-{
-    return skyRadianceOf(frameData.sky.xy, direction);
-}
-
-vec3 skyAmbient()
-{
-    return skyAmbientOf(frameData.sky.xy);
-}
-
-uint maxBounces()
-{
-    return frameData.frame.w;
-}
-
-bool nextEventEnabled()
-{
-    return (frameData.options.x & kFlagNextEvent) != 0u;
-}
-
-float fireflyClamp()
-{
-    return frameData.cameraForward.w;
-}
+#include "hybrid_path.glsl"
 
 /**
  * Whether the light the primary surfaces get straight from the lights is a layer
@@ -54,18 +20,6 @@ float fireflyClamp()
 bool directLayerEnabled()
 {
     return nextEventEnabled() && lightCount() > 0u && (frameData.options.x & kFlagPreview) == 0u;
-}
-
-// The light samples the paths' diffuse lobes pick one of (path.glsl's lightCandidates): the
-// including shader may define STARCORE_LIGHT_CANDIDATES as a specialization constant
-// (hybrid_trace.comp: GpuRenderOptions::lightCandidates).
-#ifndef STARCORE_LIGHT_CANDIDATES
-#define STARCORE_LIGHT_CANDIDATES 1u
-#endif
-
-uint lightCandidates()
-{
-    return STARCORE_LIGHT_CANDIDATES;
 }
 
 /** pathVertex flags for a path's vertex on the primary surface: kVertexSkipLights if so. */

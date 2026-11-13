@@ -268,6 +268,40 @@ struct UpscalerSettings
     auto operator==(const UpscalerSettings&) const -> bool = default;
 };
 
+/**
+ * @brief Irradiance probes of the hybrid pipeline (DDGI, Majercik et al.
+ *        2019), experimental: the light diffuse surfaces get from other
+ *        surfaces comes from grids of probes instead of paths traced on from
+ *        every pixel. The probes trace rays of their own every frame and keep a
+ *        running mean, in world space: moving the camera loses nothing, where
+ *        the paths' mean is kept per pixel and must be cut short while things
+ *        move. So shadowed parts, lit only by other surfaces, swarm with less
+ *        noise. At a cost: the light is smoothed between probes (no small
+ *        shadows of it), lags a little behind changes, and a still image no
+ *        longer converges to the path tracer's. A path ends at the vertex after
+ *        one that took the probes' light, with the light of a light it found
+ *        there (MIS-weighted: small lights nearby, a dashboard's buttons, are
+ *        found by the lobe). Updating the probes (the default grid and a
+ *        cockpit's) costs some 3.3 ms per frame (an RTX 4060 laptop GPU): off.
+ *
+ * One grid moves with the camera (whole cells at a time, its probes stay
+ * where they are); entities with a ProbeVolumeComponent carry grids of their
+ * own (a ship's cockpit), used for what is inside them.
+ */
+struct ProbeSettings
+{
+    bool enabled = false;
+    // The grid around the camera: probes per axis and the distance between them.
+    IVec3 probes{24, 12, 24};
+    float spacing = 1.0F;
+    std::uint32_t raysPerProbe = 128;  // 32-256.
+    // Of the probes' light, the fraction kept from earlier frames each frame:
+    // more is smoother, less follows changes faster.
+    float hysteresis = 0.97F;
+
+    auto operator==(const ProbeSettings&) const -> bool = default;
+};
+
 /** @brief GpuRenderOptions::lightCandidates at most (more are taken as this many). */
 inline constexpr std::uint32_t kMaxLightCandidates = 16;
 
@@ -291,6 +325,7 @@ struct GpuRenderOptions
     // 4 gave 3-6 % less noise for some 1.7 ms more, less than as much time spent on
     // samples does: 1, off (its code compiled out). At most kMaxLightCandidates.
     std::uint32_t lightCandidates = 1;
+    ProbeSettings probes;  // Hybrid, experimental.
     DenoiserSettings denoiser;
     ShadowSettings shadows;  // Raster, and Hybrid with DirectShadows::ShadowMaps.
     HybridView view = HybridView::Final;
@@ -525,6 +560,7 @@ private:
     DirectShadows m_lastDirectShadows = DirectShadows::Traced;
     bool m_lastRadianceCache = false;
     std::uint32_t m_lastLightCandidates = 1;
+    ProbeSettings m_lastProbes;
     Upscaler m_lastUpscaler = Upscaler::Off;
     // An upscaler denoised the hybrid pipeline's samples (its own denoiser's history then
     // holds nothing).

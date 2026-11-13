@@ -102,6 +102,20 @@ struct SphereComponent
     float radius = 1.0F;
 };
 
+/**
+ * @brief A grid of irradiance probes moving with its entity (see ProbeSettings
+ *        of GpuRenderOptions): the indirect light of what is inside, such as a
+ *        ship's cockpit, stays valid while the entity moves, where the probes
+ *        around the camera would see it pass by. A box in local space, `probes`
+ *        per axis (at least 2) from corner to corner.
+ */
+struct ProbeVolumeComponent
+{
+    Vec3 center{0.0F};
+    Vec3 size{2.0F};
+    IVec3 probes{4, 4, 4};
+};
+
 /** @brief Where a mesh was loaded from: mesh `meshIndex` of a model file. */
 struct MeshSource
 {

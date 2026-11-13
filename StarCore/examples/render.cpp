@@ -53,6 +53,7 @@ struct GpuOptions
     bool shadowMaps = false;  // DirectShadows::ShadowMaps
     bool radianceCache = false;
     std::uint32_t lightCandidates = 1;  // GpuRenderOptions::lightCandidates
+    starcore::ProbeSettings probes;
     starcore::Vec3 move{0.0F};  // Camera translation per frame.
     starcore::Entity movedEntity;
     starcore::Vec3 entityMove{0.0F};  // Its translation per frame.
@@ -96,6 +97,7 @@ auto renderOnGpu([[maybe_unused]] starcore::Scene& scene,
                                                       : starcore::DirectShadows::Traced;
         options.radianceCache = gpuOptions.radianceCache;
         options.lightCandidates = gpuOptions.lightCandidates;
+        options.probes = gpuOptions.probes;
         if (!starcore::enumFromString(gpuOptions.view, options.view)) {
             SC_ERROR("Unknown view \"{}\"", gpuOptions.view);
             return std::nullopt;
@@ -268,6 +270,23 @@ auto main(int argc, char** argv) -> int
                    "Hybrid, experimental: the paths' diffuse lobes pick their light of this many "
                    "light samples (resampled importance sampling; 1: off)")
         ->check(CLI::Range(1U, starcore::kMaxLightCandidates));
+    app.add_flag("--probes", gpuOptions.probes.enabled,
+                 "Hybrid, experimental: diffuse surfaces get the light of others from "
+                 "irradiance probes");
+    app.add_option("--probe-spacing", gpuOptions.probes.spacing,
+                   "Probes: distance between the probes around the camera");
+    std::vector<int> probeGrid;
+    app.add_option("--probe-grid", probeGrid, "Probes: around the camera, per axis x y z")
+        ->expected(3);
+    app.add_option("--probe-rays", gpuOptions.probes.raysPerProbe,
+                   "Probes: rays per probe and frame (32-256)");
+    app.add_option("--probe-hysteresis", gpuOptions.probes.hysteresis,
+                   "Probes: of their light, what the earlier frames keep (0-1)");
+    std::vector<std::string> probeVolume;
+    app.add_option("--probe-volume", probeVolume,
+                   "Probes: a grid moving with an entity (by name): name, center x y z, size "
+                   "x y z, probes x y z (local space)")
+        ->expected(10);
     app.add_option("--move", move, "GPU: camera translation per frame x y z")->expected(3);
     app.add_option("--move-entity", moveEntity,
                    "GPU: translation per frame of an entity (by name): name x y z")
@@ -339,6 +358,22 @@ auto main(int argc, char** argv) -> int
             return EXIT_FAILURE;
         }
         gpuOptions.entityTurn = std::stof(turnEntity[1]);
+    }
+    if (probeGrid.size() == 3) {
+        gpuOptions.probes.probes = {probeGrid[0], probeGrid[1], probeGrid[2]};
+    }
+    if (probeVolume.size() == 10) {
+        starcore::Entity entity = scene.findEntityByName(probeVolume[0]);
+        if (!entity) {
+            SC_ERROR("No entity named \"{}\"", probeVolume[0]);
+            return EXIT_FAILURE;
+        }
+        auto value = [&](std::size_t i) { return std::stof(probeVolume[i]); };
+        auto count = [&](std::size_t i) { return std::stoi(probeVolume[i]); };
+        entity.addOrReplace<starcore::ProbeVolumeComponent>(starcore::ProbeVolumeComponent{
+            .center = {value(1), value(2), value(3)},
+            .size = {value(4), value(5), value(6)},
+            .probes = {count(7), count(8), count(9)}});
     }
     gpuOptions.dumpPath = outputPath;
 

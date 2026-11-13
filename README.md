@@ -246,12 +246,21 @@ the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
     lobe reflects, and the other paths end at the first vertex whose cell
     knows it. As many bounces as the cache learns over the frames, but in the
     cockpit only 6% less noise again for 2 ms more: as much time spent on
-    samples does as well. Experimental, off by default (its code compiled out
+    samples does as well. Experimental, off by default (their code compiled out
     of the trace pipelines until asked for): `lightCandidates`, the light the
     paths' diffuse lobes sample picked of several samples of the lights by the
     light each brings unshadowed (resampled importance sampling, as ReSTIR's
     candidates; one shadow ray, unbiased); 4 gave 3-6% less noise in the
-    cockpit for 1.7 ms more.
+    cockpit for 1.7 ms more. And `probes`, irradiance probes (DDGI): grids of
+    probes around the camera and in entities' `ProbeVolume`s (the game's
+    cockpit) trace rays of their own every frame and keep in octahedral maps
+    the light arriving from around them and the distance it came from; a
+    diffuse vertex inside them takes the light of other surfaces from them
+    (bouncing any number of times over the frames, kept in world space, not
+    per pixel), and its path goes on only to find the lights its lobe sees
+    (MIS-weighted against sampling them, so a dashboard's buttons still light
+    it). A frame's bounced light is 35% less noisy in a test room; updating the
+    probes costs some 3.3 ms per frame.
     At half trace resolution (the game's) paths start from one pixel of each
     2x2 per frame, each in turn; the others borrow their neighbors' samples on
     the same surface: only those until they have their own (just uncovered),

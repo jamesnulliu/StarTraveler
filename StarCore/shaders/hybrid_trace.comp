@@ -60,6 +60,16 @@ layout(constant_id = 0) const uint kStage = kStageSamples;
 // path.glsl's sampleLobeLight): with 1, the resampling's code is compiled out.
 layout(constant_id = 1) const uint kLightCandidates = 1u;
 #define STARCORE_LIGHT_CANDIDATES kLightCandidates
+// Diffuse vertices take the light of other surfaces from the irradiance probes
+// (GpuRenderOptions::probes, probes.glsl): off, compiled out.
+layout(constant_id = 2) const bool kProbes = false;
+
+#include "probes.glsl"
+
+bool probesEnabled()
+{
+    return kProbes;
+}
 
 layout(set = 0, binding = 3, rg32ui) uniform readonly uimage2D visibility;
 layout(set = 0, binding = 7, rg32ui) uniform readonly uimage2D glassVisibility;
@@ -672,12 +682,18 @@ void updateCache(ivec2 block)
     uint recorded = 0u;
     for (uint bounce = 0u; bounce < maxBounces(); ++bounce) {
         if (bounce > 0u && !traceClosestHit(origin, direction, instanceMask(), hit)) {
-            path.radiance += clampContribution(path.throughput * skyRadiance(direction),
-                                               path.scatterings, path.scale);
+            if (!path.lightsOnly) {  // (Else the probes' light holds the sky's.)
+                path.radiance += clampContribution(path.throughput * skyRadiance(direction),
+                                                   path.scatterings, path.scale);
+            }
             break;
         }
         Instance instance = instances[hit.instanceIndex];
         Material material = materials[instance.materialIndex];
+        if (path.lightsOnly) {
+            reachLights(hit, material, instance.lightIndex, path);
+            break;
+        }
         addVertexEmission(hit, material, instance.lightIndex, path);
         bool record = false;
         if (recorded < kCacheVertices && cacheable(material)) {

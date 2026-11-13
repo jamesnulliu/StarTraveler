@@ -2,6 +2,7 @@
 #include <catch2/matchers/catch_matchers_floating_point.hpp>
 #include <glm/gtc/quaternion.hpp>
 
+#include <starcore/render/render_scene.hpp>
 #include <starcore/scene/entity.hpp>
 #include <starcore/scene/serializer.hpp>
 
@@ -190,6 +191,33 @@ TEST_CASE("Scene YAML round-trip", "[scene][serializer]")
 
     // Serializing again yields the same document.
     REQUIRE(serializeScene(loaded) == yaml);
+}
+
+TEST_CASE("Probe volumes are saved, copied and placed with their entity", "[scene][serializer]")
+{
+    Scene scene;
+    Entity ship = scene.createEntity("Ship");
+    ship.get<TransformComponent>().translation = {10.0F, 0.0F, 0.0F};
+    ship.add<ProbeVolumeComponent>(ProbeVolumeComponent{
+        .center = {0.0F, 1.0F, 0.0F}, .size = {2.0F, 4.0F, 6.0F}, .probes = {3, 5, 7}});
+
+    Scene loaded;
+    REQUIRE(deserializeScene(serializeScene(scene), loaded).has_value());
+    const auto& volume = loaded.findEntity(ship.uuid()).get<ProbeVolumeComponent>();
+    REQUIRE(volume.center == Vec3{0.0F, 1.0F, 0.0F});
+    REQUIRE(volume.size == Vec3{2.0F, 4.0F, 6.0F});
+    REQUIRE(volume.probes == IVec3{3, 5, 7});
+
+    const Entity copy = scene.copyEntity(ship);
+    REQUIRE(copy.get<ProbeVolumeComponent>().probes == IVec3{3, 5, 7});
+
+    // The render scene's: probe (0, 0, 0) at the box's corner, (2, 4, 6) at the other.
+    scene.destroyEntity(copy);
+    const RenderScene render = buildRenderScene(scene);
+    REQUIRE(render.probeVolumes.size() == 1);
+    const Mat4& gridToWorld = render.probeVolumes[0].gridToWorld;
+    REQUIRE(Vec3(gridToWorld * Vec4(0.0F, 0.0F, 0.0F, 1.0F)) == Vec3{9.0F, -1.0F, -3.0F});
+    REQUIRE(Vec3(gridToWorld * Vec4(2.0F, 4.0F, 6.0F, 1.0F)) == Vec3{11.0F, 3.0F, 3.0F});
 }
 
 TEST_CASE("Transient entities and their children are not saved", "[scene][serializer]")

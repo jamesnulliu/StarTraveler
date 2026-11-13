@@ -37,8 +37,12 @@ struct FrameUniforms
     // The radiance cache: buffer addresses of its keys and sums; of its values, capacity.
     std::uint32_t cacheBuffers[4];
     std::uint32_t cacheValues[4];
+    // The irradiance probes: buffer addresses of their volumes and states; of their
+    // irradiance and distance maps (ProbeField::prepare).
+    std::uint32_t probeBuffers[4];
+    std::uint32_t probeMaps[4];
 };
-static_assert(sizeof(FrameUniforms) == 272, "std140 layout of FrameUniforms");
+static_assert(sizeof(FrameUniforms) == 304, "std140 layout of FrameUniforms");
 
 // hybrid.glsl: options[0] and history[1] bits.
 inline constexpr std::uint32_t kFlagPreview = 1U;

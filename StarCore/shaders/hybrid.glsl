@@ -29,6 +29,10 @@ layout(set = 0, binding = 1, std140) uniform FrameUniforms
     // keys (xy) and sums (zw); of its values (xy), its capacity (z, entries).
     uvec4 cacheBuffers;
     uvec4 cacheValues;
+    // The irradiance probes (probes.glsl, GpuRenderOptions::probes): buffer addresses of their
+    // volumes (xy) and states (zw); of their irradiance (xy) and distance maps (zw).
+    uvec4 probeBuffers;
+    uvec4 probeMaps;
 }
 frameData;
 

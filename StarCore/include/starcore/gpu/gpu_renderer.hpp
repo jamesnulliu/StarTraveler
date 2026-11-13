@@ -268,6 +268,9 @@ struct UpscalerSettings
     auto operator==(const UpscalerSettings&) const -> bool = default;
 };
 
+/** @brief GpuRenderOptions::lightCandidates at most (more are taken as this many). */
+inline constexpr std::uint32_t kMaxLightCandidates = 16;
+
 struct GpuRenderOptions
 {
     GpuPipeline pipeline = GpuPipeline::PathTracing;
@@ -281,6 +284,13 @@ struct GpuRenderOptions
     // frames; the light bounced around lags a little. In the cockpit at 1080p some 6 %
     // less noise for some 2 ms more (as much time spent on samples does as well): off.
     bool radianceCache = false;
+    // Hybrid, experimental: the light the paths' diffuse lobes sample is picked of this
+    // many samples of the lights, by the light each brings unshadowed (resampled
+    // importance sampling, as ReSTIR's candidates; one shadow ray for all of them).
+    // Unbiased: a still image converges to the same. In the cockpit (Half, 3 samples)
+    // 4 gave 3-6 % less noise for some 1.7 ms more, less than as much time spent on
+    // samples does: 1, off (its code compiled out). At most kMaxLightCandidates.
+    std::uint32_t lightCandidates = 1;
     DenoiserSettings denoiser;
     ShadowSettings shadows;  // Raster, and Hybrid with DirectShadows::ShadowMaps.
     HybridView view = HybridView::Final;
@@ -514,6 +524,7 @@ private:
     TraceResolution m_lastTraceResolution = TraceResolution::Full;
     DirectShadows m_lastDirectShadows = DirectShadows::Traced;
     bool m_lastRadianceCache = false;
+    std::uint32_t m_lastLightCandidates = 1;
     Upscaler m_lastUpscaler = Upscaler::Off;
     // An upscaler denoised the hybrid pipeline's samples (its own denoiser's history then
     // holds nothing).

@@ -56,6 +56,18 @@ bool directLayerEnabled()
     return nextEventEnabled() && lightCount() > 0u && (frameData.options.x & kFlagPreview) == 0u;
 }
 
+// The light samples the paths' diffuse lobes pick one of (path.glsl's lightCandidates): the
+// including shader may define STARCORE_LIGHT_CANDIDATES as a specialization constant
+// (hybrid_trace.comp: GpuRenderOptions::lightCandidates).
+#ifndef STARCORE_LIGHT_CANDIDATES
+#define STARCORE_LIGHT_CANDIDATES 1u
+#endif
+
+uint lightCandidates()
+{
+    return STARCORE_LIGHT_CANDIDATES;
+}
+
 /** pathVertex flags for a path's vertex on the primary surface: kVertexSkipLights if so. */
 uint skipLightsFlag()
 {

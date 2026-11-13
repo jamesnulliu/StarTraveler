@@ -16,6 +16,10 @@ vec3 skyAmbient();                 // Its mean (the preview's ambient light).
 uint maxBounces();
 bool nextEventEnabled();
 float fireflyClamp();  // 0 = off.
+// Light samples the diffuse lobes' next event estimation picks one of (sampleLobeLight; 1:
+// one light sampled, the reference's estimator). A constant: the code for more is compiled
+// out where it is 1.
+uint lightCandidates();
 
 const uint kRussianRouletteStart = 3u;
 // Thin surfaces a shadow ray (or a preview ray) may pass through.
@@ -580,23 +584,87 @@ vec3 evaluateReflection(Material material, vec3 wo, SurfaceHit hit, vec3 wi, uin
  * the caller applies the albedo), for the reflection, the lobe (BSDF times
  * cosine; MIS-weighted against sampling it). One function for both: shaders
  * inline every call, and a second copy of the shadow ray costs registers.
+ *
+ * With `candidates` > 1 (the diffuse lobe only), the light is picked of that
+ * many samples of the lights (picked by weight in strata, one walk over them)
+ * by the light each brings unshadowed: resampled importance sampling (Talbot et
+ * al. 2005, as ReSTIR's candidates), one shadow ray for all. MIS-weighted
+ * against the lobe's sampling as if each were a sample of its own: where
+ * sampling the lights finds little (a big light beside the surface), the lobe
+ * finds it (the weights still add up to one: unbiased).
  */
 vec3 sampleLobeLight(Material material, vec3 wo, SurfaceHit hit, bool reflection, uint lobes,
-                     uint kinds, inout uint rng)
+                     uint kinds, uint candidates, inout uint rng)
 {
-    uint index;
-    float probability;
-    if (!pickLight(hit.position, hit.normal, hit.instanceIndex, kinds, nextFloat(rng), index,
-                   probability)) {
-        return vec3(0.0);
-    }
-    Light light = lights[index];
-    vec3 direction;
-    float distance;
-    float pdf;
-    if (!sampleLight(light, hit.position, rng, direction, distance, pdf) ||
-        dot(direction, hit.geometricNormal) <= 0.0) {
-        return vec3(0.0);
+    uint index = 0u;
+    vec3 direction = vec3(0.0);
+    float distance = 0.0;
+    float lightPdf = 0.0;
+    // The candidates' resampling weights' mean over the picked one's, its density aside.
+    float resampling = 1.0;
+    if (candidates > 1u) {
+        float total = totalLightWeight(hit.position, hit.normal, hit.instanceIndex, kinds);
+        if (total <= 0.0) {
+            return vec3(0.0);
+        }
+        float spacing = total / float(candidates);
+        float jitter = nextFloat(rng);
+        uint walk = 0u;
+        float cumulative = 0.0;
+        uint current = 0u;
+        float currentWeight = 0.0;
+        float weights = 0.0;
+        float picked = 0.0;  // The picked one's light unshadowed.
+        for (uint k = 0u; k < candidates; ++k) {
+            float mark = (float(k) + jitter) * spacing;
+            while (cumulative <= mark && visitLight(walk, kinds)) {
+                float w = lightWeight(walk, hit.position, hit.normal, hit.instanceIndex, kinds);
+                if (w > 0.0) {
+                    cumulative += w;
+                    current = walk;
+                    currentWeight = w;
+                }
+                ++walk;
+            }
+            vec3 toLight;
+            float reach;
+            float pdf;
+            if (!sampleLight(lights[current], hit.position, rng, toLight, reach, pdf) ||
+                dot(toLight, hit.geometricNormal) <= 0.0) {
+                continue;
+            }
+            // Its light unshadowed (luminance; the albedo is the caller's) over its density.
+            float density = currentWeight / total * pdf;
+            float light = lightBrightness(lights[current].emission) *
+                          max(0.0, dot(toLight, hit.normal)) / kPi;
+            if (light <= 0.0 || density <= 0.0) {
+                continue;
+            }
+            weights += light / density;
+            if (nextFloat(rng) * weights < light / density) {
+                index = current;
+                direction = toLight;
+                distance = reach;
+                lightPdf = density;
+                picked = light;
+            }
+        }
+        if (weights <= 0.0) {
+            return vec3(0.0);
+        }
+        resampling = weights / float(candidates) / picked * lightPdf;
+    } else {
+        float probability;
+        if (!pickLight(hit.position, hit.normal, hit.instanceIndex, kinds, nextFloat(rng), index,
+                       probability)) {
+            return vec3(0.0);
+        }
+        float pdf;
+        if (!sampleLight(lights[index], hit.position, rng, direction, distance, pdf) ||
+            dot(direction, hit.geometricNormal) <= 0.0) {
+            return vec3(0.0);
+        }
+        lightPdf = probability * pdf;
     }
     vec3 value;
     float bsdfPdf;
@@ -614,9 +682,8 @@ vec3 sampleLobeLight(Material material, vec3 wo, SurfaceHit hit, bool reflection
     if (maxComponent(transmittance) <= 0.0) {
         return vec3(0.0);
     }
-    float lightPdf = probability * pdf;
-    return light.emission * transmittance * value *
-           (powerHeuristic(lightPdf, bsdfPdf) / lightPdf);
+    return lights[index].emission * transmittance * value *
+           (powerHeuristic(float(candidates) * lightPdf, bsdfPdf) / lightPdf * resampling);
 }
 
 /**
@@ -639,6 +706,7 @@ struct PathState
     uint misInstance;
     float misPdf;
     uint misLights;  // The kinds of lights it sampled.
+    float misCandidates;  // Of how many light samples it picked one (sampleLobeLight).
     float scale;
     // The kinds of lights whose light the last vertex left to someone else
     // (kVertexSkipLights): those its lobe finds are not the path's.
@@ -664,6 +732,7 @@ PathState newPath()
     path.misInstance = 0u;
     path.misPdf = 0.0;
     path.misLights = kLightsAll;
+    path.misCandidates = 1.0;
     path.scale = 1.0;
     path.skipLights = 0u;
     path.spread = 0.0;
@@ -708,9 +777,11 @@ void addVertexEmission(SurfaceHit hit, Material material, int lightIndex, inout 
         float weight = 1.0;
         if (nextEvent && path.mis && lightIndex >= 0) {
             weight = powerHeuristic(path.misPdf,
-                                    directLightPdf(uint(lightIndex), path.misPosition,
-                                                   path.misNormal, path.misInstance,
-                                                   path.misLights, hit));
+                                    path.misCandidates * directLightPdf(uint(lightIndex),
+                                                                        path.misPosition,
+                                                                        path.misNormal,
+                                                                        path.misInstance,
+                                                                        path.misLights, hit));
         }
         path.radiance +=
             clampContribution(path.throughput * emission * weight, path.scatterings, path.scale);
@@ -757,13 +828,14 @@ bool pathVertex(SurfaceHit hit, Material material, int lightIndex, vec3 directio
     uint sampled = nextEvent && (scatter.lobe == kLobeDiffuse || glossy) && (flags & skipped) != 0u
                        ? kLightMeshes
                        : kLightsAll;
+    uint candidates = scatter.lobe == kLobeDiffuse ? lightCandidates() : 1u;
     if (nextEvent && (scatter.lobe == kLobeDiffuse || glossy)) {
         // The reflection's, when the microfacet picked reflection: weighted up by that
         // chance.
         vec3 weight = glossy ? vec3(1.0 / scatter.probability) : scatter.weight;
         path.radiance += clampContribution(path.throughput * weight *
                                                sampleLobeLight(material, wo, hit, glossy, lobes,
-                                                               sampled, rng),
+                                                               sampled, candidates, rng),
                                            path.scatterings + 1u, path.scale);
     }
     path.throughput *= scatter.weight;
@@ -781,6 +853,7 @@ bool pathVertex(SurfaceHit hit, Material material, int lightIndex, vec3 directio
         path.misInstance = hit.instanceIndex;
         path.misPdf = misPdf;
         path.misLights = sampled;
+        path.misCandidates = float(candidates);
     } else if (!scatter.passThrough) {
         path.mis = false;
     }

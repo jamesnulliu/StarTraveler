@@ -384,6 +384,7 @@ auto GpuRenderer::needsReset(const RenderScene& scene, const Camera& camera,
             options.traceResolution != m_lastTraceResolution ||
             options.directShadows != m_lastDirectShadows ||
             options.radianceCache != m_lastRadianceCache ||
+            options.lightCandidates != m_lastLightCandidates ||
             scene.contentVersion != m_lastContentVersion) {
             return true;
         }
@@ -726,6 +727,7 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
     m_lastTraceResolution = options.traceResolution;
     m_lastDirectShadows = options.directShadows;
     m_lastRadianceCache = options.radianceCache;
+    m_lastLightCandidates = options.lightCandidates;
     m_lastUpscaler = upscaling;
     m_lastRayReconstruction = rayReconstruction;
     m_lastCamera = camera;

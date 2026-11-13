@@ -56,6 +56,10 @@ const uint kCacheVertices = 4u;
 // A pipeline per stage: each holds only its stage's code (as one shader, all
 // stages would get the registers of the most demanding: many paths inlined).
 layout(constant_id = 0) const uint kStage = kStageSamples;
+// The light samples the paths' diffuse lobes pick one of (GpuRenderOptions::lightCandidates,
+// path.glsl's sampleLobeLight): with 1, the resampling's code is compiled out.
+layout(constant_id = 1) const uint kLightCandidates = 1u;
+#define STARCORE_LIGHT_CANDIDATES kLightCandidates
 
 layout(set = 0, binding = 3, rg32ui) uniform readonly uimage2D visibility;
 layout(set = 0, binding = 7, rg32ui) uniform readonly uimage2D glassVisibility;

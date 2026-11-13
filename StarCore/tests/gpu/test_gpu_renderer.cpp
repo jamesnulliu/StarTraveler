@@ -1670,6 +1670,47 @@ TEST_CASE("GPU hybrid: the radiance cache's light", "[gpu][hybrid][cache]")
     CHECK(difference.mean < 2.0F);
 }
 
+TEST_CASE("GPU hybrid: light candidates (resampled lights) converge to the same image",
+          "[gpu][hybrid]")
+{
+    const GpuTest gpu;
+    TestScene test;
+    // A mesh light: the paths sample the meshes at the primary surfaces too (the spheres'
+    // light there is the direct layer's), so the candidates are picked everywhere.
+    Entity panel = test.scene.createEntity("Panel");
+    panel.get<TransformComponent>().translation = {0.0F, 2.5F, -1.0F};
+    panel.get<TransformComponent>().rotation = Quat(Vec3(glm::radians(90.0F), 0.0F, 0.0F));
+    panel.add<MeshComponent>(MeshComponent{.mesh = primitives::quad(Vec2(1.5F)).build()});
+    panel.add<MaterialComponent>(MaterialComponent{
+        .albedo = Vec3(0.0F), .emissionColor = {1.0F, 0.6F, 0.3F}, .emissionPower = 6.0F});
+    const RenderScene renderScene = buildRenderScene(test.scene);
+    constexpr std::uint32_t kWidth = 96;
+    constexpr std::uint32_t kHeight = 72;
+    const Camera camera = makeCamera(kWidth, kHeight);
+    auto render = [&](std::uint32_t candidates, int frames, std::uint32_t seed) {
+        GpuRenderOptions options = hybridOptions();
+        options.lightCandidates = candidates;
+        auto renderer = gpu.makeRenderer(kWidth, kHeight);
+        for (int i = 0; i < frames; ++i) {
+            renderer->render(renderScene, camera,
+                             PathTracerSettings{.samplesPerPixel = 8, .seed = seed}, options);
+        }
+        return renderer->readImage();
+    };
+    // Another estimator: the same random numbers give other samples...
+    const float changed = meanDifference(render(1, 1, 1), render(4, 1, 1));
+    INFO("one frame, 1 against 4 candidates: " << changed);
+    CHECK(changed > 0.1F);
+    // ... which converge to the same image (unbiased): as close as another seed's.
+    const ColorImage converged = render(1, 128, 1);
+    const BlockDifference noise = blockDifference(render(1, 128, 2), converged);
+    const BlockDifference resampled = blockDifference(render(4, 128, 2), converged);
+    INFO("another seed: worst block " << noise.worst << ", mean " << noise.mean);
+    INFO("4 candidates: worst block " << resampled.worst << ", mean " << resampled.mean);
+    CHECK(resampled.worst < 2.0F * noise.worst + 1.0F);
+    CHECK(resampled.mean < 0.5F);
+}
+
 TEST_CASE("GPU hybrid: shadow-mapped direct light has no noise", "[gpu][hybrid]")
 {
     const GpuTest gpu;

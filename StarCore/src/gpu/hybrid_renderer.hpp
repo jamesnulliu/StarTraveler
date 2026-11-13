@@ -29,6 +29,7 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <vector>
 
 #include <vulkan/vulkan.h>
 
@@ -105,12 +106,18 @@ public:
     };
     [[nodiscard]] auto guides() const -> Guides;
 
+    // hybrid_trace.comp: a pipeline per stage (TraceStage) of a variant of what the paths do
+    // (its other specialization constants, from the options).
+    struct TracePipelines;
+
 private:
     struct Images;
 
+    /** @brief The trace pipelines of the variant `options` ask for (created when first used). */
+    [[nodiscard]] auto tracePipelines(const GpuRenderOptions& options) -> const TracePipelines&;
+
     vulkan::Context* m_context;
-    // hybrid_trace.comp, a pipeline per stage (TraceStage).
-    std::array<vulkan::ComputePipeline, 5> m_trace;
+    std::vector<std::unique_ptr<TracePipelines>> m_trace;
     std::unique_ptr<RadianceCache> m_cache;  // Created when first used.
     // temporal.comp: every pixel traced, and some borrowing (TraceResolution::Half).
     std::array<vulkan::ComputePipeline, 2> m_temporal;

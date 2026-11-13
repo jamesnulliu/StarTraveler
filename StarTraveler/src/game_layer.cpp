@@ -1091,6 +1091,18 @@ void GameLayer::drawRenderPanel()
             }
             ImGui::SliderFloat("Color tolerance", &denoiser.colorSigma, 0.5F, 16.0F, "%.1f");
             enumCombo("Show", gpu.view);
+
+            ImGui::SeparatorText("Experimental");
+            int candidates = static_cast<int>(gpu.lightCandidates);
+            if (ImGui::SliderInt("Light candidates", &candidates, 1, 8)) {
+                gpu.lightCandidates = static_cast<std::uint32_t>(std::max(candidates, 1));
+            }
+            if (ImGui::IsItemHovered()) {
+                ImGui::SetTooltip("1: off. The paths' diffuse light picked of this many light "
+                                  "samples, by the light each brings (resampled importance "
+                                  "sampling, as ReSTIR's candidates): a little less noise for "
+                                  "more GPU time (4: some 5 %% less for 1.7 ms in the cockpit)");
+            }
         }
     }
 

@@ -69,6 +69,11 @@ float fireflyClamp()
     return params.cameraForward.w;
 }
 
+uint lightCandidates()
+{
+    return 1u;  // The reference's estimator (path_tracer.cpp's).
+}
+
 void main()
 {
     uvec2 size = uvec2(imageSize(radiance));

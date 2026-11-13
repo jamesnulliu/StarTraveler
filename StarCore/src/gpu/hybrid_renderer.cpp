@@ -56,7 +56,11 @@ enum class TraceStage : std::uint32_t
     Surfaces = 3,     // Per pixel: guides, motion, albedo, emission, ids.
     Cache = 4,        // Per kCacheBlock^2 pixels: a path teaching the radiance cache.
 };
-constexpr std::uint32_t kStageConstants[] = {0, 1, 2, 3, 4};
+constexpr std::size_t kTraceStages = 5;
+// hybrid_trace.comp's specialization constants: 0 the stage, then what the paths do (a
+// variant, a pipeline per stage each): 1 the light candidates (GpuRenderOptions::
+// lightCandidates).
+using TraceConstants = std::array<std::uint32_t, 2>;
 constexpr std::uint32_t kCacheBlock = 4;  // hybrid_trace.comp's.
 
 // Pixels per side of a temporal gradient's stratum (kGradientStratum in hybrid.glsl).
@@ -247,18 +251,42 @@ struct HybridRenderer::Images
     }
 };
 
+/** @brief hybrid_trace.comp's pipelines of a variant (TraceConstants, the stage's 0). */
+struct HybridRenderer::TracePipelines
+{
+    TraceConstants variant;
+    std::array<vulkan::ComputePipeline, kTraceStages> stages;
+};
+
+namespace
+{
+
+/** @brief What the paths do (the variant of hybrid_trace.comp) with some options. */
+auto traceVariant(const GpuRenderOptions& options) -> TraceConstants
+{
+    return {0, std::clamp(options.lightCandidates, 1U, kMaxLightCandidates)};
+}
+
+auto makeTracePipelines(vulkan::Context& context, const TraceConstants& variant)
+    -> std::unique_ptr<HybridRenderer::TracePipelines>
+{
+    auto stage = [&](TraceStage stage) {
+        TraceConstants constants = variant;
+        constants[0] = static_cast<std::uint32_t>(stage);
+        return vulkan::ComputePipeline(context, hybrid_trace_comp_spv, kTraceBindings, 0,
+                                       constants);
+    };
+    return std::unique_ptr<HybridRenderer::TracePipelines>(new HybridRenderer::TracePipelines{
+        .variant = variant,
+        .stages = {stage(TraceStage::Samples), stage(TraceStage::Reflections),
+                   stage(TraceStage::Gradients), stage(TraceStage::Surfaces),
+                   stage(TraceStage::Cache)}});
+}
+
+}  // namespace
+
 HybridRenderer::HybridRenderer(vulkan::Context& context)
     : m_context(&context),
-      m_trace{vulkan::ComputePipeline(context, hybrid_trace_comp_spv, kTraceBindings, 0,
-                                      std::span(&kStageConstants[0], 1)),
-              vulkan::ComputePipeline(context, hybrid_trace_comp_spv, kTraceBindings, 0,
-                                      std::span(&kStageConstants[1], 1)),
-              vulkan::ComputePipeline(context, hybrid_trace_comp_spv, kTraceBindings, 0,
-                                      std::span(&kStageConstants[2], 1)),
-              vulkan::ComputePipeline(context, hybrid_trace_comp_spv, kTraceBindings, 0,
-                                      std::span(&kStageConstants[3], 1)),
-              vulkan::ComputePipeline(context, hybrid_trace_comp_spv, kTraceBindings, 0,
-                                      std::span(&kStageConstants[4], 1))},
       m_temporal{vulkan::ComputePipeline(context, temporal_comp_spv, kTemporalBindings,
                                          sizeof(std::uint32_t), std::span(&kBorrowing[0], 1)),
                  vulkan::ComputePipeline(context, temporal_comp_spv, kTemporalBindings,
@@ -279,9 +307,22 @@ HybridRenderer::HybridRenderer(vulkan::Context& context)
       m_gradient(context, gradient_comp_spv, kGradientBindings, sizeof(std::int32_t)),
       m_composite(context, composite_comp_spv, kCompositeBindings)
 {
+    m_trace.push_back(makeTracePipelines(context, traceVariant(GpuRenderOptions{})));
 }
 
 HybridRenderer::~HybridRenderer() = default;
+
+auto HybridRenderer::tracePipelines(const GpuRenderOptions& options) -> const TracePipelines&
+{
+    const TraceConstants variant = traceVariant(options);
+    for (const std::unique_ptr<TracePipelines>& pipelines : m_trace) {
+        if (pipelines->variant == variant) {
+            return *pipelines;
+        }
+    }
+    m_trace.push_back(makeTracePipelines(*m_context, variant));
+    return *m_trace.back();
+}
 
 auto HybridRenderer::motion() const -> const vulkan::Image&
 {
@@ -515,8 +556,10 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
             .storageImage(29, images.reflectionSamples[current].view())
             .storageImage(30, images.gradients[std::to_underlying(Layer::Glass)][0].view())
             .storageImage(31, images.gradients[std::to_underlying(Layer::Specular)][0].view());
+        const TracePipelines& trace = tracePipelines(frame.options);
         auto bindStage = [&](TraceStage stage) {
-            const vulkan::ComputePipeline& pipeline = m_trace[static_cast<std::size_t>(stage)];
+            const vulkan::ComputePipeline& pipeline =
+                trace.stages[static_cast<std::size_t>(stage)];
             pipeline.bind(commandBuffer);
             pipeline.pushDescriptors(commandBuffer, writes.writes());
         };

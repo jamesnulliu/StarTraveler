@@ -246,7 +246,12 @@ the ship's hull and cockpit live on the locked "Ship" and "Cockpit" layers.
     lobe reflects, and the other paths end at the first vertex whose cell
     knows it. As many bounces as the cache learns over the frames, but in the
     cockpit only 6% less noise again for 2 ms more: as much time spent on
-    samples does as well.
+    samples does as well. Experimental, off by default (its code compiled out
+    of the trace pipelines until asked for): `lightCandidates`, the light the
+    paths' diffuse lobes sample picked of several samples of the lights by the
+    light each brings unshadowed (resampled importance sampling, as ReSTIR's
+    candidates; one shadow ray, unbiased); 4 gave 3-6% less noise in the
+    cockpit for 1.7 ms more.
     At half trace resolution (the game's) paths start from one pixel of each
     2x2 per frame, each in turn; the others borrow their neighbors' samples on
     the same surface: only those until they have their own (just uncovered),

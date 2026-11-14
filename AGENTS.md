@@ -1,7 +1,8 @@
 # AGENTS.md
 
-Instructions for coding agents working in this repository. `README.md` describes the project,
-how to build it and how the renderers work; read the parts you touch before changing them.
+Instructions for coding agents working in this repository. `README.md` introduces the project;
+`docs/` describes how to build it, the game, the engine and how the renderers work
+(`docs/gpu-rendering.md`). Read the parts you touch before changing them.
 
 ## Start from TODO.md
 
@@ -27,8 +28,8 @@ deadlines, and every item with `[x]` (in the code) or `[ ]` (to do). Read it bef
    TODO item per branch, or a few that cannot land apart.
 3. Commit on that branch. Work that is not a TODO item (a bug fix, docs) gets a branch of its
    own as well; nothing is committed on `main`.
-4. Before the pull request: it builds (`msvc` preset), the tests pass, and `README.md` and
-   `TODO.md` say what the code now does.
+4. Before the pull request: it builds (`msvc` preset), the tests pass, and `README.md`, `docs/`
+   and `TODO.md` say what the code now does.
 5. Push the branch (`git push -u origin feature/<name>`) and open a pull request into `main`:
    `gh pr create --base main`, titled like a commit subject; the body says what changed, how it
    was checked (tests, renders, measured numbers) and which TODO items it ticks. Without `gh`,

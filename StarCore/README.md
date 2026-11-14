@@ -20,7 +20,8 @@ A small render engine with two frontends: C++ (`StarCore::Core`,
 
 This directory builds on its own (`cmake -S StarCore -B build`, or
 `pip install StarCore/`); vcpkg is found through `VCPKG_ROOT`. See the
-repository's README for presets, the game built on it and examples.
+repository's README and its `docs/` for presets, the game built on it, how the
+GPU renderer works and examples.
 
 ```python
 import starcore as sc

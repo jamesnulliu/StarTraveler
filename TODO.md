@@ -168,4 +168,4 @@ in the demo.
 - [ ] Citations: the proposal's sources and, as the course requires, the
   AI-generated code.
 - [ ] The code: builds from a clean clone (MSVC checked; MinGW not since the
-  experimental merges), tests pass, README up to date.
+  experimental merges), tests pass, README and `docs/` up to date.

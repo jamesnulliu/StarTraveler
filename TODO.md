@@ -14,17 +14,161 @@ in the demo.
 
 `[x]` is in the code, `[ ]` is to do.
 
+## Scope
+
+Both required parts are in the code and the demo is close, so the project adds no
+new rendering method. It measures the methods that are there against the
+path-traced reference, and shows them live in the demo. The rungs, with the first
+numbers (the progress figures: one frame of the cockpit turning toward the Anvil,
+1280x720, RTX 4060 Laptop GPU, LDR-FLIP against 8192 spp):
+
+| Rung | `starcore-render` | GPU ms | FLIP |
+|---|---|---:|---:|
+| Raster pipeline: shadow maps, constant ambient, no rays | `--raster` | 2.27 | 0.436 |
+| Path tracing, one path per pixel, no denoising | `--gpu` | 3.72 | 0.342 |
+| Hybrid, Half trace resolution (the game's default) | `--hybrid --half` | 9.31 | 0.097 |
+| Hybrid, Half, shadow maps for the direct light | `--hybrid --half --shadow-maps` | 10.17 | 0.094 |
+| Hybrid, Half, irradiance probes | `--hybrid --half --probes` * | 11.50 | 0.100 |
+| Hybrid, Full trace resolution | `--hybrid` | 14.79 | 0.074 |
+| Hybrid, Full, radiance cache | `--hybrid --cache` | 16.84 | 0.076 |
+| Hybrid denoised by DLSS-RR | `--hybrid --upscaler DLSS-RR` | | |
+| Reference: the GPU path tracer, 8192 spp | `--gpu -f 2048 -s 4` | | |
+
+\* plus `--probe-volume Ship 0 0.155 -0.15 1.65 1.09 3.05 6 4 10` for the cockpit.
+
+The work is three branches, one per team member, below. What the old list had
+beyond them is under [Out of scope](#out-of-scope), for after the deadlines.
+
 ## Order
 
-1. The required parts: both are in the code. Measure them (see Evaluation) and fix
-   what the numbers show.
-2. The evaluation tools (camera paths, FLIP, pass times), so that every method is
-   measured the same way as soon as it lands.
-3. The indirect-light methods, one at a time: one switch for all of them, then DDGI
-   (mostly there), SSR + GTAO, ReSTIR GI.
-4. The demo, then the report.
+1. The three branches, in parallel. `feature/demo-clean-build` cannot slip: the
+   demo is week 15. `feature/eval-denoiser` uses the scripts of
+   `feature/eval-direct-light`, so those land early.
+2. The final numbers: both evaluations run again on one machine, in one go.
+3. The demo (week 15), then the report (finals week).
 
-## Required: hybrid pipeline, direct illumination
+## Branches
+
+| Branch | Owner | What |
+|---|---|---|
+| `feature/demo-clean-build` | (to assign) | a build from a clean clone; the demo's keys, overlay |
+| `feature/eval-direct-light` | (to assign) | the measuring scripts; direct light (required part 1) |
+| `feature/eval-denoiser` | (to assign) | our denoiser against none and DLSS-RR (required part 2) |
+
+For all three:
+
+- One pull request into `main` per branch (`AGENTS.md`), its numbers in the body;
+  the items below ticked in it.
+- GPU times are compared only from one machine, nothing else using the GPU, runs
+  alternated, medians (`AGENTS.md`, Measuring). Record the GPU, the driver and the
+  resolution with every table.
+- The hybrid pipeline and DLSS-RR need an NVIDIA RTX GPU (ray queries, DLSS);
+  without one the hybrid configurations do not run.
+
+### `feature/demo-clean-build`
+
+First the build from a clean clone (it also sets up the owner's machine), then what
+the demo needs. The Render panel switches every rung live today and shows the GPU
+time; what is missing is switching them fast and showing which one is on.
+
+- [ ] Clean build: clone into a new folder on a machine that has not built
+  StarTraveler; follow only `README.md` and `docs/building.md`; `msvc` preset;
+  `ctest --preset msvc-release` passes. What the docs miss goes into
+  `docs/building.md`. MinGW is not checked: say so there.
+- [ ] Demo presets: keys 1-7 set the Render panel's options in one press, while
+  flying as well: 1 raster, no rays; 2 hybrid, Half, shadow maps; 3 hybrid, Half
+  (the default); 4 hybrid, Full; 5 hybrid, Half, irradiance probes; 6 DLSS-RR;
+  7 path tracing (the reference; it restarts whenever anything moves). The number
+  keys are free (`game_layer.cpp` takes WASD, Space, Ctrl, Shift, C, T, Esc and
+  Ctrl+N/O/S/D).
+- [ ] An overlay in a corner of the view: the preset's name, the GPU time per frame
+  and the trace pass's (`gpuTimeMs()`, `traceTimeMs()`, shown in the Render panel
+  today); a key hides it.
+- [ ] `docs/playing.md`: the keys and the overlay.
+- [ ] On the demo machine: each preset's frame rate at the demo's resolution, and a
+  route through `blue_star.yaml` for the 10-15 minutes (the cockpit, the mirror,
+  the glass, the glowing rocks).
+
+Done when: a clean clone builds and passes the tests, and the seven presets switch
+live with their name and time on screen.
+
+### `feature/eval-direct-light`
+
+The measuring scripts, which `feature/eval-denoiser` uses as well, then the first
+required part. Agree with the owner of `feature/eval-denoiser` on day 1 on the
+configuration file and the CSV's columns.
+
+- [ ] The scripts that made the progress figures, into `StarTraveler/tools/eval/`
+  (they are not in the repository yet: the branch starts by adding them), made
+  into a tool:
+  - shots and configurations in one file, so that `feature/eval-denoiser` adds its
+    own without touching the code. A shot: the scene, the camera and look-at, the
+    motion (`--turn-entity Ship 0.5`, `--move`, `--still`), the frames. A
+    configuration: a name and its `starcore-render` flags;
+  - nothing hard-coded: the exe, the scenes and the output folder are arguments;
+  - one command runs it all: the scenes (the game's ship put into `blue_star.yaml`
+    at a pose), the renders (3 seeds each, configurations alternated), the
+    references, FLIP, one CSV (shot, config, seed, gpu_ms, trace_ms, flip), plots
+    of error against GPU time, image crops;
+  - FLIP: NVIDIA's `flip-evaluator` (pip), LDR-FLIP on the PNGs.
+- [ ] Three shots, with the moves `starcore-render` has (no keyframed camera
+  paths): the cockpit turning toward the Anvil (the progress shot), a slow pass by
+  the mirror and the glass, a fast turn past the star (the light changes).
+- [ ] A reference per shot: the GPU path tracer at the shot's last pose, 8192 spp
+  (`--gpu -f 2048 -s 4`, about 22 s at 1280x720). Score a second seed of it against
+  it for its own noise (the progress shot: FLIP 0.034); differences below that mean
+  nothing.
+- [ ] Direct light on the three shots, FLIP and GPU time per frame: the raster
+  pipeline (shadow maps, no rays), the hybrid pipeline with traced shadows and with
+  shadow maps (both at Half and Full). Once on the whole image, once on direct light
+  alone: `-b 2` is direct light only in the path tracer (the tests use it so);
+  check that the hybrid pipeline honours it on a case whose answer is known before
+  trusting the numbers.
+- [ ] The table, the plot, crops and a paragraph for the report: what traced shadows
+  buy over shadow maps, and for how many milliseconds.
+
+Done when: one command reproduces the direct light's table and plot into an empty
+folder.
+
+### `feature/eval-denoiser`
+
+The second required part: our denoiser (A-SVGF) against no denoising and against
+DLSS-RR, with the scripts of `feature/eval-direct-light` and its three shots. Until
+they land, run `starcore-render` by hand to choose the configurations.
+
+- [ ] The configurations: no denoising (`--gpu`, one path per pixel), temporal reuse
+  only (`--hybrid --no-spatial`), the spatial filter only (`--hybrid
+  --no-temporal`), A-SVGF (`--hybrid`), DLSS-RR (`--hybrid --upscaler DLSS-RR`).
+  All at the same render resolution and upscaling ratio (ours with DLSS at the
+  `--quality` DLSS-RR has). DLSS-RR traces every pixel, so ours at Full as well as
+  Half.
+- [ ] Error and time: FLIP and GPU time per frame on the three shots.
+- [ ] Lag: a shot that moves, then stands still (`--still N`, every frame written
+  with `--dump-every 1`); FLIP of each still frame against the reference at the end
+  pose. How many frames each denoiser takes to come within 10% of the error it
+  settles at.
+- [ ] Crops for the report: one region without denoising, with ours, with DLSS-RR,
+  and in the reference.
+- [ ] The table, the plot and a paragraph for the report: how much error each
+  denoiser removes, for how many milliseconds, and how long it lags.
+
+Done when: one command (the shared scripts) reproduces the denoiser's table, plot
+and lag.
+
+## After the branches (everyone)
+
+- [ ] The final numbers: both evaluations on one machine, in one go.
+- [ ] The report: the question, each method and what it took to learn it
+  (irradiance fields, the denoiser's filters, FLIP), the results, what each rung
+  buys for its rays, the limits.
+- [ ] Citations: the proposal's sources and, as the course requires, the
+  AI-generated code.
+- [ ] The demo: a script for the 10-15 minutes, slides, rehearsals, and a recorded
+  video in case the demo machine fails.
+
+## In the code
+
+What the comparison uses.
 
 - [x] A visibility buffer rasterized with a jittered projection (triangle ids,
   spheres as ray-cast impostors); paths start from its hits with ray queries.
@@ -32,140 +176,50 @@ in the demo.
   rays (accumulated) or by shadow maps (`DirectShadows`). Emissive meshes are
   lights too (next event estimation with MIS).
 - [x] The raster pipeline with shadow maps (cube maps near a light, cascades far
-  away, PCSS): direct light without any rays.
-- [ ] Direct light against the reference along the camera paths: FLIP and GPU
-  time, traced shadows against shadow maps.
-- [ ] *Optional*: ReSTIR DI (Bitterli et al. 2020), light reservoirs reused across
-  frames and neighbors. Today each pixel only resamples its own candidates
-  (`lightCandidates`, off by default; 4 candidates gave 3-6% less noise in the
-  cockpit for 1.7 ms). The blue star's glowing rocks are many mesh lights, where
-  reuse should pay more.
-
-## Required: denoising
-
+  away, PCSS): direct light without any rays, a constant ambient term and a
+  headlight.
 - [x] A-SVGF: samples reprojected with motion vectors, history dropped where the
   temporal gradients see the light change, an edge-avoiding a-trous filter; layers
   of their own for direct light, primary surfaces, reflections and window panes.
 - [x] Temporal upscalers: the engine's TAAU, FSR 3.1, DLSS, and DLSS Ray
   Reconstruction (which also denoises).
-- [ ] Every indirect method below goes through the same denoiser and upscaler
-  (SSR and GTAO with a temporal filter of their own if they need one), so that the
-  comparison measures the methods, not the filters.
-- [ ] Our denoiser against DLSS-RR in the evaluation: error, lag, time.
-
-## Indirect light, in rising order of ray cost
-
-- [ ] One option (`GpuRenderOptions`, a `starcore-render` flag, a control in the
-  game) picks the method. Direct light, shadows, denoiser, upscaler and
-  post-processing stay the same for all of them.
-
-### No indirect light (the baseline)
-
-- [x] The raster pipeline: direct light with shadow maps, a constant ambient term
-  and a headlight, no rays.
-
-### SSR + GTAO (no rays)
-
-- [ ] GTAO (Jimenez et al. 2016) from the visibility buffer's depth and normals: a
-  horizon search in screen space, cosine-weighted, scaling the ambient light;
-  accumulated over frames.
-- [ ] Stochastic SSR (Stachowiak and Uludag 2015): GGX-sampled reflection rays
-  marched through a hierarchical depth buffer, hits shared with neighboring
-  pixels, a temporal filter; rays that leave the screen fall back to the sky (or
-  the probes).
-- [ ] Both in the raster pipeline, so that they run without ray tracing hardware,
-  the window panes' reflections included (the raster pipeline blends the nearest
-  pane over without any today).
-
-### DDGI irradiance probes (a fixed ray budget per frame)
-
-- [x] A probe grid around the camera plus `ProbeVolume`s on entities (the ship's
-  cockpit): octahedral irradiance and distance maps, Chebyshev visibility,
-  hysteresis, probes inside geometry turned off. In the hybrid pipeline a diffuse
-  path vertex takes the bounced light from the probes, and its path goes on only to
-  find the lights. Off by default (`probes`, "Irradiance probes" in the game).
-- [ ] Light the raster pipeline's surfaces from the probes in place of the constant
-  ambient: DDGI as in the paper, rays for the probes only, none per pixel. Today
-  the probes live in the hybrid renderer and serve only its paths.
-- [ ] A ray budget that is a setting: a share of the probes updated per frame in
-  turn (today every probe every frame, 128 rays each: about 3.3 ms in the cockpit).
-- [ ] A debug view: the probes drawn as small spheres showing their irradiance
-  (for the demo and the report).
-- [ ] *Optional*: probe relocation and classification (Majercik et al. 2021):
-  probes moved out of walls, probes in empty space switched off.
-
-### ReSTIR GI (per-pixel paths, reused across space and time)
-
-- [ ] Initial samples (Ouyang et al. 2021): one bounce ray from each traced pixel;
-  keep the point it hit, its normal and the light leaving it toward the pixel (the
-  rest of the path, or the probes or the radiance cache).
-- [ ] Temporal reuse: reservoirs reprojected with the motion vectors, their sample
-  count capped, dropped where the temporal gradients drop the history.
-- [ ] Spatial reuse: neighbors on similar surfaces (depth, normal), the Jacobian of
-  the reconnection, a visibility ray to keep it unbiased.
-- [ ] Into the primary layer's denoiser, at Half trace resolution as well as Full.
-- [ ] Note: the trace pass is at the limit of 32 push descriptors; pass new
-  buffers by device address in `FrameUniforms`, as the probes do.
-
-### Paths per pixel (the hybrid pipeline as it is)
-
+- [x] DDGI irradiance probes: a probe grid around the camera plus `ProbeVolume`s on
+  entities (the ship's cockpit), octahedral irradiance and distance maps, Chebyshev
+  visibility, hysteresis, probes inside geometry turned off. In the hybrid pipeline
+  only: a diffuse path vertex takes the bounced light from the probes. Off by
+  default (`probes`, "Irradiance probes" in the game).
+- [x] Resampled light candidates (`lightCandidates`, off by default; 4 candidates
+  gave 3-6% less noise in the cockpit for 1.7 ms).
 - [x] A path per sample and pixel, reprojected and filtered; an optional radiance
-  cache. The most rays per pixel short of the reference.
-
-### Reference
-
+  cache.
 - [x] The GPU path tracer, matching the CPU one almost bit for bit.
-
-## Scene and camera paths
-
 - [x] `blue_star.yaml` (made by `StarTraveler/tools/build_blue_star.py`): a
   mirror, liquid metal, glass, cracked rocks glowing from within, a lattice of
   bone, a ring.
-- [ ] Check that bounced light shows along the paths. In open space little light
-  bounces: the cockpit, rocks lit by their neighbors, the mirror. If the methods
-  look alike, add a closed set piece (a hollow rock, a cave).
-- [ ] Camera paths: keyframes (time, position, orientation) in a file, smooth
-  interpolation, a fixed time step. At least a cruise in the cockpit, a fast turn
-  past the star (the light changes) and a slow pass by the mirror and the glass.
-  `starcore-render` plays one and writes every Nth frame (today it only moves in
-  straight lines: `--move`, `--move-entity`, `--turn-entity`).
-- [ ] Some paths with moving lights or objects, for stability under changing light.
 
-## Evaluation
+## Out of scope
 
-- [ ] Reference frames: converged path tracer images at the sampled poses
-  (thousands of samples each; run them in batches).
-- [ ] FLIP (Andersson et al. 2020, NVIDIA's code) per frame against the reference.
-  LDR-FLIP works on today's PNGs; HDR-FLIP needs linear output (EXR), which
-  `starcore-render` does not write yet.
-- [ ] GPU time per pass: timestamp queries around every pass (today only the whole
-  frame and the trace pass are timed), written by `starcore-render` as CSV and
-  shown in the game.
-- [ ] Temporal stability: choose a metric and implement it, e.g. FLIP between
-  consecutive frames against the reference's (flicker), and the frames it takes to
-  recover after the light or the view changes (lag).
-- [ ] Equal settings and equal time: every method at the same resolution and
-  upscaler, and every method given the same milliseconds.
-- [ ] Python scripts: run every method on every path, collect the numbers, plot
-  error against GPU time, make tables and image crops for the report. Record the
-  GPU, driver and resolution.
+From the first list; for after the deadlines, if at all.
 
-## Demo (week 15)
-
-- [ ] Switch the indirect method live in the game (a key per method), with an
-  overlay showing its name and its GPU time per pass.
-- [ ] Play a camera path in the game, so that the demo flies the measured route;
-  free flight as well.
-- [ ] *Optional*: a split screen, two methods side by side.
-- [ ] A script for the 10-15 minutes, slides, rehearsals, and a recorded video in
-  case the demo machine fails.
-
-## Report and code (finals week)
-
-- [ ] The report: the question, each method and what it took to learn it
-  (resampling weights, irradiance fields, screen-space marching, FLIP), the
-  results, what each method buys for its rays, the limits.
-- [ ] Citations: the proposal's sources and, as the course requires, the
-  AI-generated code.
-- [ ] The code: builds from a clean clone (MSVC checked; MinGW not since the
-  experimental merges), tests pass, README and `docs/` up to date.
+- ReSTIR DI (Bitterli et al. 2020): light reservoirs reused across frames and
+  neighbors; the blue star's glowing rocks are many mesh lights, where reuse should
+  pay more.
+- SSR + GTAO (Stachowiak and Uludag 2015; Jimenez et al. 2016) in the raster
+  pipeline, the window panes' reflections included.
+- DDGI in the raster pipeline (probes in place of the constant ambient); a probe
+  ray budget (today every probe every frame, 128 rays each: about 3.3 ms in the
+  cockpit); a debug view of the probes; relocation and classification (Majercik et
+  al. 2021).
+- ReSTIR GI (Ouyang et al. 2021). The trace pass is at the limit of 32 push
+  descriptors: new buffers go by device address in `FrameUniforms`, as the probes'
+  do.
+- One option picking the indirect method, every method through the same denoiser
+  and upscaler.
+- Keyframed camera paths, played by `starcore-render` and in the game; paths with
+  moving lights or objects.
+- GPU time per pass (timestamp queries around every pass; today only the whole
+  frame and the trace pass), as CSV and in the game.
+- Flicker between frames; equal-time comparisons; HDR-FLIP (needs EXR output).
+- A closed set piece (a hollow rock, a cave) if bounced light does not show.
+- A split screen, two methods side by side.
+- The MinGW build.

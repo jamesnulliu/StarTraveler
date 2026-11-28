@@ -1,3 +1,0 @@
-flip-evaluator==1.7
-matplotlib>=3.7
-Pillow>=9

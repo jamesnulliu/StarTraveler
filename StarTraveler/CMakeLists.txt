@@ -46,10 +46,3 @@ add_custom_command(
 if(STARCORE_BUILD_TESTS)
     add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/tests)
 endif()
-
-if(STARCORE_BUILD_EXAMPLES)
-    add_executable(StarTravelerPrepareShot tools/eval/prepare_shot.cpp)
-    set_target_properties(StarTravelerPrepareShot PROPERTIES OUTPUT_NAME startraveler-prepare-shot)
-    target_link_libraries(StarTravelerPrepareShot PRIVATE
-        StarTravelerLib StarCore::CompileOptions CLI11::CLI11)
-endif()

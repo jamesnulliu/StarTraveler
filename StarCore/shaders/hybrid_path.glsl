@@ -35,11 +35,6 @@ uint maxBounces()
     return frameData.frame.w;
 }
 
-bool directOnly()
-{
-    return (frameData.options.x & kFlagDirectOnly) != 0u;
-}
-
 bool nextEventEnabled()
 {
     return (frameData.options.x & kFlagNextEvent) != 0u;

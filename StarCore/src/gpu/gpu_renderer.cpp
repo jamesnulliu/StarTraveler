@@ -189,22 +189,11 @@ void GpuRenderer::waitForSlot(std::uint32_t index)
                 return static_cast<float>(static_cast<double>(timestamps[to] - timestamps[from]) *
                                           period);
             };
-            const FrameTiming sample{slot.frameNumber,
-                milliseconds(kQueryFrameStart, kQueryFrameEnd),
-                milliseconds(kQueryTraceStart, kQueryTraceEnd)};
-            if (m_captureTimings && sample.frameNumber >= m_captureStartFrame) {
-                m_frameTimings.push_back(sample);
-            }
-            // waitIdle drains slots, not frames: an older slot must not replace newer data.
-            if (!m_hasCompletedTiming || sample.frameNumber >= m_latestTimedFrame) {
-                m_hasCompletedTiming = true;
-                m_latestTimedFrame = sample.frameNumber;
-                m_gpuTimeMs = sample.gpuMs;
-                m_traceTimeMs = sample.traceMs;
-                if (slot.tracedSamples > 0) {
-                    m_msPerSample = m_traceTimeMs / static_cast<float>(slot.tracedSamples);
-                    m_overheadMs = std::max(0.0F, m_gpuTimeMs - m_traceTimeMs);
-                }
+            m_gpuTimeMs = milliseconds(kQueryFrameStart, kQueryFrameEnd);
+            m_traceTimeMs = milliseconds(kQueryTraceStart, kQueryTraceEnd);
+            if (slot.tracedSamples > 0) {
+                m_msPerSample = m_traceTimeMs / static_cast<float>(slot.tracedSamples);
+                m_overheadMs = std::max(0.0F, m_gpuTimeMs - m_traceTimeMs);
             }
         }
         slot.timed = false;
@@ -386,7 +375,6 @@ auto GpuRenderer::needsReset(const RenderScene& scene, const Camera& camera,
     case GpuPipeline::Raster:
         // Frames are tone mapped from the average, display settings may change.
         return scene.version != m_lastVersion || cameraMoved ||
-               settings.directOnly != m_lastSettings.directOnly ||
                settings.instanceMask != m_lastSettings.instanceMask ||
                options.shadows != m_lastShadows;
     case GpuPipeline::Hybrid:
@@ -414,9 +402,6 @@ void GpuRenderer::recordPathTracing(VkCommandBuffer commandBuffer, std::uint32_t
     std::uint32_t flags = 0;
     if (settings.mode == RenderMode::Preview) {
         flags |= kFlagPreview;
-    }
-    if (settings.directOnly) {
-        flags |= gpu::kFlagDirectOnly;
     }
     if (settings.nextEventEstimation) {
         flags |= kFlagNextEvent;
@@ -730,7 +715,6 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
     submitInfo.pCommandBuffers = &commandBuffer;
     check(vkQueueSubmit(m_context->queue(), 1, &submitInfo, slot.fence));
     slot.submitted = true;
-    slot.frameNumber = m_frameNumber;
 
     m_lastVersion = scene.version;
     m_lastContentVersion = scene.contentVersion;

@@ -96,9 +96,6 @@ void throughPanes(bool hasPane, SurfaceHit pane, float primaryT, vec3 direction,
     vec3 position = offsetOrigin(pane.position, pane.geometricNormal, direction);
     float remaining = primaryT - pane.t;
     for (int layer = 1; layer < kMaxThinLayers && maxComponent(transmittance) > 0.0; ++layer) {
-        if (directOnly() && bounces >= maxBounces()) {
-            break;
-        }
         SurfaceHit next;
         if (!traceClosestHit(position, direction, instanceMask(), remaining * 0.9999, next)) {
             break;
@@ -113,9 +110,6 @@ void throughPanes(bool hasPane, SurfaceHit pane, float primaryT, vec3 direction,
         position = offsetOrigin(next.position, next.geometricNormal, direction);
         remaining -= next.t;
         ++bounces;
-    }
-    if (directOnly() && bounces >= maxBounces()) {
-        transmittance = vec3(0.0);
     }
 }
 

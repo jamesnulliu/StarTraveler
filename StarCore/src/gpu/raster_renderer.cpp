@@ -68,9 +68,6 @@ void RasterRenderer::record(VkCommandBuffer commandBuffer, const RasterFrame& fr
     // Turns the soft shadows' taps.
     uniforms.frame[0] = frame.jittered ? frame.frameIndex : frame.accumulated;
     uniforms.options[0] = frame.writeIds ? kFlagWriteIds : 0U;
-    if (settings.directOnly) {
-        uniforms.options[0] |= kFlagDirectOnly;
-    }
     uniforms.options[1] = settings.instanceMask & kAllInstances;
     uniforms.options[2] = scene.lightCount();
     uniforms.history[1] = alone ? kHistoryReset : 0U;

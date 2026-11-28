@@ -545,9 +545,6 @@ auto tracePath(const RenderScene& scene, Ray ray, const PathTracerSettings& sett
     // Indirect light (two or more scattering events between the light and the
     // camera) is optionally clamped against fireflies; direct light never is.
     auto add = [&](Vec3 contribution, std::uint32_t scatteringEvents) {
-        if (settings.directOnly && scatteringEvents > 1) {
-            return;
-        }
         if (settings.fireflyClamp > 0.0F && scatteringEvents > 1) {
             const float peak = maxComponent(contribution);
             if (peak > settings.fireflyClamp) {

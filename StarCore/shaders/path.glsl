@@ -15,7 +15,6 @@ vec3 skyRadiance(vec3 direction);  // What escaping rays see (sky.glsl).
 vec3 skyAmbient();                 // Its mean (the preview's ambient light).
 uint maxBounces();
 bool nextEventEnabled();
-bool directOnly();
 float fireflyClamp();  // 0 = off.
 // Light samples the diffuse lobes' next event estimation picks one of (sampleLobeLight; 1:
 // one light sampled, the reference's estimator). A constant: the code for more is compiled
@@ -762,9 +761,6 @@ PathState newPath()
 /** Indirect light (two or more scattering events) is optionally clamped against fireflies. */
 vec3 clampContribution(vec3 contribution, uint scatteringEvents, float scale)
 {
-    if (directOnly() && scatteringEvents > 1u) {
-        return vec3(0.0);
-    }
     float limit = fireflyClamp();
     if (limit > 0.0 && scatteringEvents > 1u) {
         float peak = maxComponent(contribution) / scale;

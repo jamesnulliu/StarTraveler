@@ -6,7 +6,6 @@
 #include <memory>
 #include <span>
 #include <string>
-#include <vector>
 
 #include <vulkan/vulkan.h>
 
@@ -361,27 +360,6 @@ struct GpuRenderOptions
 class GpuRenderer
 {
 public:
-    struct FrameTiming
-    {
-        std::uint64_t frameNumber = 0;  // Zero-based submission number, not accumulation age.
-        float gpuMs = 0.0F;
-        float traceMs = 0.0F;
-    };
-
-    /** @brief Capture completed timestamp samples, opt-in; clears any earlier capture. */
-    void captureFrameTimings(bool enabled = true)
-    {
-        m_captureTimings = enabled;
-        m_captureStartFrame = m_frameNumber;
-        m_frameTimings.clear();
-    }
-    /** @brief Drain completed samples (completion/slot order); waitIdle first for all frames. */
-    [[nodiscard]] auto takeFrameTimings() -> std::vector<FrameTiming>
-    {
-        std::vector<FrameTiming> result;
-        result.swap(m_frameTimings);
-        return result;
-    }
     /** @return An error if the device has no push descriptors (all pipelines use them). */
     [[nodiscard]] static auto create(vulkan::Context& context)
         -> std::expected<std::unique_ptr<GpuRenderer>, std::string>;
@@ -509,7 +487,6 @@ private:
         VkFence fence = VK_NULL_HANDLE;
         bool submitted = false;
         bool timed = false;
-        std::uint64_t frameNumber = 0;
         // Samples per pixel of a path-traced frame (0: preview or raster, not a cost sample).
         std::uint32_t tracedSamples = 0;
     };
@@ -542,11 +519,6 @@ private:
     VkQueryPool m_queryPool = VK_NULL_HANDLE;
     std::array<FrameSlot, gpu::kFramesInFlight> m_slots{};
     std::uint64_t m_frameNumber = 0;  // Submitted frames.
-    bool m_captureTimings = false;
-    std::uint64_t m_captureStartFrame = 0;
-    std::vector<FrameTiming> m_frameTimings;
-    bool m_hasCompletedTiming = false;
-    std::uint64_t m_latestTimedFrame = 0;
 
     // The pipelines' size (the output's unless upscaled):
     vulkan::Image m_accumulation;  // RGBA32F: rgb = sum of samples, a = count.

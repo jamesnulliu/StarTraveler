@@ -452,9 +452,6 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
     if (settings.mode == RenderMode::Preview) {
         flags |= kFlagPreview;
     }
-    if (settings.directOnly) {
-        flags |= kFlagDirectOnly;
-    }
     if (settings.nextEventEstimation) {
         flags |= kFlagNextEvent;
     }
@@ -474,8 +471,7 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
     if (shadowMaps) {
         flags |= kFlagDirectShadowMaps;
     }
-    const bool indirect = !settings.directOnly && settings.mode != RenderMode::Preview;
-    const bool cached = indirect && frame.options.radianceCache;
+    const bool cached = frame.options.radianceCache && settings.mode != RenderMode::Preview;
     if (cached) {
         flags |= kFlagRadianceCache;
         if (!m_cache) {
@@ -483,7 +479,7 @@ void HybridRenderer::record(VkCommandBuffer commandBuffer, const HybridFrame& fr
         }
         m_cache->describe(uniforms);
     }
-    const bool probes = indirect && frame.options.probes.enabled;
+    const bool probes = frame.options.probes.enabled && settings.mode != RenderMode::Preview;
     if (probes) {
         if (!m_probes) {
             m_probes = std::make_unique<ProbeField>(*m_context);

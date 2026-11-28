@@ -82,8 +82,9 @@ six plots and six crop sheets. All 15 direct-light controls and all three endpoi
 passed. Independent reference pairs had FLIP from 0.00146 to 0.01957. Of the 12 paired
 shadow-method comparisons, eight fell within their reference-pair FLIP, two favored
 traced shadows and two favored shadow maps beyond that threshold. The four group medians
-for traced shadows were 0.16–0.86 ms faster in this run. Desktop GPU activity makes those
-times exploratory. The final report still needs a timing run on an idle GPU.
+for traced shadows were 0.16–0.86 ms faster in this run. The Windows desktop was running
+normally during the sweep. [PR #2](https://github.com/jamesnulliu/StarTraveler/pull/2)
+records the results and collection conditions.
 
 The Visual Studio 2022 Release build passed 156 CTest cases and the four evaluation script
 tests. Three upscaling cases were skipped with the optional FSR and DLSS SDKs disabled.

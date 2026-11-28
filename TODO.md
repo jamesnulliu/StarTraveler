@@ -115,8 +115,8 @@ denoiser evaluation.
   and checks direct illumination and an indirect mirror reflection before measuring.
 - [x] The generated report includes the table, plots, crops and paired results
   for traced shadows versus shadow maps.
-- [ ] Repeat the GPU timing collection on an idle GPU for the final report.
-  The first complete RTX 4090 run used a shared desktop GPU.
+- [x] Record the RTX 4090 timing results and the normal Windows desktop
+  conditions in [PR #2](https://github.com/jamesnulliu/StarTraveler/pull/2).
 
 Done when: one command reproduces the direct light's table and plot into an empty
 folder.

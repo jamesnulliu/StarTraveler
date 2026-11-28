@@ -1,0 +1,13 @@
+{
+  "gpu_cases": 50,
+  "failed": 1,
+  "skipped": 0,
+  "cpu_cases": 109,
+  "case_artifact_hashes_checked": 150,
+  "cpu_hash_checked": true,
+  "test_exe_hash_checked": true,
+  "failed_case": "GPU upscaling: fewer pixels rendered, the output's reconstructed",
+  "artifact_integrity_passed": true,
+  "passed_cases": 49,
+  "all_passed": false
+}

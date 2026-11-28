@@ -1,0 +1,8 @@
+{
+  "checked_utc": "2026-11-28T01:09:37.515Z",
+  "remote": "https://github.com/jamesnulliu/StarTraveler.git",
+  "main_head": "dde6e1bb85e6afa33fa2d1241d55b947ad46b8c3",
+  "branch_head": "dde6e1bb85e6afa33fa2d1241d55b947ad46b8c3",
+  "shared_evaluator_present": false,
+  "evidence": "Fresh network git ls-remote, followed by a read-only ls-tree of that exact local commit; tools contain only scene/model generators, no shared evaluator."
+}

@@ -13,3 +13,7 @@
 *.spv binary
 *.glb binary
 *.bin binary
+
+# Preserve exported evidence bytes, hashes and original capture log formatting.
+/renders/** -text -whitespace
+/docs/final-materials/** -text -whitespace

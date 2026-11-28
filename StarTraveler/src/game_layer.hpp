@@ -41,6 +41,10 @@ struct GameOptions
     bool raster = false;
     // Fly the ship forward at full thrust (smoke tests, screenshots of the effects).
     bool cruise = false;
+    // Opt-in seven-phase windowed flight rehearsal (seconds per phase; 0 disables).
+    float rehearsalSeconds = 0.0F;
+    // Optional presentation profile (1-7); 0 preserves ordinary starting settings.
+    int demoPreset = 0;
     // What the hybrid pipeline shows (its debug views; also in the Render panel).
     starcore::HybridView view = starcore::HybridView::Final;
     // Upscaling of the hybrid and raster pipelines (also in the Render panel): as games on
@@ -152,6 +156,7 @@ private:
     }
     void handleShortcuts();
     void updateCamera();
+    void updateRehearsal();
     /** @brief Particles (exhaust, sparks) and the space dust around the camera. */
     void updateParticles(float deltaSeconds);
     void updateViewportSize(starcore::UVec2 size);
@@ -254,6 +259,11 @@ private:
 
     GameOptions m_gameOptions;
     std::uint32_t m_frameCount = 0;
+    float m_rehearsalTime = 0.0F;
+    int m_rehearsalPhase = -1;
+    int m_rehearsalSample = -1;
+    int m_demoPreset = 0;
+    bool m_showDemoOverlay = true;
     bool m_layoutChecked = false;
 
     float m_traceMs = 0.0F;

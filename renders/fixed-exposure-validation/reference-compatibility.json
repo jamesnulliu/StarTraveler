@@ -1,0 +1,20 @@
+{
+  "passed": true,
+  "renderer_sha256": "fa1d24a2cc95530365fdeb91105afb55f28b25249c27361cb2b60f09e6340db2",
+  "controls": {
+    "cockpit-anvil-turn": {
+      "old_sha256": "3dcd2ee6c684de88823c8a8a3467665c2ca9def314a5dce786fcdb0390da428c",
+      "fixed_sha256": "3dcd2ee6c684de88823c8a8a3467665c2ca9def314a5dce786fcdb0390da428c"
+    },
+    "mirror-glass-pass": {
+      "old_sha256": "bd2405bae2596620a99491669f453b4dc235430c6ce76a25d9978ef3d02203f7",
+      "fixed_sha256": "bd2405bae2596620a99491669f453b4dc235430c6ce76a25d9978ef3d02203f7"
+    },
+    "fast-star-turn": {
+      "old_sha256": "1e18141a6a5689bfed9ee5d8f9768fae8104cbe8f5154d3ca66bcc6cd1c9cfb2",
+      "fixed_sha256": "1e18141a6a5689bfed9ee5d8f9768fae8104cbe8f5154d3ca66bcc6cd1c9cfb2"
+    }
+  },
+  "reference_renderer_sha256": "b5a3164785840db1907d8a45989fc7a0240ddfa67175f6bbdc77563599adb9df",
+  "scope": "Three 32-spp native endpoint controls; manual exposure and effects off."
+}

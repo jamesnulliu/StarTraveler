@@ -1,0 +1,22 @@
+{
+  "passed": true,
+  "physical_captures": 18,
+  "artifact_hashes": 90,
+  "png_hashes": 10536,
+  "frame_states": 10554,
+  "still_pngs": 9216,
+  "flip_scores": 18432,
+  "selected_outcomes": 36,
+  "direct_score_checks": 36,
+  "selected_horizons": {
+    "cockpit-anvil-turn": 512,
+    "mirror-glass-pass": 512,
+    "fast-star-turn": 512
+  },
+  "direct_score_max_difference": 0.0,
+  "manifest_sha256": "598d3233c73f5bc870373b19b96e19a5912ab7b34d8001cba71f8d2eea6ea1f2",
+  "verifier_sha256": "64b100be8f7376c6d651d94484b6a7f917b6bb8744c9d0ba7f4f229bb505cc27",
+  "summary_sha256": "0b0df5558a85bd8d000af756a5b76c18023d75495c46b07ab3b98b6430828388",
+  "runs_sha256": "2f5615c175318e694cf4b2f123bb5fd76caca78419f8a9a37a14bd71deda51c5",
+  "plot_sha256": "1f7e0a366a7d447dadfad6dcb76106474881d5d026bd9824cc5cf87d6e99a99d"
+}

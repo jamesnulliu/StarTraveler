@@ -1,3 +1,4 @@
+#include <cmath>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
@@ -5,6 +6,8 @@
 #include <vector>
 
 #include <CLI/CLI.hpp>
+#define GLFW_INCLUDE_NONE
+#include <GLFW/glfw3.h>
 
 #include <starcore/app/application.hpp>
 #include <starcore/common/log.hpp>
@@ -58,8 +61,13 @@ auto main(int argc, char** argv) -> int
                  "Enable Vulkan validation layers (configure with STARCORE_VULKAN_VALIDATION=ON)");
     cli.add_flag("--no-vsync", noVsync, "Present without vsync");
     cli.add_flag("--no-viewports", noViewports, "Keep all panels inside the main window");
+    cli.add_option("--rehearsal-seconds", options.rehearsalSeconds,
+                   "Automatic windowed flight: seconds per phase (0 disables)")
+        ->check(CLI::Range(0.0F, 120.0F));
     cli.add_option("--frames", options.exitAfterFrames,
                    "Exit after this many frames (smoke tests)");
+    cli.add_option("--demo-preset", options.demoPreset, "Presentation profile 1-7 (0: defaults)")
+        ->check(CLI::Range(0, 7));
     cli.add_option("--screenshot", options.screenshotPath,
                    "With --frames: save the viewport image as PNG before exiting");
     std::string view = "Final";
@@ -71,14 +79,44 @@ auto main(int argc, char** argv) -> int
                    "Off, TAAU, FSR, DLSS (default; falls back to FSR, then TAAU), DLSS-RR (also "
                    "denoises the hybrid pipeline; falls back to DLSS)");
     std::string quality = "Quality";
+    std::string dlssPreset = "Default";
     cli.add_option("--quality", quality,
                    "Upscaler: Native, Quality, Balanced, Performance, \"Ultra performance\"");
+    cli.add_option("--dlss-preset", dlssPreset, "Ordinary DLSS model: Default, K, M");
+    cli.add_option("--dlss-exposure", options.upscaling.dlssExposure,
+                   "DLSS K: fixed HDR exposure; 0 retains internal auto exposure");
     CLI11_PARSE(cli, argc, argv);
 
     starcore::log::init({.level = spdlog::level::debug});
+    if (options.rehearsalSeconds > 0.0F) {
+        starcore::log::client().flush_on(spdlog::level::info);
+        starcore::log::core().flush_on(spdlog::level::info);
+    }
     SC_INFO("StarTraveler (StarCore {})", starcore::kVersionString);
+    if (options.demoPreset > 0 && options.rehearsalSeconds > 0.0F) {
+        SC_CRITICAL("Choose either a demo preset or the automatic rehearsal route");
+        starcore::log::shutdown();
+        return EXIT_FAILURE;
+    }
+    if (options.demoPreset > 0 && options.cpuRenderer) {
+        SC_CRITICAL("GPU demo presets cannot be combined with --cpu");
+        starcore::log::shutdown();
+        return EXIT_FAILURE;
+    }
     if (!starcore::enumFromString(view, options.view)) {
         SC_CRITICAL("Unknown view \"{}\"", view);
+        starcore::log::shutdown();
+        return EXIT_FAILURE;
+    }
+    if (!starcore::enumFromString(dlssPreset, options.upscaling.dlssPreset)) {
+        SC_CRITICAL("Unknown DLSS model \"{}\"", dlssPreset);
+        starcore::log::shutdown();
+        return EXIT_FAILURE;
+    }
+    if (!std::isfinite(options.upscaling.dlssExposure) || options.upscaling.dlssExposure < 0.0F ||
+        (options.upscaling.dlssExposure > 0.0F &&
+         options.upscaling.dlssPreset != starcore::DlssPreset::K)) {
+        SC_CRITICAL("Fixed DLSS exposure requires a finite positive value and explicit K");
         starcore::log::shutdown();
         return EXIT_FAILURE;
     }
@@ -97,12 +135,32 @@ auto main(int argc, char** argv) -> int
     try {
         starcore::Application application({
             .name = "StarTraveler",
+            .width = options.rehearsalSeconds > 0.0F || options.demoPreset > 0 ? 1280U : 1600U,
+            .height = options.rehearsalSeconds > 0.0F || options.demoPreset > 0 ? 720U : 900U,
             .vsync = !noVsync,
             .enableValidation = validation,
             .enableViewports = !noViewports,
         });
         auto& game =
             application.pushLayer<startraveler::GameLayer>(scenePath, assetRoot, options);
+        if (options.rehearsalSeconds > 0.0F) {
+            // Keep this opt-in recording window unobscured; ordinary play is unchanged.
+            glfwSetWindowAttrib(application.window().handle(), GLFW_FLOATING, GLFW_TRUE);
+            glfwShowWindow(application.window().handle());
+            glfwFocusWindow(application.window().handle());
+            int x = 0;
+            int y = 0;
+            glfwGetWindowPos(application.window().handle(), &x, &y);
+            const auto size = application.window().framebufferSize();
+            SC_INFO("Rehearsal window: x={} y={} width={} height={}", x, y, size.x, size.y);
+        }
+        if (options.demoPreset > 0) {
+            int x = 0;
+            int y = 0;
+            glfwGetWindowPos(application.window().handle(), &x, &y);
+            const auto size = application.window().framebufferSize();
+            SC_INFO("Demo window: x={} y={} width={} height={}", x, y, size.x, size.y);
+        }
         application.setMenubarCallback([&game] { game.drawMenuBar(); });
         application.run();
     } catch (const std::exception& error) {

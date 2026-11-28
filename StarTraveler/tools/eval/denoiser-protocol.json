@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "seed_base": 17,
+  "common_flags": ["-s", "1", "-b", "5", "--exposure", "1", "--tone-mapper", "ACES", "--firefly-clamp", "0"],
+  "validation_camera_flags": ["--camera", "0", "2", "10", "--look-at", "0", "0", "0"],
+  "configurations": [
+    {"name": "raw-path", "group": "native-ablation", "flags": ["--gpu", "--no-accumulation", "--upscaler", "Off"], "upscaler": "Off", "scale": 1, "accumulates": false},
+    {"name": "raw-hybrid", "group": "native-ablation", "flags": ["--hybrid", "--no-temporal", "--no-spatial", "--upscaler", "Off"], "upscaler": "Off", "scale": 1, "accumulates": false},
+    {"name": "temporal-full", "group": "native-ablation", "flags": ["--hybrid", "--no-spatial", "--upscaler", "Off"], "upscaler": "Off", "scale": 1, "accumulates": true},
+    {"name": "spatial-full", "group": "native-ablation", "flags": ["--hybrid", "--no-temporal", "--upscaler", "Off"], "upscaler": "Off", "scale": 1, "accumulates": false},
+    {"name": "asvgf-full", "group": "native-ablation", "flags": ["--hybrid", "--upscaler", "Off"], "upscaler": "Off", "scale": 1, "accumulates": true},
+    {"name": "asvgf-half", "group": "native-ablation", "flags": ["--hybrid", "--half", "--upscaler", "Off"], "upscaler": "Off", "scale": 1, "accumulates": true},
+    {"name": "asvgf-dlss-full", "group": "quality-end-to-end", "flags": ["--hybrid", "--upscaler", "DLSS", "--quality", "Quality"], "upscaler": "DLSS", "scale": 0.6666666666666666, "accumulates": true},
+    {"name": "asvgf-dlss-half", "group": "quality-end-to-end", "flags": ["--hybrid", "--half", "--upscaler", "DLSS", "--quality", "Quality"], "upscaler": "DLSS", "scale": 0.6666666666666666, "accumulates": true},
+    {"name": "rr-quality", "group": "quality-end-to-end", "flags": ["--hybrid", "--upscaler", "DLSS-RR", "--quality", "Quality"], "upscaler": "DLSS-RR", "scale": 0.6666666666666666, "accumulates": true},
+    {"name": "spatial-dlss-reset", "group": "diagnostic-only", "flags": ["--hybrid", "--no-temporal", "--upscaler", "DLSS", "--quality", "Quality"], "upscaler": "DLSS", "scale": 0.6666666666666666, "accumulates": false},
+    {"name": "gpu-ignores-dlss", "group": "diagnostic-only", "flags": ["--gpu", "--upscaler", "DLSS", "--quality", "Quality"], "upscaler": "Off", "scale": 1, "accumulates": true}
+  ]
+}

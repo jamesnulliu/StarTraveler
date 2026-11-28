@@ -1,0 +1,16 @@
+{
+  "passed": true,
+  "artifact_hashes": 264,
+  "timestamp_rows": 2493,
+  "state_rows": 2493,
+  "direct_flip_scores": 54,
+  "max_score_difference": 0,
+  "max_heartbeat_gap_seconds": 1.30812,
+  "sources": 25,
+  "motion_runs": 27,
+  "calibration_runs": 3,
+  "exact_repeat_controls": 3,
+  "summary_rows": 9,
+  "thresholds_changed": false,
+  "verifier_sha256": "e84e55f4b506af8f77bd9b347d85dfae868ea15728b2fd1097115187dcd77ee8"
+}

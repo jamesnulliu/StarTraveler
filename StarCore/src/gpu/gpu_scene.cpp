@@ -456,7 +456,9 @@ void GpuScene::update(const RenderScene& scene, VkCommandBuffer commandBuffer,
     }
 
     // Motion vectors: this frame's previous transforms are the last update's.
-    if (count > 0) {
+    // A full upload has no matching old transforms (new scene or grown storage).
+    // Its previous transforms are initialized from the upload below instead.
+    if (count > 0 && !full) {
         const VkBufferCopy region{0, 0, VkDeviceSize{count} * sizeof(InstanceTransformRecord)};
         vkCmdCopyBuffer(commandBuffer, m_transforms.handle(), m_previousTransforms.handle(), 1,
                         &region);
@@ -651,6 +653,9 @@ void GpuScene::update(const RenderScene& scene, VkCommandBuffer commandBuffer,
         copyRuns(m_instances, 0, sizeof(InstanceRecord));
         copyRuns(m_materials, materialOffset, sizeof(RenderMaterial));
         copyRuns(m_transforms, transformOffset, sizeof(InstanceTransformRecord));
+        if (full) {
+            copyRuns(m_previousTransforms, transformOffset, sizeof(InstanceTransformRecord));
+        }
         if (m_rayTracing) {
             copyRuns(m_tlasInstances, tlasInstanceOffset,
                      sizeof(VkAccelerationStructureInstanceKHR));

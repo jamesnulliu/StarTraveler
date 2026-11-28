@@ -1,5 +1,30 @@
 # GPU rendering
 
+Offline temporal evaluation can specify `starcore-render --frame-ms 16.6666667`.
+This fixes the simulation time supplied to temporal reconstruction and post
+processing; it does not override measured GPU timestamps. Zero (the default)
+retains interactive wall-clock timing, clamped to 1â€“100 ms. Frame-state CSVs
+append `frame_time_ms` with the actual supplied value. Use a fixed positive
+step when comparing motion-only and per-frame image-export runs; export waits
+otherwise change the temporal input. See [settling protocol](production-lag.md).
+
+On a full scene upload (including newly allocated instance storage), previous
+object transforms start from the current transforms. Incremental updates retain
+the preceding frame's transforms. This prevents undefined initial storage or a
+replaced scene from supplying false object motion to temporal reconstruction.
+The `[initial-motion]` GPU regression checks stationary first/replacement frames,
+an actual move and stopping, with no pixel tolerance.
+
+For controlled HDR reconstruction, `--dlss-preset K --dlss-exposure 1` supplies
+a 1x1 R32F exposure texture to ordinary DLSS and disables its internal automatic
+exposure. This normalization input does not replace the renderer's tone-mapping
+exposure. Match both to 1 for the fixed-exposure evaluation. The option defaults
+to 0, retaining the previous automatic behavior; positive values require explicit
+K and recreate the feature/reset history when changed. RR and other upscalers
+ignore this SR-only input. Both applications accept the option; the game's Render
+panel exposes it under K. `frame-stats` appends `dlss_exposure` (0 for auto or an
+inactive SR upscaler). See [NVIDIA's exposure description](https://raw.githubusercontent.com/NVIDIA/DLSS/main/doc/DLSS_Programming_Guide_Release.pdf), section 3.9.
+
 `StarCore::Gpu` is headless Vulkan, and its `GpuRenderer` renders the engine's render scene
 ([Engine](engine.md#render-scene-and-cpu-path-tracer)). The render scene becomes storage buffers
 updated per changed instance and, with ray queries, a BLAS per mesh (cached across frames, spheres
@@ -202,15 +227,38 @@ build\msvc\bin\Release\starcore-render.exe scene.yaml --hybrid --half --frames 6
 | Group | Options |
 |---|---|
 | Output | `-o` (`renders/output.png`), `-W`/`-H` (960x540), `-f` frames (32), `-s` spp, `-b` bounces, `--seed`, `--firefly-clamp`, `-j` threads |
-| Camera | `--camera x y z`, `--look-at x y z`, `--fov`, `--exposure`, `--auto-exposure`, `--tone-mapper None\|Reinhard\|ACES\|AgX` |
-| Pipeline | `--gpu` (path tracing), `--hybrid`, `--raster`, `--validation` |
+| Camera | `--camera x y z`, `--look-at x y z` or `--camera-angles yaw pitch`, `--fov`, `--exposure`, `--auto-exposure`, `--tone-mapper None\|Reinhard\|ACES\|AgX` |
+| Pipeline | `--gpu` (path tracing), `--no-accumulation` (independent GPU path-traced frames), `--hybrid`, `--raster`, `--validation` |
 | Hybrid | `--view`, `--no-spatial`, `--no-temporal`, `--filter-passes`, `--half`, `--shadow-maps`, `--cache`, `--light-candidates N`, `--light-shafts` |
 | Probes | `--probes`, `--probe-spacing`, `--probe-grid x y z`, `--probe-rays`, `--probe-hysteresis`, `--probe-volume` |
 | Raster | `--no-shadows`, `--shadow-distance`, `--shadow-resolution` |
 | Motion | `--move x y z`, `--move-entity name x y z`, `--turn-entity name degrees`, `--still N`, `--dump-every N` |
 | Effects | `--bloom`, `--motion-blur`, `--vignette`, `--lens` |
 | Upscaling | `--upscaler`, `--quality`, `--sharpness` |
+| Measurement | `--frame-stats path.csv`, `--gpu-timings path.csv` |
 
 The motion options move the camera or an entity every frame, for measuring the pipelines while
 things move; `--still N` keeps the last N frames still and `--dump-every N` writes intermediate
 frames.
+
+`--gpu --no-accumulation` disables history and advances the seed by the zero-based
+frame index. With `-s 1` each frame is a fresh one-sample image, even while still.
+Without the flag, path tracing retains its normal accumulation behavior. The
+flag requires the GPU path tracer and is rejected with Hybrid/Raster or CPU.
+
+`--frame-stats path.csv` records each GPU submission's frame, seed, spp, accumulated
+frames, actual render/output sizes, active upscaler, and the reset flag passed to
+that upscaler. Rows are buffered and written after rendering, including frame 1.
+This is diagnostic state, not GPU timing. In particular, `--no-temporal` currently
+also resets DLSS history each frame. Comparison groups and a reproducible minimal
+check are described in [denoiser protocol](denoiser-protocol.md).
+
+The [evaluation shot runner](evaluation-shots.md) prepares the game's ship in
+three fixed motions and records explicit end scenes for reference generation.
+
+`--gpu-timings path.csv` captures frame-associated GPU timestamps with one-based
+submission IDs and a setup-frame marker. It rejects intermediate PNG dumping.
+The latest GPU time now remains the newest completed submission when frame slots
+are drained out of order; CPU wall time is labelled separately in the log.
+[Measurement validation](measurement-validation.md) describes references, FLIP,
+timing controls, and the finite still-frame convergence rule.

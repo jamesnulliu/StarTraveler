@@ -1,0 +1,9 @@
+{
+  "passed": true,
+  "commands": 36,
+  "runtime_dlls": 1,
+  "source_files": 15,
+  "final_png_equals_last_dump": 18,
+  "renderer_sha256": "fa1d24a2cc95530365fdeb91105afb55f28b25249c27361cb2b60f09e6340db2",
+  "thresholds_unchanged": true
+}

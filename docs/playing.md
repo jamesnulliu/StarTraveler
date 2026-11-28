@@ -15,12 +15,16 @@ Without a scene it opens the default one, `StarTraveler/assets/scenes/blue_star.
 | `--raster` | start with ray tracing off: rasterize on the GPU |
 | `--upscaler NAME` | `Off`, `TAAU`, `FSR`, `DLSS` (default), `DLSS-RR` ([Upscaling](#upscaling)) |
 | `--quality NAME` | `Native`, `Quality` (default), `Balanced`, `Performance`, `"Ultra performance"` |
+| `--dlss-preset NAME` | Ordinary DLSS model: `Default` (vendor selection), `K`, `M`; does not select RR's model |
+| `--dlss-exposure VALUE` | Ordinary DLSS K fixed HDR normalization; 0 keeps internal auto exposure; post-processing exposure is separate |
+| `--demo-preset N` | Start with presentation profile 1–7, or 0 for normal settings; see [profiles](demo-presets.md) |
 | `--view NAME` | the hybrid pipeline's intermediate images: `Final` (default), `Noisy`, `Albedo`, `Direct`, `Visibility`, `Lighting`, `Specular`, `Glass`, `Variance`, `Motion`, `History` |
 | `--cruise` | fly forward at full thrust, for screenshots of the effects |
 | `--frames N --screenshot out.png` | exit after N frames, saving the viewport as PNG |
 | `--validation` | Vulkan validation layers (configure with `STARCORE_VULKAN_VALIDATION=ON`) |
 | `--no-vsync` | present without vsync |
 | `--no-viewports` | keep all panels inside the main window |
+| `--rehearsal-seconds N` | Opt-in automatic seven-phase window rehearsal, N seconds per phase (0 disables); see [recording](final-window-rehearsal.md) |
 
 ## Flying
 
@@ -35,6 +39,8 @@ on the view flies on).
 | Space, Ctrl | thrust up, down | fly up, down |
 | Shift | boost | |
 | C | switch to the free camera | back to the cockpit |
+| 1–7 | select a presentation profile | select a presentation profile |
+| F2 | hide/show live profile, actual method and GPU timing | same |
 | T | open a portal in front (two portals link up) | |
 | Esc | pause menu | |
 | Ctrl+N/O/S, Ctrl+D, Del | new/open/save scene, duplicate, delete (while the mouse is free) | |
@@ -84,6 +90,12 @@ With `--cpu`, or on GPUs without ray queries, the CPU path tracer shows a noise-
 moving and path traces when still.
 
 ### Upscaling
+
+For the denoiser presentation, use Quality with explicit K; see the
+[presentation outline and rehearsal limits](denoiser-demo.md). The Render panel's
+**DLSS model** control selects the SR model while ordinary DLSS is active.
+Switching models resets its history. The default Performance M color regression
+remains a [known issue](dlss-diagnosis.md); existing Quality results are preserved.
 
 As games do, the game renders 2/3 of the view's width and height and DLSS reconstructs the rest
 (FSR where DLSS cannot run, else the engine's TAAU): about half the GPU time at 1080p. The Render

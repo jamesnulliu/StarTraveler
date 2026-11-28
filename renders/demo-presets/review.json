@@ -1,0 +1,11 @@
+{
+  "accepted": true,
+  "profiles": 7,
+  "review": "Assistant inspected all seven full-size window captures and contact sheet. Profile names, latest GPU/trace values, native/internal dimensions and actual upscalers are legible and unobstructed.",
+  "manual_keyboard_verified": false,
+  "native_F2_input_verified": false,
+  "performance_measurement": false,
+  "game_test_cases": 17,
+  "game_test_assertions": 286,
+  "manifest_sha256": "84e08b6c4a5404ac4d88af4aeacc18a557d2ab74384533b2bea1119d31a4fff9"
+}

@@ -34,6 +34,20 @@ configure, which can wait a long time on vcpkg's lock.
 Build and test presets append the configuration: `msvc-release`, `msvc-debug`,
 `msvc-relwithdebinfo`, `mingw-release`, and so on (`CMakePresets.json` has the full list).
 
+For Visual Studio 2022, configure and build with its own presets. There is no
+`msvc-vs2022-release` test preset, so point CTest at the build directory:
+
+```powershell
+cmake --preset msvc-vs2022
+cmake --build --preset msvc-vs2022-release
+ctest --test-dir build/msvc-vs2022 -C Release --output-on-failure
+```
+
+The Release build was verified with Build Tools 2022 17.14, MSVC 19.44, Windows
+SDK 10.0.26100.0 and CMake 4.2.3, including `import std`. This does not establish
+compatibility with older VS 2022 toolsets. Local build and DLSS-RR smoke-test
+results are recorded in [denoiser preflight](eval-denoiser-preflight.md).
+
 ## Options
 
 Set at configure time, e.g. `cmake --preset msvc -DSTARCORE_DLSS=OFF`.
@@ -96,6 +110,12 @@ uv run pytest StarCore/python/tests    # Python, after installing the package (b
 
 `StarCore/tests/gpu` checks the GPU renderer against the CPU one; those tests need a GPU with ray
 queries, and without one they are skipped.
+
+The [recorded full Release regression](gpu-regression.md) ran all 50 GPU cases
+on the RTX 3070 Laptop: 49 passed, one ordinary-DLSS reconstruction assertion
+failed reproducibly, none skipped; all 109 CPU/game cases passed. This is an
+executed regression with an unresolved failure, not a clean pass. Allow long
+GPU initialization rather than imposing the exploratory 180-second limit.
 
 ## Python
 

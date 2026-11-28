@@ -1,0 +1,293 @@
+{
+  "signature": {
+    "exe": "e0499cd40d2604df02c0a4a78b438ee34fddda6db12ee01ef96afb7b255bad64",
+    "checker": "6f19b6a1ad1cd5434f8f9d88efcd9fe5ba1bc5a4acd3c8ccd5c0d65e9e872238",
+    "ffmpeg": "3256173f3f8bffd7df12227c68adf68025edb1832273a9530688a7bb1ed8edec"
+  },
+  "profiles": {
+    "1": {
+      "command": [
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\build\\msvc-vs2022\\bin\\Release\\StarTraveler.exe",
+        "--demo-preset",
+        "1",
+        "--frames",
+        "300",
+        "--no-viewports"
+      ],
+      "pipeline": "Raster",
+      "active_upscaler": "Off",
+      "output": [
+        745,
+        676
+      ],
+      "internal": [
+        745,
+        676
+      ],
+      "png": "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\demo-presets\\profile-1\\window.png",
+      "png_sha256": "cba17baca2febe2755a01872b48e0cbb80af79a78a1e591f61a7b746eb9ebb48",
+      "game_exit": 0,
+      "log_sha256": "4af07d8aa7aee611365f83a70e31fcaa629f6c73c515cedf673dbe46f9ffbb1d",
+      "capture_command": [
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\.build-tools\\eval-venv\\Lib\\site-packages\\imageio_ffmpeg\\binaries\\ffmpeg-win-x86_64-v9.0.2.exe",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "ddagrab=output_idx=0:video_size=1280x720:offset_x=73:offset_y=102:framerate=30:draw_mouse=0",
+        "-vf",
+        "hwdownload,format=bgra",
+        "-frames:v",
+        "1",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\demo-presets\\profile-1\\window.png"
+      ]
+    },
+    "2": {
+      "command": [
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\build\\msvc-vs2022\\bin\\Release\\StarTraveler.exe",
+        "--demo-preset",
+        "2",
+        "--frames",
+        "300",
+        "--no-viewports"
+      ],
+      "pipeline": "Hybrid",
+      "active_upscaler": "Off",
+      "output": [
+        745,
+        676
+      ],
+      "internal": [
+        745,
+        676
+      ],
+      "png": "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\demo-presets\\profile-2\\window.png",
+      "png_sha256": "144a46fca53b1994a41d2d575bf1f7d4b8690cf728f6ae9d87d295a5537282b8",
+      "game_exit": 0,
+      "log_sha256": "2be452bffdce72a62bc64c480dd6f228998d6a8b2d8e3cd4d20b62549af45ff6",
+      "capture_command": [
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\.build-tools\\eval-venv\\Lib\\site-packages\\imageio_ffmpeg\\binaries\\ffmpeg-win-x86_64-v9.0.2.exe",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "ddagrab=output_idx=0:video_size=1280x720:offset_x=105:offset_y=134:framerate=30:draw_mouse=0",
+        "-vf",
+        "hwdownload,format=bgra",
+        "-frames:v",
+        "1",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\demo-presets\\profile-2\\window.png"
+      ]
+    },
+    "3": {
+      "command": [
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\build\\msvc-vs2022\\bin\\Release\\StarTraveler.exe",
+        "--demo-preset",
+        "3",
+        "--frames",
+        "300",
+        "--no-viewports"
+      ],
+      "pipeline": "Hybrid",
+      "active_upscaler": "Off",
+      "output": [
+        745,
+        676
+      ],
+      "internal": [
+        745,
+        676
+      ],
+      "png": "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\demo-presets\\profile-3\\window.png",
+      "png_sha256": "094dc5df37928b51f9e6412bb4c5be1a01d6c6966a7891bcebbdb75482242822",
+      "game_exit": 0,
+      "log_sha256": "796cd7af9531b6dfbed873e13140b9db3edc57d6a4e8b13943ffe29bfd596098",
+      "capture_command": [
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\.build-tools\\eval-venv\\Lib\\site-packages\\imageio_ffmpeg\\binaries\\ffmpeg-win-x86_64-v9.0.2.exe",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "ddagrab=output_idx=0:video_size=1280x720:offset_x=137:offset_y=166:framerate=30:draw_mouse=0",
+        "-vf",
+        "hwdownload,format=bgra",
+        "-frames:v",
+        "1",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\demo-presets\\profile-3\\window.png"
+      ]
+    },
+    "4": {
+      "command": [
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\build\\msvc-vs2022\\bin\\Release\\StarTraveler.exe",
+        "--demo-preset",
+        "4",
+        "--frames",
+        "300",
+        "--no-viewports"
+      ],
+      "pipeline": "Hybrid",
+      "active_upscaler": "Off",
+      "output": [
+        745,
+        676
+      ],
+      "internal": [
+        745,
+        676
+      ],
+      "png": "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\demo-presets\\profile-4\\window.png",
+      "png_sha256": "c1a82bc1e87e4d324a6d2eced182ee911ee725e5497f661ca0e054a3538a0341",
+      "game_exit": 0,
+      "log_sha256": "b808f8713b9aba9ef5126974631d81a4b69bf228cf7770949fac3cbc25d7616f",
+      "capture_command": [
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\.build-tools\\eval-venv\\Lib\\site-packages\\imageio_ffmpeg\\binaries\\ffmpeg-win-x86_64-v9.0.2.exe",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "ddagrab=output_idx=0:video_size=1280x720:offset_x=169:offset_y=198:framerate=30:draw_mouse=0",
+        "-vf",
+        "hwdownload,format=bgra",
+        "-frames:v",
+        "1",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\demo-presets\\profile-4\\window.png"
+      ]
+    },
+    "5": {
+      "command": [
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\build\\msvc-vs2022\\bin\\Release\\StarTraveler.exe",
+        "--demo-preset",
+        "5",
+        "--frames",
+        "300",
+        "--no-viewports"
+      ],
+      "pipeline": "Hybrid",
+      "active_upscaler": "Off",
+      "output": [
+        745,
+        676
+      ],
+      "internal": [
+        745,
+        676
+      ],
+      "png": "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\demo-presets\\profile-5\\window.png",
+      "png_sha256": "2270525fbd99fd0e120d3457dbeda667c3a9d3a711c8115a5bb1a6c40636fcbd",
+      "game_exit": 0,
+      "log_sha256": "3d7d8beae68d680239f0539aec466e6114e4d05698b8ad00da219fb159496e85",
+      "capture_command": [
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\.build-tools\\eval-venv\\Lib\\site-packages\\imageio_ffmpeg\\binaries\\ffmpeg-win-x86_64-v9.0.2.exe",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "ddagrab=output_idx=0:video_size=1280x720:offset_x=201:offset_y=230:framerate=30:draw_mouse=0",
+        "-vf",
+        "hwdownload,format=bgra",
+        "-frames:v",
+        "1",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\demo-presets\\profile-5\\window.png"
+      ]
+    },
+    "6": {
+      "command": [
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\build\\msvc-vs2022\\bin\\Release\\StarTraveler.exe",
+        "--demo-preset",
+        "6",
+        "--frames",
+        "300",
+        "--no-viewports"
+      ],
+      "pipeline": "Hybrid",
+      "active_upscaler": "DLSS-RR",
+      "output": [
+        745,
+        676
+      ],
+      "internal": [
+        497,
+        451
+      ],
+      "png": "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\demo-presets\\profile-6\\window.png",
+      "png_sha256": "2efb285c55b3456544a5bcacb966aabdc55e314e37a69db19addd194fa8564e2",
+      "game_exit": 0,
+      "log_sha256": "57d0e0cbef5d0d403ece50d52e9c96ad1cfd4d5a9d6ca7e338e59c568aa22c56",
+      "capture_command": [
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\.build-tools\\eval-venv\\Lib\\site-packages\\imageio_ffmpeg\\binaries\\ffmpeg-win-x86_64-v9.0.2.exe",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "ddagrab=output_idx=0:video_size=1280x720:offset_x=233:offset_y=262:framerate=30:draw_mouse=0",
+        "-vf",
+        "hwdownload,format=bgra",
+        "-frames:v",
+        "1",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\demo-presets\\profile-6\\window.png"
+      ]
+    },
+    "7": {
+      "command": [
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\build\\msvc-vs2022\\bin\\Release\\StarTraveler.exe",
+        "--demo-preset",
+        "7",
+        "--frames",
+        "300",
+        "--no-viewports"
+      ],
+      "pipeline": "Path tracing",
+      "active_upscaler": "Off",
+      "output": [
+        745,
+        676
+      ],
+      "internal": [
+        745,
+        676
+      ],
+      "png": "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\demo-presets\\profile-7\\window.png",
+      "png_sha256": "23f61cc5d9e22d8000587e44cafb7e3782b79a095ba669db3111808cc936499d",
+      "game_exit": 0,
+      "log_sha256": "842d34a2eb3cd69d4c15d8b4b9e6baa65ae745477b18ef26e75aba885b1fda9b",
+      "capture_command": [
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\.build-tools\\eval-venv\\Lib\\site-packages\\imageio_ffmpeg\\binaries\\ffmpeg-win-x86_64-v9.0.2.exe",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "ddagrab=output_idx=0:video_size=1280x720:offset_x=41:offset_y=70:framerate=30:draw_mouse=0",
+        "-vf",
+        "hwdownload,format=bgra",
+        "-frames:v",
+        "1",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\demo-presets\\profile-7\\window.png"
+      ]
+    }
+  },
+  "complete": true,
+  "state": "captured_needs_visual_review",
+  "manual_keyboard_verified": false,
+  "performance_measurement": false
+}

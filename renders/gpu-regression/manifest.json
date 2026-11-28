@@ -1,0 +1,734 @@
+{
+  "created_utc": "2026-11-26T07:58:25.354796+00:00",
+  "signature": {
+    "inventory_sha256": "161f25a6708e070f8f93c195875102188dcbf588647c6f4b38fd4241b7f19777",
+    "test_exe_sha256": "57f89df2c8d7fcaeed6d7b4bec08b0e354a884b082cf3c3224d8a07cd1856dc7",
+    "gpu_driver": "NVIDIA GeForce RTX 3070 Laptop GPU, 610.91",
+    "cpu_report_sha256": "cc7a4530cd88b543e9e9afa4f1cbed4ba62acbd1a335b2d810c6a397b5713361",
+    "dlls": {
+      "vulkan-1.dll": "9570d10f16a91834f4fbcb4ab626807a88027aeb57e8010d7d3d0b013534a911"
+    }
+  },
+  "results": {
+    "GPU hybrid: a glossy surface a pane reflects keeps its history while moving": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 154.9977729000002,
+      "finished_utc": "2026-11-26T08:01:00.385057+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-01\\command.json": "0619d53fb7b03683bb130254b3b9dc00e8c3367d0ebb6efa8c3cfc06496e18c0",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-01\\junit.xml": "b3d14a14b3d89389b4ddb9e0bc33a66daa87e6144891773a3d6f834a6d9092a4",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-01\\stdout.log": "75e5e04207b66084a7c3a9cdff8ee9db3573cfd53ee1b36306d792e89990371d"
+      }
+    },
+    "GPU effects: a space sky's stars are points, hidden by surfaces": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 6.67633670000032,
+      "finished_utc": "2026-11-26T08:01:07.086516+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-02\\command.json": "0c70b1c5b987f9259a313803b82af2534fee1a65dc082be4eeb65143a46120ea",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-02\\junit.xml": "b01eb84076cda582a46edd6f86063bc4d2c32f16841011acd5a67c3008e1bdb8",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-02\\stdout.log": "18a5842dd4486bbfb8e81d402c0cc8bae7583546263a99bfafa6635b67ac6309"
+      }
+    },
+    "GPU effects: bloom spreads bright light around it": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 4.0248608000001695,
+      "finished_utc": "2026-11-26T08:01:11.168506+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-03\\command.json": "c3bbabf7f9f95b061ea2380810096b2f2251e4ef7694fe3087a10026886ab554",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-03\\junit.xml": "a88d6f2cbd78188e558df6c2530b227ed93ad42ff75ec30c1d576e53945be8e1",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-03\\stdout.log": "f0ae40bdcb0aa0904fb8736a2b7ff0abf445a48e33559749191e88917c7f35e9"
+      }
+    },
+    "GPU effects: motion blur smears what moves, not what rests": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 7.651667099999031,
+      "finished_utc": "2026-11-26T08:01:18.837331+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-04\\command.json": "7d4cbe22ee7a6d5c19e736e9b943ee20b4104e47e5cf28184e82b06ea16e9ccf",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-04\\junit.xml": "fb2ca1b76b9260a7cae4851e89f4ef8a995753b780d5db86c56949aaafb0627a",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-04\\stdout.log": "7204ff05817bf1dc4ccb31a2197d08ac0de3a301dbab69d303256e91c8e4e104"
+      }
+    },
+    "GPU effects: particles glow, hide behind surfaces and streak": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 8.032413700000689,
+      "finished_utc": "2026-11-26T08:01:26.887797+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-05\\command.json": "549ec5d4e3cbd25d69ada2ef4b0b9bd2b96d29b96ec29f49cf8e96a862dd86c7",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-05\\junit.xml": "e701b71ac5deebe3d4ebf1602a60591f9b109dcef62a00f2f7b849d20c8574e2",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-05\\stdout.log": "2d053db5ab7fd13791f081eebc35f6b783d7bc87bb240f2be149e7cc65465cea"
+      }
+    },
+    "GPU hybrid: a highlight sliding along a glossy surface follows it": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 116.11972419999984,
+      "finished_utc": "2026-11-26T08:03:23.026750+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-06\\command.json": "e40deb155627ab7e7ffc0c590bcb538bd106bb058057f911391cf654407ef757",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-06\\junit.xml": "1fa5a6b7d05bfb2887eb3fe678c8b372ae6491ae63e6ee63b16c7a3f3d9b8fff",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-06\\stdout.log": "662c22f7bacc0f3336e014f587a8224170695fe6f6a873631edecdbf956530c5"
+      }
+    },
+    "GPU hybrid: a reflection whose light keeps changing is filtered": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 188.50425359999826,
+      "finished_utc": "2026-11-26T08:06:31.558289+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-07\\command.json": "d7a0ad7902feff069823a3b2aaacad03d3acd623d03ad50573a240dff6eea048",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-07\\junit.xml": "ed0739608fe921b2e93b03fae4dfe36efb82c65a737455e5fd454ba1fc50a9e4",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-07\\stdout.log": "3738ab349efb33f05b2240e99afd55fe5f2c32b0953940dbddfd3ee41b3d5845"
+      }
+    },
+    "GPU hybrid: a still view converges to the path tracer's image": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 209.569367600001,
+      "finished_utc": "2026-11-26T08:10:01.191969+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-08\\command.json": "3694cd04d2a843aac551c8a4396c753b043d7d94dcc46186d6422982bc81925e",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-08\\junit.xml": "d34450b2352f4d27032eedce1778b2855f6e38e7e1f7189f249a90577a140e3c",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-08\\stdout.log": "fb5ee4ba015abedd3a81371733b4e1aaebc0e56d6eddd826db90e9aa65c5d2a5"
+      }
+    },
+    "GPU hybrid: emissive sphere, sky and white furnace": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 280.36051729999963,
+      "finished_utc": "2026-11-26T08:14:41.573005+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-09\\command.json": "4f982bce3d681eeb7d0737e0336cd679b5825e277d4c580bd1c6fd52afa3ba9b",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-09\\junit.xml": "a234c88894e0ec987b98e237abd93ec8f4316956b06a0e1c2f9a0455758e799a",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-09\\stdout.log": "d94dd662fb970d45abedcbfe731db74451e3918f4f4a2fa3989646d7a0e264e4"
+      }
+    },
+    "GPU hybrid: irradiance probes": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 199.33522090000042,
+      "finished_utc": "2026-11-26T08:18:00.925822+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-10\\command.json": "ecef918f9b88871397b43ac5ad7e7561cbf909adcce3113f9ec960851c894172",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-10\\junit.xml": "627ccaa0d7f1c1e94ae1259478408a2a359dae54224f40144a731b9a25c42ccd",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-10\\stdout.log": "cd3fa6f5e0bfe17bf062bbf4bba7089f6b0b64e524783c65767d75a89c2efacb"
+      }
+    },
+    "GPU hybrid: light candidates (resampled lights) converge to the same image": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 326.8709338999997,
+      "finished_utc": "2026-11-26T08:23:27.816776+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-11\\command.json": "95e793c5c8f2794eb8f1c0ab69b2313120873472c722d7d465478e9b79969a91",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-11\\junit.xml": "efeb8d8dd9ca077d272a541b6de87d608905fa544ca35a180e29d7e1c4929f71",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-11\\stdout.log": "97377fe723584a78aa2488108270acd06cddb59d7c53b2c3894e50b2685ba3a3"
+      }
+    },
+    "GPU hybrid: more samples per frame make the history smoother while moving": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 187.9276275000011,
+      "finished_utc": "2026-11-26T08:26:35.766204+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-12\\command.json": "1015bbfd91f48b88834896e7d8c9eb312d6b82fb7f3910777962f16fe8625f99",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-12\\junit.xml": "af39ae95088778923af5a5f4c8ddc22cf7a6e6f7563a09e10eaa37aa70708f06",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-12\\stdout.log": "c1c9513e8165d2f42c9a5958f7aed0605c2bc6755e9974a113e8ba11bca624c5"
+      }
+    },
+    "GPU hybrid: moving shadows leave no trail": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 115.72203279999849,
+      "finished_utc": "2026-11-26T08:28:31.523693+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-13\\command.json": "eaed397c250f8e319bb749e30021ddf770cc49caccd07ce89644d7d6a5fa468d",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-13\\junit.xml": "3dd30a590053c835312d0fa9c0f38d91fb191a3f1c265b8dc2bbb02d08412643",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-13\\stdout.log": "cf808095cb603f03b6cbe459cf339d2667d3c67f55dfe29f8ea503e2ebc91e8a"
+      }
+    },
+    "GPU hybrid: rasterized visibility matches the path tracer": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 115.31945819999964,
+      "finished_utc": "2026-11-26T08:30:26.903068+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-14\\command.json": "28371337bcde1b3a35bf8ccce99454fa187432699abfc8b7fef18617f3c75cdc",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-14\\junit.xml": "888149631d6d5280acdb57c792c7240e282075a303a6aaf305e7367e333969bf",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-14\\stdout.log": "d1117b6962a0c7c22302f06bb2b39599bde8bc84a962502be15bff39d3eec9cd"
+      }
+    },
+    "GPU hybrid: reflected light that keeps changing does not lag": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 115.14405840000109,
+      "finished_utc": "2026-11-26T08:32:22.082693+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-15\\command.json": "2442ab0feb77036487355fbbf8f54481a8fe8d27b2a19ef0214c69e63ac4473b",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-15\\junit.xml": "ee9e349aab58ac55aaf43669ec9971eddd54aeb0d29b5ccb689cf9f9feaace32",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-15\\stdout.log": "33bdbe8ca1761e54db093a8c9cf60e5b73e662941556c14ce8eabdc0abcf52e8"
+      }
+    },
+    "GPU hybrid: reflected light that moves leaves no trail": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 115.92242110000007,
+      "finished_utc": "2026-11-26T08:34:18.057636+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-16\\command.json": "905f2e79a3d2be0470630416ba35b1b1b6b5074f24919bc9e4aa7486c2dbdf72",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-16\\junit.xml": "f6c782ead809ef64c823500c33b16e2233e171d5f021c65dcd3a9bc52adb2130",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-16\\stdout.log": "75958190ab8035a2820d366a6b012685dde14c42833a4bc4195ea97143e12cc9"
+      }
+    },
+    "GPU hybrid: reflections leave no trail while moving": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 57.99091530000078,
+      "finished_utc": "2026-11-26T08:35:16.102404+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-17\\command.json": "a6abb7cd78eb516e7d7fa1f6f0e74f42466039a80cd2660e955129e26d93ac41",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-17\\junit.xml": "ece4cdd49ee6ffd29b236e13997bfc68da3fde7dd17f94727273ce95e511e66b",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-17\\stdout.log": "2211088535363c6f73d66a3b5d9301622be87f5a55fa053bf57ab128f4226750"
+      }
+    },
+    "GPU hybrid: reflections that are rarely bright keep their light while moving": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 58.180303600000116,
+      "finished_utc": "2026-11-26T08:36:14.334349+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-18\\command.json": "b666824305616c12b9cc0317e789f6e5fae717bd121681c08f3c6d91276444bb",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-18\\junit.xml": "3ff1d56e96bf42920a9dc3d4ea070600afea7cbfc6d8c4473c6ba8781dcc137a",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-18\\stdout.log": "5f24d26630ee150639e3f219c0cc7e7632a6f01a00e3546cf8bf6c3cecf85574"
+      }
+    },
+    "GPU hybrid: samples are reused while moving and filtered": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 303.02789589999884,
+      "finished_utc": "2026-11-26T08:41:17.406679+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-19\\command.json": "c03533eb17c609e6ce45312442134d58012b8c9ba4d2f7d726cfea291c9c357a",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-19\\junit.xml": "b2cf8b32575dbb0d1a2d98a036718ddad030d541470fba5dc90450ab7f8a2ca0",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-19\\stdout.log": "f64793e072eafd09a71c94ce93595ba8b66a911df14b3d541a8e5d46e3a27d00"
+      }
+    },
+    "GPU hybrid: shadow maps of a big light low over a planet, as traced": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 58.78015560000131,
+      "finished_utc": "2026-11-26T08:42:16.229126+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-20\\command.json": "55161d9574dcb6bff335885e034d874cb54dd06057361f3774a8ec2f01453045",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-20\\junit.xml": "8ee29bfe05b5fe0b05425854014851e5301aac9ebf74fad52e6726a78c36d36d",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-20\\stdout.log": "0859e7ce248d267030ecc5485d12477033080c50789f5b9bdf54924f430c8aaa"
+      }
+    },
+    "GPU hybrid: shadow-mapped direct light follows a moving light at once": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 382.4180476999991,
+      "finished_utc": "2026-11-26T08:48:38.683953+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-21\\command.json": "4cb4b85aca9da18e06af31b63ed6043825032cc118d25fcf19bf0e3b00bcff38",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-21\\junit.xml": "3c906bdd810f4c37ee9de77c495a5e80b1143db3935a2b371c58259b0c934276",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-21\\stdout.log": "4da520992d4394a3f33e89639684964769d750669f8bb25b65d3371aaf378005"
+      }
+    },
+    "GPU hybrid: shadow-mapped direct light has no noise": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 188.11290890000055,
+      "finished_utc": "2026-11-26T08:51:46.817896+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-22\\command.json": "d797c6d3b639b304b5ae3cc433f652b3d7c4fe39a5bdc284d79a30a338f76d75",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-22\\junit.xml": "92a8322812cc9cfd2ab4cb8345d4ee7d1eb1ab5970be39f76e66e0750d83090a",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-22\\stdout.log": "f547dd136648b8ce582f3100166dec630827e3bee92ae7565b6ad487c83f7cc4"
+      }
+    },
+    "GPU hybrid: the edges of what a pane reflects keep their history while moving": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 141.18474640000022,
+      "finished_utc": "2026-11-26T08:54:08.030407+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-23\\command.json": "3d23d2fd697ea5416665e1b91d71cfd309419de286b5ef0b712793aff5e37cbb",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-23\\junit.xml": "a137caaea4d4ae2f9a280199f530baad4347f61e448c464902735bcac536d0f4",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-23\\stdout.log": "db3df83c05c47d7f4272d21f8d6f137fcc463017971f8d1bbef28a2323eb80b8"
+      }
+    },
+    "GPU hybrid: the light of a sphere light follows it at once": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 115.72933919999923,
+      "finished_utc": "2026-11-26T08:56:03.815544+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-24\\command.json": "0d2e1e5e2a1a976215101b41cf436f25dd8082338cd8b9cd0189d7ffdf596a4a",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-24\\junit.xml": "0273d7e5e7e13a35115737556f0ab27a19522fdf1591444ec9be8b96a7818360",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-24\\stdout.log": "bed772803f3135b83ec067c468895c1d8e79164b4c307dc874b1af830318d005"
+      }
+    },
+    "GPU hybrid: the radiance cache's light": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 106.30657009999959,
+      "finished_utc": "2026-11-26T08:57:50.142411+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-25\\command.json": "e77d379ee098046e7e04fa3da7c77d0f9b772a70a2c575e758db217b952363a8",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-25\\junit.xml": "ae6d8fe9eca2abfdb7937f9fc714e75ba2e632e6cf4b1d4ed92ae22ee02838eb",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-25\\stdout.log": "27db94232b330d054027a5763b4250d0069756ab101b7a45ed11046b1ae0a11f"
+      }
+    },
+    "GPU hybrid: what moves with the camera keeps its history": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 58.16707000000133,
+      "finished_utc": "2026-11-26T08:58:48.329615+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-26\\command.json": "3f323be3cd97e7c2f52bfd2bfd33f9df4034d445516d6793ec07f6a2dd8937d8",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-26\\junit.xml": "dad3b957b0de7312d3c79999e931e152c9e80e57f04ddd46e28657a4aa30295f",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-26\\stdout.log": "8225f1be17d1364bec34e7580f7f612c033e5c3ee4faee3724b735270da46991"
+      }
+    },
+    "GPU hybrid: what restarts the accumulation": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 58.16859449999902,
+      "finished_utc": "2026-11-26T08:59:46.518448+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-27\\command.json": "499a59fd9e43c9d6025fa13938217673c66a0a7e0a02322a56b7ab3ea5f204be",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-27\\junit.xml": "00df3146892900c33f71ba1b56cab362b501cfc237bd585299355025bd114860",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-27\\stdout.log": "31d0435480ecb2c3401743f49e856a12bacef5724d145b6ca96993a7291e2482"
+      }
+    },
+    "GPU raster: runs without ray queries": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 4.223693199999616,
+      "finished_utc": "2026-11-26T08:59:50.785462+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-28\\command.json": "b534e3e85b740deea5f087dd96ed16d9ec47dcf40f67aa6f6ba34e399adf6480",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-28\\junit.xml": "96749feec85d12e817346ab03aa18f2e1f6a59ee87f58800be89aae5264425c0",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-28\\stdout.log": "80a14eb1be934c23031006c5b0425f8175641667f1d7fce377e5e0c2415164c8"
+      }
+    },
+    "GPU raster: see-through panes and the light itself cast no shadow": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 2.2201220000006288,
+      "finished_utc": "2026-11-26T08:59:53.071561+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-29\\command.json": "5c228df2d855b518e631a4298ae145dee05e9cbd32797a9a21dbbf00e4c0b66e",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-29\\junit.xml": "736bd574523d5dbf91f6af9432eacc85d4a01ad292840146ee55db88792520e9",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-29\\stdout.log": "1b638ae281058c85dfd3fad33d936e440c703ea6631cb1fd7a441eddf3497268"
+      }
+    },
+    "GPU raster: shadow maps shade like the path tracer's shadow rays": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 25.277723199998945,
+      "finished_utc": "2026-11-26T09:00:18.396993+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-30\\command.json": "ba132efff824693d083c1f6a16bde21dc3431942a5ab6b7a19a2d4682875a9c7",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-30\\junit.xml": "3db97365ba8dad34d3556c4c0a44eb1ade48b83470b620aa782bf8aea6a18b66",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-30\\stdout.log": "0501e3a59a286febed73943d26cb6cb9f4d3f0a2b253a5c633e0ea5d865cb4a5"
+      }
+    },
+    "GPU raster: the CPU preview where nothing casts a shadow": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 2.221397999999681,
+      "finished_utc": "2026-11-26T09:00:20.670060+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-31\\command.json": "1547cb87ea89de22dde9d9df01dce3ebd0779b93ae2f3d4580de78623cea75d5",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-31\\junit.xml": "24bfe3e63b05ff692737843e2a3a7baf2d770146b1d875f855c8eaad83131fbe",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-31\\stdout.log": "7814627bbeb44ac0c1df0d5cb178dea85818fe76cf11d35965456583ceda9ab6"
+      }
+    },
+    "GPU raster: what restarts the accumulation": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 49.74308419999943,
+      "finished_utc": "2026-11-26T09:01:10.465788+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-32\\command.json": "10e771ab4b820581446b3658d328e9d740bec708ffd908f7b2d28d7c73ea6a5b",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-32\\junit.xml": "c908647e1334bb8161ce4444a86f96977dda8cff3e06645ecc81c6a7a3e5b457",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-32\\stdout.log": "aabe4b040fc9809094c9080847f4dd1dabb8bd6414c080a1de45e43385fd5179"
+      }
+    },
+    "GPU timing: capture retains submission numbers across slot drains": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 11.659310900000492,
+      "finished_utc": "2026-11-26T09:01:22.196497+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-33\\command.json": "c4dab3d1037093c29244f2ebade920cfe6d8a5047a69a98d31e003f3939a2911",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-33\\junit.xml": "a6bcd21a99f185313df472b1524f199ad2d5e39d92afae099c331b5c27e4f9a8",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-33\\stdout.log": "1aac30176a4e9f44a6e4ce760a77825f3ab4fccac24794acc39bc0bb06d3ee78"
+      }
+    },
+    "GPU upscaling: falls back where the upscaler cannot run": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 7.850424999998722,
+      "finished_utc": "2026-11-26T09:01:30.076779+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-34\\command.json": "26dbf38b3da450f99bf9a2d0ebce7835b9b58e338c5590e8ff0805a55f012577",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-34\\junit.xml": "a8361603b0bc84ba046079131abb0e0ea3bdfc1ba7327ac679c8c77dabe93d9a",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-34\\stdout.log": "ed8baf096be40c97dc437f416ebd2eb64dd128c5c03875bd8e11dccaddfab05e"
+      }
+    },
+    "GPU upscaling: fewer pixels rendered, the output's reconstructed": {
+      "status": "failed",
+      "exit_code": 42,
+      "junit_cases": 1,
+      "failure_elements": 1,
+      "skip_elements": 0,
+      "seconds": 11.44372949999888,
+      "finished_utc": "2026-11-26T09:01:41.579642+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-35\\command.json": "68282314b1024ef786a116d89740930da154720b68431f7725e22b6cc2a18edf",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-35\\junit.xml": "544f702f31fa10e4a2dfd27bcfa5190e9894e0dc2d003ac3c3b82cb992c6614a",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-35\\stdout.log": "3e4222326d5fb61b177c634a340bb396c95dd9e66eb49e4aaf6d2b1fa7e3614e"
+      }
+    },
+    "GPU upscaling: particles hide behind the rendered surfaces": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 2.236946099999841,
+      "finished_utc": "2026-11-26T09:01:43.850368+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-36\\command.json": "7071859bfffc54c620ccd54eb1dcd98e36697d710b61016833c846bba6d411d5",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-36\\junit.xml": "0fb6367dfe8bbb9bf07b81b4294f29d23095c76fac37bd585b6b7d0e6a9d5305",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-36\\stdout.log": "33a46858be7efba39df179b974329b49ddbd0c9bb73266ed556c87893b08ae2f"
+      }
+    },
+    "GPU upscaling: the hybrid pipeline's image": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 199.13823609999963,
+      "finished_utc": "2026-11-26T09:05:03.022753+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-37\\command.json": "0b30f9c546d5b9b56d4d1def09ee1bdc0f2f2a6ee9e4cc9eb26bdab139fe8395",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-37\\junit.xml": "1d6d21d68a1346b72d06413edd99e4d3f9a2978d095bba12fb1e2dade22b0698",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-37\\stdout.log": "32ebaa33f244b360a32cf7793db9cfe6ca9786a0f6e58c7c0a88bd3b99783e40"
+      }
+    },
+    "GPU upscaling: what moves leaves no trail": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 11.043797000000268,
+      "finished_utc": "2026-11-26T09:05:14.117228+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-38\\command.json": "e092ee0f098e538d26a2f583c7ea3e7783b84dae2fc189fc4b61f8c89d6de6c3",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-38\\junit.xml": "2ef2932d4ed4ab37305c54fece11d549c6bccb70720d9b1ed437e1544bca162e",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-38\\stdout.log": "42d5b9224e002c09a5aee4e708ac5ecc198cec77170a5e5a18f972096e2cf1cc"
+      }
+    },
+    "GPU: a space sky, as the CPU sees it": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 3,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 24.74112889999924,
+      "finished_utc": "2026-11-26T09:05:38.876994+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-39\\command.json": "a9eaec0ee83868e541a059b0c644fc43e4bac085efb704ab07fd6c2eecfe9c77",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-39\\junit.xml": "ea0b19512d3721b288d796719c4f004f60d7075d0c754cb649028fd2f55fd465",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-39\\stdout.log": "96910593227c6da8eece9b1fd94ea095f74ed671671f8ba51a40a6db5d25396f"
+      }
+    },
+    "GPU: a sun's flares, and what puts them out": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 4,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 22.270513100000244,
+      "finished_utc": "2026-11-26T09:06:01.168131+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-40\\command.json": "d33d7ad5cd0af57fa4ae39bb1bd2efdefa94d0742b5e699787fa33e4df1a884d",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-40\\junit.xml": "c788b818536e4c93e9003ad102b63aee9fcc72ff97bae5dc6205bc833ec20a16",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-40\\stdout.log": "998d310f34ff068bebbc13bc266fc24f9bd9b90dec9fd7ab077ddeec4f088b61"
+      }
+    },
+    "GPU: accumulation restarts and scenes update": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 11.647812299999714,
+      "finished_utc": "2026-11-26T09:06:12.836105+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-41\\command.json": "7ef6bcac7b5f63c39bde5900e5c5343cc942e6292c6e371d82302b6a8bebccf9",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-41\\junit.xml": "6db525110ecaebc0468abe6db49e654c13d34dcef426270e4b9ca0b0373cbdb1",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-41\\stdout.log": "f2eb6157ce6f1f8b6016bbeeb8ccacb3a09a7775d580c2216cf9cebe094ccc3d"
+      }
+    },
+    "GPU: auto exposure meters as the CPU": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 3.8239900000007765,
+      "finished_utc": "2026-11-26T09:06:16.711632+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-42\\command.json": "6534c4ab3544da8c1fab8257b90d32517b2e71082fbe636a9cb20681f22a0da8",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-42\\junit.xml": "434248c4004c61d59ee8dca82d7de021efd4be27c0c7f724165b122082cba134",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-42\\stdout.log": "39dbdfe18b083bf5d3d7c8621cb6656e2032e228fd3c9312bb9026e72bb66cb7"
+      }
+    },
+    "GPU: chromatic aberration and film grain": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 7.832627400001002,
+      "finished_utc": "2026-11-26T09:06:24.578770+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-43\\command.json": "8c3b39192cc01bc3e3158e34a85f505481e11b7ace775b82db84911cf5fce295",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-43\\junit.xml": "31137a644f99424b055c412c3450f2dde0be2a6ce461fdcd4e06a5985ace9341",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-43\\stdout.log": "b8eb42e074df819e95b7c6a77cdedfacf5f9c0d3d27b901371dd487c7ab36b2d"
+      }
+    },
+    "GPU: emissive sphere on a sky": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 11.846398300000146,
+      "finished_utc": "2026-11-26T09:06:36.456077+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-44\\command.json": "8de1ea455de7f3c47b14870a984e07bf76dafefbf7c0855992b0a6b1360fcf55",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-44\\junit.xml": "4c737750519d01a01455836dbd6bf12bef302a05c72fad96503a754e47ec16f3",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-44\\stdout.log": "3bfc0d089772bf52c725be8bbd27f63a1f8b2ca1fd26462144cb672072b1250f"
+      }
+    },
+    "GPU: light shafts, in the shadows of what is in the sun's way": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 141.16286480000053,
+      "finished_utc": "2026-11-26T09:08:57.695834+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-45\\command.json": "2be7fb019f4f9aca86b9b63fc533ec0aba211e8f6e6f181d13937ad362a93bd2",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-45\\junit.xml": "d206710c72b287a6aa049d9564997d4271a478ebf76a85f74afb767d9b4f62b5",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-45\\stdout.log": "cf9bb356896e21dfcee0875afedec7511cd5b54cf236dc881f7d03e7a8980e18"
+      }
+    },
+    "GPU: path tracing converges to the CPU image": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 5,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 44.735767600001054,
+      "finished_utc": "2026-11-26T09:09:42.500891+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-46\\command.json": "7edbd8379696ef3165575da328102ec3faf98aea56e163e87d0149e803585e6a",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-46\\junit.xml": "a774acc3e71939ab027728f41297bc45221064356904cccc10359a1972dab262",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-46\\stdout.log": "e59169b0c8124e19fdba2b9d2adacbdb2262a80fa1ee1e72da0f235ab3f13c0c"
+      }
+    },
+    "GPU: planets, as the CPU sees them": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 3,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 14.52043010000125,
+      "finished_utc": "2026-11-26T09:09:57.053509+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-47\\command.json": "e20d216c569eebf15abedf0f0c25e8130a33a3a7ba88d5bbe9fd3a017344c41a",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-47\\junit.xml": "a89cc884988617094a5760395619a53270a37e68570e6e74f4b754f6e2754e0e",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-47\\stdout.log": "079abb54d5e7da1f428ae2f5577dc7984ba46a3f16420f6a47981ee2cc974447"
+      }
+    },
+    "GPU: primary visibility matches the CPU": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 22.692691599999307,
+      "finished_utc": "2026-11-26T09:10:19.798316+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-48\\command.json": "97708ab232564b4c437a5abf54f2d54eb15837dd33ce6225935cb81267800b97",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-48\\junit.xml": "ae633a9951b6f7a7ffda78dbe914782c06d38c064dfcbfddc0a8b8bd5729fe71",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-48\\stdout.log": "69d4d09f2328fa87e69f213e4872c690221ae859c67d5d497bb4676b54db3715"
+      }
+    },
+    "GPU: scene updates upload only what changed": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 11.459725599999729,
+      "finished_utc": "2026-11-26T09:10:31.282638+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-49\\command.json": "6a401c9d516124a24044b12874364842bd1e4785680332461de8133a87a88fbd",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-49\\junit.xml": "fc0f2d346c0bd0c7e60c1a008fcf7feca7fcf6c0070d3292acf4ee58cce5dd7d",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-49\\stdout.log": "224b132faf3a44336850298c94e8ab3f02e03401ce3ab1049c86ccddaf50d186"
+      }
+    },
+    "GPU: white furnace": {
+      "status": "passed",
+      "exit_code": 0,
+      "junit_cases": 1,
+      "failure_elements": 0,
+      "skip_elements": 0,
+      "seconds": 11.656062900001416,
+      "finished_utc": "2026-11-26T09:10:42.965077+00:00",
+      "files": {
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-50\\command.json": "5e973d8d45a2c77ffd357a52039700297c49df6e58b0b75976d1f9778d3ea2c4",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-50\\junit.xml": "a5111d77e55db538c868b70d6f980f33cf75dd8140bf43491a5794c52b18b351",
+        "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\gpu-regression\\case-50\\stdout.log": "3b53b5c705bfabefcf00833f2f26aed58784d49889d9afc403b023418ae06b51"
+      }
+    }
+  },
+  "cpu": {
+    "status": "passed",
+    "exit_code": 0,
+    "junit_cases": 109,
+    "failure_elements": 0,
+    "skip_elements": 0
+  },
+  "state": "complete",
+  "complete": true,
+  "updated_utc": "2026-11-26T09:10:43.001836+00:00",
+  "runner_sha256": "dca1d8a7a48955e799c87c6a4fb74a6a3926d3f36e7d50d597ca5d9f2db2ff57",
+  "active_test": null,
+  "active_case": 50,
+  "active_pid": null,
+  "counts": {
+    "passed": 49,
+    "failed": 1,
+    "skipped": 0
+  },
+  "all_passed": false
+}

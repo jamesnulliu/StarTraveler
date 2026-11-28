@@ -1,0 +1,32 @@
+{
+  "note": "Selected supervising-agent observations; helper itself does not query account quota.",
+  "observations": [
+    {
+      "time": "2026-11-28T00:37:05.106Z",
+      "primary": 33,
+      "weekly": 74,
+      "stop": false
+    },
+    {
+      "time": "2026-11-28T00:37:46.469Z",
+      "primary": 34,
+      "weekly": 74
+    },
+    {
+      "time": "2026-11-28T00:39:25.094Z",
+      "primary": 36,
+      "weekly": 75
+    },
+    {
+      "time": "2026-11-28T00:40:13.445Z",
+      "primary": 36,
+      "weekly": 75
+    },
+    {
+      "time": "2026-11-28T00:43:30.623Z",
+      "primary": 40,
+      "weekly": 75,
+      "source": "latest get_usage_limits"
+    }
+  ]
+}

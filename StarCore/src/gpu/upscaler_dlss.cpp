@@ -19,6 +19,7 @@
 // clang-format on
 
 #include "starcore/common/log.hpp"
+#include "starcore/gpu/gpu_renderer.hpp"
 #include "starcore/vulkan/context.hpp"
 
 namespace starcore::gpu
@@ -251,6 +252,24 @@ class DlssUpscaler final : public NgxUpscaler
 public:
     using NgxUpscaler::NgxUpscaler;
 
+    auto setDlssExposure(float exposure) -> bool override
+    {
+        if (exposure == m_exposure) {
+            return false;
+        }
+        m_exposure = exposure;
+        return true;
+    }
+
+    auto setDlssPreset(DlssPreset preset) -> bool override
+    {
+        if (preset == m_preset) {
+            return false;
+        }
+        m_preset = preset;
+        return true;
+    }
+
 protected:
     auto create(VkCommandBuffer commandBuffer, UVec2 renderSize, UVec2 outputSize)
         -> NVSDK_NGX_Result override
@@ -261,7 +280,34 @@ protected:
         create.Feature.InTargetWidth = outputSize.x;
         create.Feature.InTargetHeight = outputSize.y;
         create.Feature.InPerfQualityValue = perfQuality(renderSize, outputSize);
-        create.InFeatureCreateFlags = kCreateFlags | NVSDK_NGX_DLSS_Feature_Flags_AutoExposure;
+        create.InFeatureCreateFlags = kCreateFlags |
+            (m_exposure > 0.0F ? 0 : NVSDK_NGX_DLSS_Feature_Flags_AutoExposure);
+        // resize() released the old feature after waiting for its queued frames.
+        m_exposureImage = {};
+        if (m_exposure > 0.0F) {
+            m_exposureImage = vulkan::Image(*m_context, 1, 1, VK_FORMAT_R32_SFLOAT,
+                                            VK_IMAGE_USAGE_SAMPLED_BIT |
+                                                VK_IMAGE_USAGE_TRANSFER_DST_BIT);
+            vulkan::transitionImage(commandBuffer, m_exposureImage.handle(),
+                                    VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL,
+                                    VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0,
+                                    VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+            const VkClearColorValue value{{m_exposure, 0.0F, 0.0F, 0.0F}};
+            const VkImageSubresourceRange range{VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+            vkCmdClearColorImage(commandBuffer, m_exposureImage.handle(), VK_IMAGE_LAYOUT_GENERAL,
+                                  &value, 1, &range);
+        }
+        const auto preset = m_preset == DlssPreset::K ? NVSDK_NGX_DLSS_Hint_Render_Preset_K
+                            : m_preset == DlssPreset::M ? NVSDK_NGX_DLSS_Hint_Render_Preset_M
+                                                       : NVSDK_NGX_DLSS_Hint_Render_Preset_Default;
+        for (const char* key : {NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_DLAA,
+                               NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Quality,
+                               NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Balanced,
+                               NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_Performance,
+                               NVSDK_NGX_Parameter_DLSS_Hint_Render_Preset_UltraPerformance}) {
+            NVSDK_NGX_Parameter_SetUI(m_parameters, key, static_cast<unsigned int>(preset));
+        }
+        SC_CORE_INFO("DLSS: requested model {}", enumToString(m_preset));
         return NGX_VULKAN_CREATE_DLSS_EXT1(m_context->device(), commandBuffer, 1, 1, &m_feature,
                                            m_parameters, &create);
     }
@@ -274,6 +320,11 @@ protected:
         NVSDK_NGX_Resource_VK motion = imageResource(*frame.motion, false);
         NVSDK_NGX_Resource_VK output = imageResource(*frame.output, true);
         NVSDK_NGX_VK_DLSS_Eval_Params evaluate{};
+        NVSDK_NGX_Resource_VK exposure{};
+        if (m_exposureImage.isValid()) {
+            exposure = imageResource(m_exposureImage, false);
+            evaluate.pInExposureTexture = &exposure;
+        }
         evaluate.Feature.pInColor = &color;
         evaluate.Feature.pInOutput = &output;
         evaluate.pInDepth = &depth;
@@ -288,6 +339,11 @@ protected:
         evaluate.InFrameTimeDeltaInMsec = frame.frameMs;
         return NGX_VULKAN_EVALUATE_DLSS_EXT(commandBuffer, m_feature, m_parameters, &evaluate);
     }
+
+private:
+    DlssPreset m_preset = DlssPreset::Default;
+    float m_exposure = 0.0F;
+    vulkan::Image m_exposureImage;
 };
 
 /**

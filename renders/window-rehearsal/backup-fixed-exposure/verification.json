@@ -1,0 +1,86 @@
+{
+  "passed": true,
+  "manual_visual_review_required": true,
+  "video_sha256": "f2ebe0a44822038d8079648af3712ecae4ceac68de669499604f335bd1c14f6d",
+  "verifier_sha256": "6440dfa8106309911d767c594e496380e263e5b86b088fe2efa7d2ecd849e3c7",
+  "manifest_sha256": "c2a210496ea6c5a10822859e4858defea8c62222c70c938a2a44e89f6bbf707c",
+  "configuration_checks": {
+    "passed": true,
+    "sample_rows": 141,
+    "phases": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "rr_sr_exposure_field": "inactive in RR; RR retains unity input"
+  },
+  "duration_seconds": 139.87,
+  "decoded_frames": 4196,
+  "scene_mean_absolute_changes": {
+    "cockpit_to_mirror": 0.17200464010238647,
+    "cockpit_to_star": 0.0710223987698555
+  },
+  "chapters": [
+    {
+      "phase": 1,
+      "label": "Cockpit Full / DLSS K",
+      "start_s": 0.0,
+      "end_s": 19.966607399997883,
+      "sample_s": 9.983303699998942,
+      "sample_sha256": "2515bdcd1afef0bf67fb6c68b74e0b8d3ddc268daa7ca741219b2b041776e8aa"
+    },
+    {
+      "phase": 2,
+      "label": "Cockpit Half / DLSS K",
+      "start_s": 19.966607399997883,
+      "end_s": 39.97243290000188,
+      "sample_s": 29.96952014999988,
+      "sample_sha256": "6d13a2d3003d41e16af9f275e3db63c541500c7a7c142b23682a4a37e00fbeac"
+    },
+    {
+      "phase": 3,
+      "label": "Cockpit Full / RR",
+      "start_s": 39.97243290000188,
+      "end_s": 59.96204129999387,
+      "sample_s": 49.967237099997874,
+      "sample_sha256": "6906fe05f6969699a18cf45ceda7d0777c46a862fba899438b27effc4650fe7b"
+    },
+    {
+      "phase": 4,
+      "label": "Mirror-glass Full / DLSS K",
+      "start_s": 59.96204129999387,
+      "end_s": 79.98536530000274,
+      "sample_s": 69.9737032999983,
+      "sample_sha256": "7b0531bd6a3864848b105c958ba411b55b9effc2c830b090abb597a06ceb8c57"
+    },
+    {
+      "phase": 5,
+      "label": "Mirror-glass Full / RR",
+      "start_s": 79.98536530000274,
+      "end_s": 100.02100330000394,
+      "sample_s": 90.00318430000334,
+      "sample_sha256": "9df216485ef900b20816b7ed03f4b43bbdb53dc7bc0e7f5dcf2f08da05799818"
+    },
+    {
+      "phase": 6,
+      "label": "Star turn Full / DLSS K",
+      "start_s": 100.02100330000394,
+      "end_s": 120.00332190000336,
+      "sample_s": 110.01216260000365,
+      "sample_sha256": "24b2ce6e7843666a649292c2125130d36acb866ad3313449f4267f3b393428f6"
+    },
+    {
+      "phase": 7,
+      "label": "Star turn Full / RR",
+      "start_s": 120.00332190000336,
+      "end_s": 139.87,
+      "sample_s": 129.93666095000168,
+      "sample_sha256": "a0ad43a8df522217a3cd4ec8abb6a82d6b48f5055f99c9d55e5b5a6c2e774852"
+    }
+  ],
+  "contact_sheet_sha256": "ed811af65c598579782d1efc6f057deed25d373d21ff2b2551544fc492a64a3d"
+}

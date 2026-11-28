@@ -6,6 +6,7 @@
 #include <memory>
 #include <span>
 #include <string>
+#include <vector>
 
 #include <vulkan/vulkan.h>
 
@@ -257,12 +258,29 @@ struct EnumNames<UpscalerQuality>
     return 1.0F;
 }
 
+/** @brief Ordinary DLSS model hint; Default leaves selection to the installed SDK. */
+enum class DlssPreset : std::uint8_t
+{
+    Default,
+    K,
+    M,
+};
+
+template <>
+struct EnumNames<DlssPreset>
+{
+    static constexpr std::array kNames = {"Default", "K", "M"};
+};
+
 struct UpscalerSettings
 {
     // Where it cannot run (GpuRenderer::upscalerError; DLSS also refuses tiny
     // images), FSR, then TAAU.
     Upscaler upscaler = Upscaler::Off;
     UpscalerQuality quality = UpscalerQuality::Quality;
+    DlssPreset dlssPreset = DlssPreset::Default;  // SR only; RR retains its own model.
+    // SR with explicit K: 0 retains internal auto exposure; positive fixes its HDR exposure.
+    float dlssExposure = 0.0F;
     float sharpness = 0.0F;  // FSR's sharpening, 0 to 1 (the others: none).
 
     auto operator==(const UpscalerSettings&) const -> bool = default;
@@ -331,6 +349,9 @@ struct GpuRenderOptions
     HybridView view = HybridView::Final;
     EffectSettings effects;
     UpscalerSettings upscaling;  // Hybrid and Raster.
+    // Positive: fixed simulation step for temporal upscalers/post processing (milliseconds).
+    // Zero: wall clock, clamped to 1..100 ms, for interactive rendering.
+    float frameTimeMs = 0.0F;
 
     auto operator==(const GpuRenderOptions&) const -> bool = default;
 };
@@ -360,6 +381,27 @@ struct GpuRenderOptions
 class GpuRenderer
 {
 public:
+    struct FrameTiming
+    {
+        std::uint64_t frameNumber = 0;  // Zero-based submission number, not accumulation age.
+        float gpuMs = 0.0F;
+        float traceMs = 0.0F;
+    };
+
+    /** @brief Capture completed timestamp samples, opt-in; clears any earlier capture. */
+    void captureFrameTimings(bool enabled = true)
+    {
+        m_captureTimings = enabled;
+        m_captureStartFrame = m_frameNumber;
+        m_frameTimings.clear();
+    }
+    /** @brief Drain completed samples (completion/slot order); waitIdle first for all frames. */
+    [[nodiscard]] auto takeFrameTimings() -> std::vector<FrameTiming>
+    {
+        std::vector<FrameTiming> result;
+        result.swap(m_frameTimings);
+        return result;
+    }
     /** @return An error if the device has no push descriptors (all pipelines use them). */
     [[nodiscard]] static auto create(vulkan::Context& context)
         -> std::expected<std::unique_ptr<GpuRenderer>, std::string>;
@@ -431,6 +473,12 @@ public:
         return m_activeUpscaler;
     }
 
+    /** @brief Reset flag passed to the last frame's upscaler; false with none active. */
+    [[nodiscard]] auto upscalerHistoryReset() const noexcept -> bool
+    {
+        return m_upscalerHistoryReset;
+    }
+
     /** @brief Layout the output image stays in (storage writes and sampling). */
     static constexpr VkImageLayout kOutputLayout = VK_IMAGE_LAYOUT_GENERAL;
     /** @brief Tone-mapped RGBA8 result; recreated by resize(). */
@@ -444,6 +492,9 @@ public:
     {
         return m_frameIndex;
     }
+    /** @brief Time step actually supplied to the last frame's temporal/post passes. */
+    [[nodiscard]] auto frameTimeMs() const noexcept -> float { return m_frameTimeMs; }
+    [[nodiscard]] auto dlssExposure() const noexcept -> float { return m_activeDlssExposure; }
     /** @brief GPU time of the last completed frame in milliseconds (0 if unknown). */
     [[nodiscard]] auto gpuTimeMs() const noexcept -> float
     {
@@ -487,6 +538,7 @@ private:
         VkFence fence = VK_NULL_HANDLE;
         bool submitted = false;
         bool timed = false;
+        std::uint64_t frameNumber = 0;
         // Samples per pixel of a path-traced frame (0: preview or raster, not a cost sample).
         std::uint32_t tracedSamples = 0;
     };
@@ -519,6 +571,11 @@ private:
     VkQueryPool m_queryPool = VK_NULL_HANDLE;
     std::array<FrameSlot, gpu::kFramesInFlight> m_slots{};
     std::uint64_t m_frameNumber = 0;  // Submitted frames.
+    bool m_captureTimings = false;
+    std::uint64_t m_captureStartFrame = 0;
+    std::vector<FrameTiming> m_frameTimings;
+    bool m_hasCompletedTiming = false;
+    std::uint64_t m_latestTimedFrame = 0;
 
     // The pipelines' size (the output's unless upscaled):
     vulkan::Image m_accumulation;  // RGBA32F: rgb = sum of samples, a = count.
@@ -538,7 +595,10 @@ private:
     std::array<UVec2, kUpscalers> m_upscalerOutputSizes{};
     std::array<bool, kUpscalers> m_upscalerReady{};
     Upscaler m_activeUpscaler = Upscaler::Off;
+    float m_activeDlssExposure = 0.0F;
+    bool m_upscalerHistoryReset = false;
     double m_lastFrameTime = 0.0;  // Seconds (steady clock) of the last render().
+    float m_frameTimeMs = 0.0F;
 
     std::uint32_t m_frameIndex = 0;  // Accumulated frames since the last reset.
     float m_gpuTimeMs = 0.0F;

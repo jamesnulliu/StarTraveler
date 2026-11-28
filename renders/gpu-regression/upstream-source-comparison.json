@@ -1,0 +1,15 @@
+{
+  "StarCore/src/gpu/upscaler_dlss.cpp": {
+    "available": true,
+    "whole_file_equal": true
+  },
+  "StarCore/src/gpu/upscaler.cpp": {
+    "available": true,
+    "whole_file_equal": true
+  },
+  "StarCore/tests/gpu/test_gpu_renderer.cpp": {
+    "available": true,
+    "whole_file_equal": false,
+    "reconstruction_case_equal": true
+  }
+}

@@ -1,0 +1,8 @@
+frame,seed,spp,accumulated_frames,render_width,render_height,output_width,output_height,active_upscaler,upscaler_history_reset
+1,17,64,1,384,216,384,216,Off,0
+2,17,64,2,384,216,384,216,Off,0
+3,17,64,3,384,216,384,216,Off,0
+4,17,64,4,384,216,384,216,Off,0
+5,17,64,5,384,216,384,216,Off,0
+6,17,64,6,384,216,384,216,Off,0
+7,17,64,7,384,216,384,216,Off,0

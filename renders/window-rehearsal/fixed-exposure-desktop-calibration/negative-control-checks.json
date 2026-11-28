@@ -1,0 +1,25 @@
+{
+  "valid": {
+    "passed": true,
+    "sample_rows": 22,
+    "phases": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "rr_sr_exposure_field": "inactive in RR; RR retains unity input"
+  },
+  "rejected": [
+    "auto_exposure",
+    "dlss_exposure",
+    "temporal_ms",
+    "trace",
+    "active",
+    "seed",
+    "resolution"
+  ]
+}

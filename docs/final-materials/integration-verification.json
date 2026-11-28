@@ -1,0 +1,17 @@
+{
+  "passed": true,
+  "summary_rows": 12,
+  "report_result_rows": 6,
+  "report_numeric_cells": 24,
+  "native_chart_values": 12,
+  "slide_count": 12,
+  "script_seconds_planned": 720,
+  "embedded_image_matches_source": true,
+  "speaker_notes_verified": 12,
+  "local_links_checked": 38,
+  "thresholds_changed": false,
+  "source_summary_sha256": "0b0df5558a85bd8d000af756a5b76c18023d75495c46b07ab3b98b6430828388",
+  "presentation_sha256": "836f6a928451ed68079895ec0e22e8892e3a08044440d558e41265fe273b182d",
+  "visual_review": "All 12 previews and both standalone figure pairs reviewed",
+  "native_powerpoint_opened": false
+}

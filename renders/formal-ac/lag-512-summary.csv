@@ -1,0 +1,3 @@
+config,horizon,width,height,gpu,driver,frames_observed,tail_frames,drift_limit,tolerance,hold_frames,status,settle_frames,terminal_flip,tail_relative_drift,threshold
+asvgf-dlss-full,512,384,216,NVIDIA GeForce RTX 3070 Laptop GPU,610.91,512,64,0.03,0.1,16,settled_within_capture,101,0.07861005887389183,0.009468514117351627,0.08647106476128102
+rr-quality,512,384,216,NVIDIA GeForce RTX 3070 Laptop GPU,610.91,512,64,0.03,0.1,16,settled_within_capture,47,0.059960849583148956,0.004945942429796731,0.06595693454146385

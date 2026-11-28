@@ -1,0 +1,10 @@
+{
+  "source": "renders/production-lag-fixed-exposure/summary.csv",
+  "source_sha256": "0b0df5558a85bd8d000af756a5b76c18023d75495c46b07ab3b98b6430828388",
+  "rows": 12,
+  "reference_pooling": false,
+  "thresholds_changed": false,
+  "entry_error_bars": "three-seed observed min/max, not CI",
+  "terminal_error_bars": "not shown; scalar group medians only",
+  "capture_data_modified": false
+}

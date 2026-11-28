@@ -1,0 +1,29 @@
+[
+  {
+    "args": [
+      "--demo-preset",
+      "8"
+    ],
+    "exit": 105,
+    "rejected_before_gpu": true
+  },
+  {
+    "args": [
+      "--demo-preset",
+      "1",
+      "--cpu"
+    ],
+    "exit": 1,
+    "rejected_before_gpu": true
+  },
+  {
+    "args": [
+      "--demo-preset",
+      "4",
+      "--rehearsal-seconds",
+      "1"
+    ],
+    "exit": 1,
+    "rejected_before_gpu": true
+  }
+]

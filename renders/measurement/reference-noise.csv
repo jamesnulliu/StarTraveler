@@ -1,0 +1,5 @@
+shot,width,height,spp,reference_pair_flip,same_image_flip,ppd
+cockpit-anvil-turn,1280,720,8192,0.019571200013160706,0.0,67.0
+mirror-glass-pass,1280,720,8192,0.0018817299278452992,0.0,67.0
+fast-star-turn,1280,720,8192,0.019264834001660347,0.0,67.0
+cockpit-anvil-turn,384,216,8192,0.020544636994600296,0.0,67.0

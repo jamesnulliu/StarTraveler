@@ -1,0 +1,13 @@
+[17:19:48.985] [Client/info] StarTraveler (StarCore 0.1.0)
+[17:19:51.058] [Core/info] Vulkan device: NVIDIA GeForce RTX 3070 Laptop GPU (API 1.4.341, discrete, ray query: enabled)
+[17:19:51.524] [Client/info] Opened C:\Users\18612\Desktop\project\StarTraveler-feature-eval-denoiser\StarTraveler-feature-eval-denoiser\build\msvc-vs2022\bin\Release\assets\scenes\blue_star.yaml
+[17:19:51.524] [Client/info] Demo window: x=233 y=262 width=1280 height=720
+[17:19:53.331] [Core/info] Space sky 7: 4096x2048 map, 12582 stars drawn, in 1795 ms
+[17:19:57.102] [Core/info] DLSS-RR: available
+[17:19:57.105] [Core/warning] DLSS-RR: no feature for 27x12 -> 40x18: NGX error 0xbad00005
+[17:19:57.105] [Core/info] DLSS: available
+[17:19:57.105] [Core/info] DLSS: requested model K
+[17:19:57.120] [Core/warning] DLSS: no feature for 27x12 -> 40x18: NGX error 0xbad00005
+[17:19:57.121] [Core/info] FSR: C:/Users/18612/Desktop/project/StarTraveler-feature-eval-denoiser/StarTraveler-feature-eval-denoiser/build/msvc-vs2022/_deps/upscalers/fidelityfx-sdk-1.1.4/PrebuiltSignedDLL\amd_fidelityfx_vk.dll
+[17:19:58.274] [Client/info] Demo state: preset=6 matched=true pipeline=Hybrid active=DLSS-RR output=745x676 internal=497x451 tone_exposure=1 auto_exposure=false spp=1 overlay=true
+[17:20:00.162] [Client/info] Exiting after 300 frames (299 accumulated on the GPU, Hybrid pipeline, last 6.66 ms, 2.96 tracing, for 1 samples per pixel)

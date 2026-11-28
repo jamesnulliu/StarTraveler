@@ -1,0 +1,27 @@
+{
+  "passed": true,
+  "earlier_loaded_module_probe": "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\renders\\dlss-diagnosis\\module-baseline\\manifest.json",
+  "earlier_probe_utc": "2026-11-26T10:19:09.647403+00:00",
+  "identities_unchanged": [
+    {
+      "path": "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\build\\msvc-vs2022\\_deps\\upscalers\\dlss-sdk-310.9.1\\lib\\Windows_x86_64\\rel\\nvngx_dlss.dll",
+      "sha256_before": "3975567b8943c53acce397f2b72380092f84f162d00b0d2c7d08a1025c563983",
+      "sha256_after": "3975567b8943c53acce397f2b72380092f84f162d00b0d2c7d08a1025c563983",
+      "last_write_ns": 1795653502037127000
+    },
+    {
+      "path": "C:\\Users\\18612\\Desktop\\project\\StarTraveler-feature-eval-denoiser\\StarTraveler-feature-eval-denoiser\\build\\msvc-vs2022\\_deps\\upscalers\\dlss-sdk-310.9.1\\lib\\Windows_x86_64\\rel\\nvngx_dlssd.dll",
+      "sha256_before": "4bc7ea5fcb2f32cf86bc2cb072e8d2860914a0be511cbdcb2fc206c1d9d83b80",
+      "sha256_after": "4bc7ea5fcb2f32cf86bc2cb072e8d2860914a0be511cbdcb2fc206c1d9d83b80",
+      "last_write_ns": 1795653505413938900
+    },
+    {
+      "path": "C:\\WINDOWS\\System32\\DriverStore\\FileRepository\\nvhm.inf_amd64_fc65fff9472a8323\\_nvngx.dll",
+      "sha256_before": "93355d5c1ad4207e109da349a647d86735353106642990bcc4fadef309947490",
+      "sha256_after": "93355d5c1ad4207e109da349a647d86735353106642990bcc4fadef309947490",
+      "last_write_ns": 1791201900000000000
+    }
+  ],
+  "traced_during_formal_capture": false,
+  "scope": "Previously observed NGX SDK/driver module identities match the post-run files. Same compiled search directories, no executable-directory NGX override. This is a before/after provenance audit, not per-capture module tracing."
+}

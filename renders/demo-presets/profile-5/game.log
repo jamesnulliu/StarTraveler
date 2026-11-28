@@ -1,0 +1,7 @@
+[17:18:53.965] [Client/info] StarTraveler (StarCore 0.1.0)
+[17:18:54.839] [Core/info] Vulkan device: NVIDIA GeForce RTX 3070 Laptop GPU (API 1.4.341, discrete, ray query: enabled)
+[17:18:55.305] [Client/info] Opened C:\Users\18612\Desktop\project\StarTraveler-feature-eval-denoiser\StarTraveler-feature-eval-denoiser\build\msvc-vs2022\bin\Release\assets\scenes\blue_star.yaml
+[17:18:55.305] [Client/info] Demo window: x=201 y=230 width=1280 height=720
+[17:18:57.135] [Core/info] Space sky 7: 4096x2048 map, 12582 stars drawn, in 1817 ms
+[17:19:46.000] [Client/info] Demo state: preset=5 matched=true pipeline=Hybrid active=Off output=745x676 internal=745x676 tone_exposure=1 auto_exposure=false spp=1 overlay=true
+[17:19:47.840] [Client/info] Exiting after 300 frames (299 accumulated on the GPU, Hybrid pipeline, last 6.65 ms, 1.95 tracing, for 1 samples per pixel)

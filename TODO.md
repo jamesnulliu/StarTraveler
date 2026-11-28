@@ -71,23 +71,30 @@ First the build from a clean clone (it also sets up the owner's machine), then w
 the demo needs. The Render panel switches every rung live today and shows the GPU
 time; what is missing is switching them fast and showing which one is on.
 
-- [ ] Clean build: clone into a new folder on a machine that has not built
+- [x] Clean build: clone into a new folder on a machine that has not built
   StarTraveler; follow only `README.md` and `docs/building.md`; `msvc` preset;
   `ctest --preset msvc-release` passes. What the docs miss goes into
-  `docs/building.md`. MinGW is not checked: say so there.
-- [ ] Demo presets: keys 1-7 set the Render panel's options in one press, while
+  `docs/building.md`. MinGW is not checked: say so there. Checked from a fresh
+  tree at `C:\Users\Lrf81\src\StarTraveler` (VS 2026 Build Tools, Kitware CMake
+  4.4.5, a new vcpkg clone): 161 tests passed. The workspace path is not ASCII,
+  and MSBuild's shader step fails there; WinLibs' CMake cannot verify the
+  upscaler downloads. Both are in `docs/building.md`. MinGW was not checked.
+- [x] Demo presets: keys 1-7 set the Render panel's options in one press, while
   flying as well: 1 raster, no rays; 2 hybrid, Half, shadow maps; 3 hybrid, Half
-  (the default); 4 hybrid, Full; 5 hybrid, Half, irradiance probes; 6 DLSS-RR;
+  (the default); 4 hybrid, Full; 5 hybrid, Half, irradiance probes; 6 DLSS-RR
+  (traces every pixel; the upscaler from before key 6 comes back with the others);
   7 path tracing (the reference; it restarts whenever anything moves). The number
   keys are free (`game_layer.cpp` takes WASD, Space, Ctrl, Shift, C, T, Esc and
-  Ctrl+N/O/S/D).
-- [ ] An overlay in a corner of the view: the preset's name, the GPU time per frame
-  and the trace pass's (`gpuTimeMs()`, `traceTimeMs()`, shown in the Render panel
-  today); a key hides it.
-- [ ] `docs/playing.md`: the keys and the overlay.
+  Ctrl+N/O/S/D). Quality and effects are left as they are. A mix the keys do not
+  name shows as "Custom".
+- [x] An overlay in a corner of the view (bottom-left): the preset's name, the GPU
+  time per frame and the trace pass's (`gpuTimeMs()`, `traceTimeMs()`, shown in
+  the Render panel today); key 0 hides it.
+- [x] `docs/playing.md`: the keys and the overlay. The route is in `docs/demo.md`.
 - [ ] On the demo machine: each preset's frame rate at the demo's resolution, and a
   route through `blue_star.yaml` for the 10-15 minutes (the cockpit, the mirror,
-  the glass, the glowing rocks).
+  the glass, the glowing rocks). The route is written (`docs/demo.md`); the frame
+  rates are not measured yet.
 
 Done when: a clean clone builds and passes the tests, and the seven presets switch
 live with their name and time on screen.

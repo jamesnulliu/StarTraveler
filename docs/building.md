@@ -28,8 +28,28 @@ configure, which can wait a long time on vcpkg's lock.
 | `msvc-vs2022` | Visual Studio 2022, MSBuild |
 | `msvc-ninja` | MSVC with Ninja, inside a VS developer shell |
 | `msvc-python` | `msvc` plus the Python extension, built in-tree (see [Python](#python)) |
-| `mingw` | GCC from `scoop install mingw-winlibs` |
+| `mingw` | GCC from `scoop install mingw-winlibs`. Not checked (see below) |
 | `linux-gcc`, `linux-clang` | not tested yet |
+
+The clean build is the `msvc` preset: Visual Studio 2026, MSBuild (the Build Tools are enough;
+a full IDE is not required). Where that generator is not installed, `msvc-vs2022` is the same
+build with Visual Studio 2022 (`cmake --preset msvc-vs2022`, then
+`cmake --build --preset msvc-vs2022-release` and `ctest --preset msvc-vs2022-release`). The
+`mingw` preset is not checked.
+
+`VCPKG_ROOT` has to be set to a clone of [vcpkg](https://github.com/microsoft/vcpkg) (`git clone`,
+then `bootstrap-vcpkg.bat`). The first configure installs the C++ dependencies and downloads FSR
+and DLSS, so CMake has to verify those HTTPS certificates. Kitware's CMake does. The `cmake` that
+ships in the WinLibs MinGW package does not use the Windows certificate store: the downloads fail
+with `SSL peer certificate or SSH remote key was not OK`. A failed download no longer stops the
+configure (the upscaler is left out, as below), but key 6 of the demo then cannot be DLSS-RR. Use
+Kitware's CMake, or the one vcpkg fetches on that first run
+(`%VCPKG_ROOT%\downloads\tools\cmake-*\bin\cmake.exe`).
+
+Keep the clone on an ASCII path (`C:\src\StarTraveler`, not a folder whose name the system code
+page cannot encode). MSBuild compiles shaders by running glslang from a `cmd` batch file, and a
+path outside that code page breaks the step: glslang reports `unable to open input file` and
+MSBuild reports `The system cannot find the batch label specified - VCEnd`.
 
 Build and test presets append the configuration: `msvc-release`, `msvc-debug`,
 `msvc-relwithdebinfo`, `mingw-release`, and so on (`CMakePresets.json` has the full list).

@@ -36,6 +36,8 @@ on the view flies on).
 | Shift | boost | |
 | C | switch to the free camera | back to the cockpit |
 | T | open a portal in front (two portals link up) | |
+| 1-7 | switch a demo render preset (below) | |
+| 0 | hide or show the preset name and GPU time | |
 | Esc | pause menu | |
 | Ctrl+N/O/S, Ctrl+D, Del | new/open/save scene, duplicate, delete (while the mouse is free) | |
 
@@ -60,6 +62,32 @@ The viewport is rendered on the GPU in real time by the hybrid pipeline: rasteri
 paths from a quarter of the pixels per frame, samples reused across frames and denoised (how it
 works: [GPU rendering](gpu-rendering.md#hybrid-pipeline)). Samples per frame follow a GPU time
 budget, 8 ms by default; less for a higher frame rate.
+
+### Demo presets
+
+Keys 1-7 set one rung each, while flying as well (the view hovered or the mouse captured; not
+while a text field has focus, and not together with Ctrl or Alt). The same options can be set
+from the Render panel; a mix the keys do not name (the radiance cache, a debug view, probes at
+full resolution) shows as "Custom". The route and what each rung is for:
+[Demo](demo.md).
+
+| Key | Preset | What changes |
+|---|---|---|
+| 1 | Raster, no rays | ray tracing off: shadow maps, a constant ambient term, no rays |
+| 2 | Hybrid, half, shadow maps | hybrid, one pixel of each 2x2, direct light from shadow maps |
+| 3 | Hybrid, half | the default: hybrid, half resolution, traced shadows |
+| 4 | Hybrid, full | hybrid, every pixel, traced shadows |
+| 5 | Hybrid, half, probes | preset 3 plus irradiance probes (the cockpit's volume included) |
+| 6 | DLSS-RR | hybrid, DLSS Ray Reconstruction (traces every pixel; falls back to DLSS) |
+| 7 | Path tracing | the reference; restarts whenever anything moves |
+
+Upscaler quality, bloom and the other effects stay as they are. Keys 1-5 and 7 put back the
+upscaler that was on before key 6 (DLSS, unless the game was started with another). Key 6 is
+the one that switches to DLSS-RR.
+
+An overlay in the bottom-left of the view shows the preset's name, the GPU time of the last
+frame and the trace pass's (`gpuTimeMs`, `traceTimeMs`, the same numbers as the Render panel).
+Key 0 hides it and shows it again.
 
 The Render panel:
 

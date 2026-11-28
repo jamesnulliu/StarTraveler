@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <chrono>
 #include <format>
@@ -21,6 +22,7 @@
 #include <starcore/render/overlay.hpp>
 #include <starcore/scene/serializer.hpp>
 
+#include "demo_presets.hpp"
 #include "game_layer.hpp"
 
 import starcore.raster;
@@ -138,6 +140,9 @@ void GameLayer::onAttach()
     m_options.rayTracing = !m_gameOptions.raster;
     m_options.gpuRender.view = m_gameOptions.view;
     m_options.gpuRender.upscaling = m_gameOptions.upscaling;
+    m_demoUpscaler = m_gameOptions.upscaling.upscaler == Upscaler::DlssRr
+                         ? Upscaler::Dlss
+                         : m_gameOptions.upscaling.upscaler;
     resetCamera();
     if (!m_scenePath.empty()) {
         openScene(m_scenePath);
@@ -350,6 +355,34 @@ void GameLayer::handleShortcuts()
     if (!ctrl && input::isKeyPressed(ImGuiKey_C)) {
         setViewMode(m_viewMode == ViewMode::Pilot ? ViewMode::Free : ViewMode::Pilot);
     }
+    // Demo rungs, while flying as well (the mouse is captured, so the panels are not
+    // taking the keys). Ctrl is thrust-down while flying: a preset is the number alone.
+    // 0 hides the name and the GPU time.
+    if (io.KeyCtrl || io.KeyAlt) {
+        return;
+    }
+    if (input::isKeyPressed(ImGuiKey_0)) {
+        m_demoOverlay = !m_demoOverlay;
+    }
+    constexpr std::array<ImGuiKey, kDemoPresetCount> kPresetKeys = {
+        ImGuiKey_1, ImGuiKey_2, ImGuiKey_3, ImGuiKey_4, ImGuiKey_5, ImGuiKey_6, ImGuiKey_7,
+    };
+    for (int key = 1; key <= kDemoPresetCount; ++key) {
+        if (input::isKeyPressed(kPresetKeys[static_cast<std::size_t>(key - 1)])) {
+            applyDemoPresetKey(key);
+        }
+    }
+}
+
+void GameLayer::applyDemoPresetKey(int key)
+{
+    if (m_options.gpuRender.upscaling.upscaler != Upscaler::DlssRr) {
+        m_demoUpscaler = m_options.gpuRender.upscaling.upscaler;
+    }
+    if (!applyDemoPreset(m_options, key, m_demoUpscaler)) {
+        return;
+    }
+    m_status = std::format("Preset {}: {}", key, demoPresetName(key));
 }
 
 void GameLayer::updateCamera()
@@ -716,6 +749,7 @@ void GameLayer::drawHud(Vec2 origin)
                         {corner.x + textSize.x + 6, corner.y + textSize.y + 4},
                         IM_COL32(0, 0, 0, 120), 4.0F);
     draw->AddText(corner, white, text.c_str());
+    drawDemoOverlay(origin);
 
     if (m_collisionFlash > 0.0F) {
         const auto alpha = static_cast<int>(255.0F * std::min(1.0F, m_collisionFlash / 0.4F));
@@ -726,6 +760,33 @@ void GameLayer::drawHud(Vec2 origin)
         draw->AddText({center.x - warningSize.x * 0.5F, center.y + 30.0F},
                       IM_COL32(255, 80, 60, alpha), warning);
     }
+}
+
+void GameLayer::drawDemoOverlay(Vec2 origin)
+{
+    if (!m_demoOverlay) {
+        return;
+    }
+    const std::optional<int> preset = matchDemoPreset(m_options);
+    const std::string title = preset ? std::format("{}  {}", *preset, demoPresetName(*preset))
+                                     : std::string("Custom");
+    const std::string times =
+        usingGpu() ? std::format("GPU {:.2f} ms    trace {:.2f} ms", m_gpuRenderer->gpuTimeMs(),
+                                 m_gpuRenderer->traceTimeMs())
+                   : std::string("GPU unavailable");
+    const ImVec2 titleSize = ImGui::CalcTextSize(title.c_str());
+    const ImVec2 timeSize = ImGui::CalcTextSize(times.c_str());
+    const float width = std::max(titleSize.x, timeSize.x);
+    const float height = titleSize.y + 2.0F + timeSize.y;
+    const ImVec2 corner(origin.x + 10.0F,
+                        origin.y + static_cast<float>(m_viewport.size.y) - 10.0F - height);
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled({corner.x - 6.0F, corner.y - 4.0F},
+                        {corner.x + width + 6.0F, corner.y + height + 4.0F},
+                        IM_COL32(0, 0, 0, 140), 4.0F);
+    const ImU32 white = IM_COL32(230, 240, 255, 220);
+    draw->AddText(corner, white, title.c_str());
+    draw->AddText({corner.x, corner.y + titleSize.y + 2.0F}, white, times.c_str());
 }
 
 void GameLayer::drawPauseMenu(Vec2 origin, std::uint32_t platformViewport)
@@ -770,7 +831,8 @@ void GameLayer::drawPauseMenu(Vec2 origin, std::uint32_t platformViewport)
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + width);
         ImGui::TextDisabled("Click the view or press Esc to fly on. Mouse: steer. W/S/A/D: "
                             "thrust. Space/Ctrl: up/down. Shift: boost. C: free camera. "
-                            "T: portal. The panels stay usable while paused.");
+                            "T: portal. 1-7: render presets, 0: hide their timing. "
+                            "The panels stay usable while paused.");
         ImGui::PopTextWrapPos();
     }
     ImGui::End();

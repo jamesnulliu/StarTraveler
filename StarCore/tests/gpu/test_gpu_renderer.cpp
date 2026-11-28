@@ -283,6 +283,44 @@ TEST_CASE("GPU: emissive sphere on a sky", "[gpu]")
     REQUIRE(tracer->accumulatedFrames() == 1);
 }
 
+TEST_CASE("GPU timing: capture retains submission numbers across slot drains", "[gpu][timing]")
+{
+    const GpuTest gpu;
+    if (gpu.context().deviceInfo().timestampPeriod <= 0.0F) {
+        SKIP("GPU timestamps unavailable");
+    }
+    TestScene test;
+    const auto scene = buildRenderScene(test.scene);
+    auto tracer = gpu.makeRenderer(32, 24);
+    const Camera camera = makeCamera(32, 24);
+    tracer->captureFrameTimings();
+    for (int i = 0; i < 5; ++i) {
+        tracer->render(scene, camera, PathTracerSettings{});
+    }
+    tracer->waitIdle();
+    auto timings = tracer->takeFrameTimings();
+    std::ranges::sort(timings, {}, &GpuRenderer::FrameTiming::frameNumber);
+    REQUIRE(timings.size() == 5);
+    for (std::size_t i = 0; i < timings.size(); ++i) {
+        CHECK(timings[i].frameNumber == i);
+        CHECK(timings[i].gpuMs > 0.0F);
+        CHECK(timings[i].traceMs >= 0.0F);
+        CHECK(timings[i].traceMs <= timings[i].gpuMs + 0.001F);
+    }
+    CHECK(tracer->gpuTimeMs() == timings.back().gpuMs);
+    CHECK(tracer->traceTimeMs() == timings.back().traceMs);
+    CHECK(tracer->takeFrameTimings().empty());
+    tracer->render(scene, camera, PathTracerSettings{});
+    tracer->waitIdle();
+    timings = tracer->takeFrameTimings();
+    REQUIRE(timings.size() == 1);
+    CHECK(timings[0].frameNumber == 5);
+    tracer->captureFrameTimings(false);
+    tracer->render(scene, camera, PathTracerSettings{});
+    tracer->waitIdle();
+    CHECK(tracer->takeFrameTimings().empty());
+}
+
 TEST_CASE("GPU: white furnace", "[gpu]")
 {
     const GpuTest gpu;

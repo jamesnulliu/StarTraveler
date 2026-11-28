@@ -53,6 +53,7 @@ inline constexpr std::uint32_t kFlagUpscaled = 16U;
 inline constexpr std::uint32_t kFlagDirectShadowMaps = 32U;
 inline constexpr std::uint32_t kFlagRadianceCache = 64U;
 inline constexpr std::uint32_t kFlagRayReconstruction = 128U;
+inline constexpr std::uint32_t kFlagDirectOnly = 256U;
 inline constexpr std::uint32_t kHistoryReset = 1U;
 inline constexpr std::uint32_t kHistoryStill = 2U;
 

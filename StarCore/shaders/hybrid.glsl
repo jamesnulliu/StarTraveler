@@ -52,6 +52,7 @@ const uint kFlagRadianceCache = 64u;
 // An upscaler denoises the result (DLSS-RR): every pixel traced, the guides it takes written,
 // this frame's samples of all but the glass layer composited.
 const uint kFlagRayReconstruction = 128u;
+const uint kFlagDirectOnly = 256u;
 // history.y
 const uint kHistoryReset = 1u;   // Ignore earlier frames.
 const uint kHistoryStatic = 2u;  // Nothing moved since the last frame.

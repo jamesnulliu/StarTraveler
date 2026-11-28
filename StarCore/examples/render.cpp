@@ -11,10 +11,12 @@
 //       --still 2048   (a ship turning with the camera, then the reference at its end pose)
 //   starcore-render assets/scenes/legacy_demo.yaml -o renders/demo.png -f 16 --raster
 
+#include <algorithm>
 #include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <format>
+#include <fstream>
 #include <optional>
 #include <string>
 #include <vector>
@@ -63,6 +65,7 @@ struct GpuOptions
     std::uint32_t still = 0;  // The last frames: nothing moves.
     std::filesystem::path dumpPath;  // Every dumpEvery frames: the image (name_frame.png).
     std::uint32_t dumpEvery = 0;
+    std::filesystem::path gpuTimings;
     bool validation = false;
     // Effects (EffectSettings).
     bool bloom = false;
@@ -135,6 +138,11 @@ auto renderOnGpu([[maybe_unused]] starcore::Scene& scene,
         SC_ERROR("Vulkan: {}", context.error());
         return std::nullopt;
     }
+    VkPhysicalDeviceDriverProperties driver{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+    VkPhysicalDeviceProperties2 device{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &driver};
+    vkGetPhysicalDeviceProperties2((*context)->physicalDevice(), &device);
+    SC_INFO("Vulkan device: {} | {} | {} ({})", device.properties.deviceName, driver.driverName,
+            driver.driverInfo, device.properties.driverVersion);
     auto tracer = starcore::GpuRenderer::create(**context);
     if (!tracer) {
         SC_ERROR("{}", tracer.error());
@@ -145,6 +153,7 @@ auto renderOnGpu([[maybe_unused]] starcore::Scene& scene,
         return std::nullopt;
     }
     (*tracer)->resize(camera.viewportSize().x, camera.viewportSize().y);
+    (*tracer)->captureFrameTimings(!gpuOptions.gpuTimings.empty());
     // Incremental: moving an entity reprojects, as in a game.
     starcore::RenderSceneBuilder builder;
     // The first frame builds the acceleration structures.
@@ -191,9 +200,39 @@ auto renderOnGpu([[maybe_unused]] starcore::Scene& scene,
     const std::chrono::duration<double, std::milli> elapsed =
         std::chrono::steady_clock::now() - start;
     if (frames > 1) {
-        SC_INFO("GPU: {:.2f} ms/frame after setup (last frame: {:.2f} ms, {:.2f} tracing)",
+        SC_INFO("Wall: {:.2f} ms/frame after setup (latest GPU frame: {:.2f} ms, {:.2f} tracing)",
                 elapsed.count() / (frames - 1), (*tracer)->gpuTimeMs(),
                 (*tracer)->traceTimeMs());
+    }
+    if (!gpuOptions.gpuTimings.empty()) {
+        SC_INFO("Endpoint accumulation: {} frames", (*tracer)->accumulatedFrames());
+        auto samples = (*tracer)->takeFrameTimings();
+        std::ranges::sort(samples, {}, &starcore::GpuRenderer::FrameTiming::frameNumber);
+        if (samples.size() != frames) {
+            SC_ERROR("GPU timestamps missing: got {} of {} frames", samples.size(), frames);
+            return std::nullopt;
+        }
+        std::error_code error;
+        if (!gpuOptions.gpuTimings.parent_path().empty()) {
+            std::filesystem::create_directories(gpuOptions.gpuTimings.parent_path(), error);
+        }
+        std::ofstream output(gpuOptions.gpuTimings);
+        output << "frame,gpu_ms,trace_ms,setup_frame\n";
+        for (std::size_t i = 0; i < samples.size(); ++i) {
+            const auto& sample = samples[i];
+            if (sample.frameNumber != i) {
+                SC_ERROR("GPU timestamp frame numbering is incomplete");
+                return std::nullopt;
+            }
+            const float traceMs = starcore::tracesRays(options.pipeline) ? sample.traceMs : 0.0F;
+            output << std::format("{},{:.6f},{:.6f},{}\n", i + 1,
+                                  sample.gpuMs, traceMs, i == 0 ? 1 : 0);
+        }
+        output.close();
+        if (error || !output) {
+            SC_ERROR("Cannot write GPU timings: {}", gpuOptions.gpuTimings.string());
+            return std::nullopt;
+        }
     }
     if (options.upscaling.upscaler != starcore::Upscaler::Off) {
         SC_INFO("Upscaled with {}: {}x{} -> {}x{}",
@@ -230,6 +269,7 @@ auto main(int argc, char** argv) -> int
     starcore::PathTracerSettings settings;
     std::vector<float> cameraPosition{0.0F, 0.0F, 10.0F};
     std::vector<float> cameraLookAt;
+    std::vector<float> cameraAngles;
 
     app.add_option("scene", scenePath, "Scene file (.yaml)")->required()->check(CLI::ExistingFile);
     app.add_option("-o,--output", outputPath, "Output PNG");
@@ -242,6 +282,8 @@ auto main(int argc, char** argv) -> int
     app.add_option("--firefly-clamp", settings.fireflyClamp,
                    "Clamp indirect light to this (0 = off; the game uses 8)");
     app.add_option("-j,--threads", threads, "Worker threads (0 = all)");
+    app.add_option("--gpu-timings", gpuOptions.gpuTimings, "GPU timestamp CSV per submitted frame");
+    app.add_flag("--direct-only", settings.directOnly, "Keep emission and direct light only");
     app.add_flag("--gpu", gpu, "Path trace on the GPU (Vulkan ray queries)");
     app.add_flag("--hybrid", gpuOptions.hybrid,
                  "GPU, hybrid pipeline: rasterized first hits, reprojection and denoising");
@@ -315,7 +357,10 @@ auto main(int argc, char** argv) -> int
                    "Upscaler: Native, Quality, Balanced, Performance, \"Ultra performance\"");
     app.add_option("--sharpness", gpuOptions.sharpness, "Upscaler: FSR's sharpening, 0-1");
     app.add_option("--camera", cameraPosition, "Camera position x y z")->expected(3);
-    app.add_option("--look-at", cameraLookAt, "Camera target x y z")->expected(3);
+    auto* lookAtOption =
+        app.add_option("--look-at", cameraLookAt, "Camera target x y z")->expected(3);
+    app.add_option("--camera-angles", cameraAngles, "Camera yaw and pitch in degrees")
+        ->expected(2)->excludes(lookAtOption);
     float verticalFov = 0.0F;
     app.add_option("--fov", verticalFov, "Vertical field of view, degrees (default 45)");
     app.add_option("--exposure", settings.exposure,
@@ -335,6 +380,15 @@ auto main(int argc, char** argv) -> int
         gpuOptions.move = {move[0], move[1], move[2]};
     }
     gpu = gpu || gpuOptions.hybrid || gpuOptions.raster;
+
+    if (!gpuOptions.gpuTimings.empty() && (!gpu || gpuOptions.dumpEvery > 0)) {
+        SC_ERROR("--gpu-timings requires a GPU pipeline and --dump-every 0");
+        return EXIT_FAILURE;
+    }
+    if (settings.directOnly && (gpuOptions.radianceCache || gpuOptions.probes.enabled)) {
+        SC_ERROR("--direct-only requires the indirect cache and probes to be off");
+        return EXIT_FAILURE;
+    }
 
     starcore::Scene scene;
     starcore::AssetLibrary assets;
@@ -385,6 +439,10 @@ auto main(int argc, char** argv) -> int
     camera.setPosition({cameraPosition[0], cameraPosition[1], cameraPosition[2]});
     if (cameraLookAt.size() == 3) {
         camera.lookAt({cameraLookAt[0], cameraLookAt[1], cameraLookAt[2]});
+    }
+
+    if (cameraAngles.size() == 2) {
+        camera.setRotation(cameraAngles[0], cameraAngles[1]);
     }
 
     const auto renderScene = starcore::buildRenderScene(scene);

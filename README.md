@@ -76,6 +76,8 @@ StarTraveler/                 repository root: a CMake workspace
 - [GPU rendering](docs/gpu-rendering.md): how the renderer works: path tracing, the hybrid
   pipeline (denoising, direct and indirect light), the raster pipeline, upscalers,
   post-processing, and offscreen renders with `starcore-render`.
+- [Direct-light evaluation](docs/eval-direct-light.md): reproduce the three-shot comparison,
+  reference noise estimates, plots and crops.
 - [Models and scenes](docs/assets.md): regenerating the ship model and the blue star scene.
 - [StarCore/README.md](StarCore/README.md): the engine on its own, with C++ and Python examples.
 

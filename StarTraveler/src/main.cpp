@@ -54,6 +54,8 @@ auto main(int argc, char** argv) -> int
                  "Start with ray tracing off: rasterize on the GPU (no rays, no shadows)");
     cli.add_flag("--cruise", options.cruise,
                  "Fly forward at full thrust (smoke tests, screenshots of the effects)");
+    cli.add_option("--preset", options.preset, "Demo rung at startup, 1-7 (keys 1-7)")
+        ->check(CLI::Range(1, 7));
     cli.add_flag("--validation", validation,
                  "Enable Vulkan validation layers (configure with STARCORE_VULKAN_VALIDATION=ON)");
     cli.add_flag("--no-vsync", noVsync, "Present without vsync");

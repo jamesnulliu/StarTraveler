@@ -41,6 +41,8 @@ struct GameOptions
     bool raster = false;
     // Fly the ship forward at full thrust (smoke tests, screenshots of the effects).
     bool cruise = false;
+    // Demo rung to select at startup (1-7; 0 leaves the panel's defaults).
+    int preset = 0;
     // What the hybrid pipeline shows (its debug views; also in the Render panel).
     starcore::HybridView view = starcore::HybridView::Final;
     // Upscaling of the hybrid and raster pipelines (also in the Render panel): as games on
@@ -151,6 +153,10 @@ private:
         return m_captured || m_dragLook;
     }
     void handleShortcuts();
+    /** @brief Keys 1-7: one demo rung. `baseUpscaler` is whatever is on, except DLSS-RR. */
+    void applyDemoPresetKey(int key);
+    /** @brief Preset name and GPU time, bottom-left of the view (key 0 hides it). */
+    void drawDemoOverlay(starcore::Vec2 origin);
     void updateCamera();
     /** @brief Particles (exhaust, sparks) and the space dust around the camera. */
     void updateParticles(float deltaSeconds);
@@ -207,6 +213,10 @@ private:
     bool m_dragLook = false;
     bool m_paused = false;  // The pause menu: the ship and the particles stand still.
     bool m_focusPauseMenu = false;
+    // Demo: the rung's name and GPU time, bottom-left (key 0). The upscaler keys 1-5 and 7
+    // restore, remembered when it is not DLSS-RR (key 6).
+    bool m_demoOverlay = true;
+    starcore::Upscaler m_demoUpscaler = starcore::Upscaler::Dlss;
 
     starcore::CpuPathTracer m_tracer;
     std::unique_ptr<starcore::GpuRenderer> m_gpuRenderer;  // Null without a usable GPU.

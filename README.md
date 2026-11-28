@@ -43,6 +43,8 @@ A click on the view captures the mouse; Esc opens the pause menu and frees it.
 | Shift | boost | |
 | C | switch to the free camera | back to the cockpit |
 | T | open a portal in front (two portals link up) | |
+| 1-7 | a demo render preset (raster through path tracing) | |
+| 0 | hide or show that preset's name and GPU time | |
 | Esc | pause menu | |
 
 Editing, drawing, the render settings and the command line: [docs/playing.md](docs/playing.md).
@@ -71,6 +73,8 @@ StarTraveler/                 repository root: a CMake workspace
   upscalers' SDKs, tests, the Python package.
 - [Playing](docs/playing.md): command line, controls, editing and drawing, the game's render
   settings, effects, scenes and layers.
+- [Demo](docs/demo.md): the seven presets on keys 1-7, the timing overlay, a route through
+  the blue star.
 - [Engine](docs/engine.md): StarCore's parts (scene, assets, CPU path tracer, particles, 2D
   raster, physics, runtime) and its Python API.
 - [GPU rendering](docs/gpu-rendering.md): how the renderer works: path tracing, the hybrid

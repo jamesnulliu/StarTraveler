@@ -43,8 +43,10 @@ function(starcore_download_files OK BASE_URL DIRECTORY)
             endif()
         endif()
         log_info("Downloading ${BASE_URL}/${FILE_PATH}")
+        # No EXPECTED_HASH here: on CMake 4 a failed download with one is a configure
+        # error even when STATUS is set ("cannot compute hash on failed download"),
+        # and the upscalers are supposed to be left out instead.
         file(DOWNLOAD "${BASE_URL}/${FILE_PATH}" "${TARGET_FILE}"
-            EXPECTED_HASH SHA256=${FILE_HASH}
             TLS_VERIFY ON
             STATUS STATUS
         )
@@ -52,6 +54,14 @@ function(starcore_download_files OK BASE_URL DIRECTORY)
         if(NOT CODE EQUAL 0)
             list(GET STATUS 1 MESSAGE)
             log_warning("Could not download ${BASE_URL}/${FILE_PATH}: ${MESSAGE}")
+            file(REMOVE "${TARGET_FILE}")
+            set(${OK} FALSE PARENT_SCOPE)
+            return()
+        endif()
+        file(SHA256 "${TARGET_FILE}" DOWNLOADED_HASH)
+        string(TOUPPER "${DOWNLOADED_HASH}" DOWNLOADED_HASH)
+        if(NOT DOWNLOADED_HASH STREQUAL FILE_HASH)
+            log_warning("Hash mismatch for ${BASE_URL}/${FILE_PATH}")
             file(REMOVE "${TARGET_FILE}")
             set(${OK} FALSE PARENT_SCOPE)
             return()

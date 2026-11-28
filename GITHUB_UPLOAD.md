@@ -2,7 +2,8 @@
 
 Target: `jamesnulliu/StarTraveler`, branch `feature/eval-denoiser`.
 Prepared from upstream commit `dde6e1bb85e6afa33fa2d1241d55b947ad46b8c3`.
-This delivery is for branch review. No PR or merge into `main` is requested.
+This delivery is submitted for pull-request review into `main`, as requested on
+28 November 2026. Creating the PR does not authorize or perform a merge.
 
 ## Start here
 

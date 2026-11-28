@@ -1,6 +1,6 @@
 # StarTraveler
 
-Denoiser branch review: [upload scope and remaining work](GITHUB_UPLOAD.md). No PR or merge into main is included.
+Denoiser branch review: [upload scope and remaining work](GITHUB_UPLOAD.md). Submitted for pull-request review; no merge into main is performed.
 
 Latest local denoiser evidence: [fixed-input Quality error/time results](docs/quality-fixed-exposure-results.md), [R2 materials](docs/final-materials/README.md) and [team handoff](HANDOFF.md).
 

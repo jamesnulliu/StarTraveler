@@ -41,6 +41,8 @@ struct GameOptions
     bool raster = false;
     // Fly the ship forward at full thrust (smoke tests, screenshots of the effects).
     bool cruise = false;
+    // Demo rung to select at startup (1-7; 0 leaves the panel's defaults).
+    int preset = 0;
     // What the hybrid pipeline shows (its debug views; also in the Render panel).
     starcore::HybridView view = starcore::HybridView::Final;
     // Upscaling of the hybrid and raster pipelines (also in the Render panel): as games on

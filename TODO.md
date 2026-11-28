@@ -91,10 +91,15 @@ time; what is missing is switching them fast and showing which one is on.
   time per frame and the trace pass's (`gpuTimeMs()`, `traceTimeMs()`, shown in
   the Render panel today); key 0 hides it.
 - [x] `docs/playing.md`: the keys and the overlay. The route is in `docs/demo.md`.
-- [ ] On the demo machine: each preset's frame rate at the demo's resolution, and a
+- [x] On the demo machine: each preset's frame rate at the demo's resolution, and a
   route through `blue_star.yaml` for the 10-15 minutes (the cockpit, the mirror,
-  the glass, the glowing rocks). The route is written (`docs/demo.md`); the frame
-  rates are not measured yet.
+  the glass, the glowing rocks). The route is in `docs/demo.md`. The view at the
+  default 1600x900 layout is 930x844 (RTX 4060 Laptop, driver 581.29, vsync off,
+  DLSS Quality, 8 ms budget, cockpit at rest, five runs, medians): raster 2.17 ms
+  (461 FPS), hybrid half shadow maps 7.63 ms (131), hybrid half 7.10 ms (141),
+  hybrid full 7.08 ms (141), probes 7.19 ms (139), DLSS-RR 7.66 ms (131), path
+  tracing 5.88 ms (170). The budget spends the ray-traced rungs on samples, so
+  their frame times sit together.
 
 Done when: a clean clone builds and passes the tests, and the seven presets switch
 live with their name and time on screen.

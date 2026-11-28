@@ -17,6 +17,7 @@ Without a scene it opens the default one, `StarTraveler/assets/scenes/blue_star.
 | `--quality NAME` | `Native`, `Quality` (default), `Balanced`, `Performance`, `"Ultra performance"` |
 | `--view NAME` | the hybrid pipeline's intermediate images: `Final` (default), `Noisy`, `Albedo`, `Direct`, `Visibility`, `Lighting`, `Specular`, `Glass`, `Variance`, `Motion`, `History` |
 | `--cruise` | fly forward at full thrust, for screenshots of the effects |
+| `--preset N` | start on demo rung N (1-7, the same as the number keys) |
 | `--frames N --screenshot out.png` | exit after N frames, saving the viewport as PNG |
 | `--validation` | Vulkan validation layers (configure with `STARCORE_VULKAN_VALIDATION=ON`) |
 | `--no-vsync` | present without vsync |

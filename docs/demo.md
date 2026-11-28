@@ -129,11 +129,25 @@ Two things the old docs did not say, now in [Building](building.md):
 
 ## Frame times
 
-Not measured at the demo's view size yet. A 30-frame smoke run on this machine (NVIDIA
-GeForce RTX 4060 Laptop GPU, ray queries and DLSS available) opened `blue_star.yaml` on
-the hybrid pipeline and exited; the view came up a few dozen pixels across, so that run's
-milliseconds are not a preset's frame time. The overlay's GPU line is the number to read, at
-whatever resolution the view has that day (the window opens at 1600x900; the view is what
-the panels leave). Record the GPU, the driver and that view size next to the seven
-readings. The progress figures in `TODO.md` (1280x720, RTX 4060 Laptop, `starcore-render`)
-are the offline counterparts, not a substitute for this pass.
+The default window is 1600x900. With the default panel layout the view, which is what the
+overlay times, is **930x844**. Measured there, in the cockpit of `blue_star.yaml` at rest
+(the ship at PlayerStart, nothing moving), vsync off, DLSS Quality except path tracing
+(it does not upscale). NVIDIA GeForce RTX 4060 Laptop GPU, driver 581.29. Five runs of
+each preset, order alternated, median of the last frame of 160. The game's 8 ms budget
+picks the samples per frame, so the ray-traced rungs land near that budget and differ in
+how many samples they fit, not in the frame time.
+
+| Key | Preset | GPU ms | Trace ms | Samples / frame | FPS (1000 / GPU ms) |
+|---|---|---:|---:|---:|---:|
+| 1 | Raster, no rays | 2.17 | 0.00 | 1 | 461 |
+| 2 | Hybrid, half, shadow maps | 7.63 | 4.38 | 3 | 131 |
+| 3 | Hybrid, half | 7.10 | 3.82 | 4 | 141 |
+| 4 | Hybrid, full | 7.08 | 3.83 | 1 | 141 |
+| 5 | Hybrid, half, probes | 7.19 | 2.28 | 3 | 139 |
+| 6 | DLSS-RR | 7.66 | 4.05 | 1 | 131 |
+| 7 | Path tracing | 5.88 | 5.48 | 2 | 170 |
+
+`--preset N` starts on that rung, so the runs did not depend on the number keys. Raster
+traces nothing. Path tracing's upscaler is off, so its 5.88 ms is the full 930x844. The
+progress figures in `TODO.md` are a different setup (1280x720, `starcore-render`, no
+budget): they are not these frame rates.

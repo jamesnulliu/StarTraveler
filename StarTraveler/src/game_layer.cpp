@@ -143,6 +143,9 @@ void GameLayer::onAttach()
     m_demoUpscaler = m_gameOptions.upscaling.upscaler == Upscaler::DlssRr
                          ? Upscaler::Dlss
                          : m_gameOptions.upscaling.upscaler;
+    if (m_gameOptions.preset != 0) {
+        applyDemoPresetKey(m_gameOptions.preset);
+    }
     resetCamera();
     if (!m_scenePath.empty()) {
         openScene(m_scenePath);
@@ -687,10 +690,16 @@ void GameLayer::onUIRender()
             }
         }
         if (usingGpu()) {
-            SC_INFO("Exiting after {} frames ({} accumulated on the GPU, {} pipeline, last "
-                    "{:.2f} ms, {:.2f} tracing, for {} samples per pixel)",
+            const std::optional<int> preset = matchDemoPreset(m_options);
+            const std::string presetName =
+                preset ? std::format("{} {}", *preset, demoPresetName(*preset))
+                       : std::string("Custom");
+            SC_INFO("Exiting after {} frames ({} accumulated on the GPU, {} pipeline, view "
+                    "{}x{}, preset {}, upscaler {}, last {:.2f} ms, {:.2f} tracing, for {} "
+                    "samples per pixel)",
                     m_frameCount, m_gpuRenderer->accumulatedFrames(),
-                    enumToString(gpuPipeline()), m_gpuRenderer->gpuTimeMs(),
+                    enumToString(gpuPipeline()), m_viewport.size.x, m_viewport.size.y, presetName,
+                    enumToString(m_gpuRenderer->activeUpscaler()), m_gpuRenderer->gpuTimeMs(),
                     m_gpuRenderer->traceTimeMs(),
                     m_options.gpuBudgetMs > 0.0F
                         ? m_gpuRenderer->samplesForBudget(m_options.gpuBudgetMs)

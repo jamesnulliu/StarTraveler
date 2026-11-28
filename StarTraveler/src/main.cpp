@@ -55,15 +55,14 @@ auto main(int argc, char** argv) -> int
                  "Start with ray tracing off: rasterize on the GPU (no rays, no shadows)");
     cli.add_flag("--cruise", options.cruise,
                  "Fly forward at full thrust (smoke tests, screenshots of the effects)");
+    cli.add_option("--preset", options.preset, "Demo rung at startup, 1-7 (keys 1-7)")
+        ->check(CLI::Range(1, 7));
     cli.add_flag("--validation", validation,
                  "Enable Vulkan validation layers (configure with STARCORE_VULKAN_VALIDATION=ON)");
     cli.add_flag("--no-vsync", noVsync, "Present without vsync");
     cli.add_flag("--no-viewports", noViewports, "Keep all panels inside the main window");
     cli.add_option("--frames", options.exitAfterFrames,
                    "Exit after this many frames (smoke tests)");
-    cli.add_option("--demo-preset", options.demoPreset,
-                   "Start with a demo preset, 1-7 as the number keys (0: the usual settings)")
-        ->check(CLI::Range(0, 7));
     cli.add_option("--screenshot", options.screenshotPath,
                    "With --frames: save the viewport image as PNG before exiting");
     std::string view = "Final";
@@ -85,11 +84,6 @@ auto main(int argc, char** argv) -> int
 
     starcore::log::init({.level = spdlog::level::debug});
     SC_INFO("StarTraveler (StarCore {})", starcore::kVersionString);
-    if (options.demoPreset > 0 && options.cpuRenderer) {
-        SC_CRITICAL("GPU demo presets cannot be combined with --cpu");
-        starcore::log::shutdown();
-        return EXIT_FAILURE;
-    }
     if (!starcore::enumFromString(view, options.view)) {
         SC_CRITICAL("Unknown view \"{}\"", view);
         starcore::log::shutdown();

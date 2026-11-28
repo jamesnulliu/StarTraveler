@@ -1,5 +1,9 @@
 #pragma once
 
+// The demo's seven rungs (TODO.md, feature/demo-clean-build): one key sets the
+// Render panel's options, and the view names the one that is on.
+
+#include <optional>
 #include <string_view>
 
 #include "game_layer.hpp"
@@ -7,62 +11,24 @@
 namespace startraveler
 {
 
-inline auto demoPresetName(int preset) -> std::string_view
-{
-    switch (preset) {
-    case 1: return "Raster shadows + ambient";
-    case 2: return "Hybrid Half + shadow maps";
-    case 3: return "Hybrid Half + traced shadows";
-    case 4: return "Hybrid Full";
-    case 5: return "Hybrid Half + irradiance probes";
-    case 6: return "DLSS Ray Reconstruction";
-    case 7: return "Progressive path tracer";
-    default: return "Custom";
-    }
-}
+inline constexpr int kDemoPresetCount = 7;
 
-// Presentation profiles, not the equal-resolution formal benchmark configurations.
-inline auto applyDemoPreset(RenderOptions& options, int preset) -> bool
-{
-    using namespace starcore;
-    if (preset < 1 || preset > 7) {
-        return false;
-    }
-    options.gpu = true;
-    options.liveRender = true;
-    options.rayTracing = preset != 1;
-    options.adaptiveGpu = false;
-    options.gpuBudgetMs = 0.0F;
-    options.gpuRender = {};
-    options.gpuRender.pipeline = preset == 1 ? GpuPipeline::Raster :
-                                preset == 7 ? GpuPipeline::PathTracing : GpuPipeline::Hybrid;
-    options.gpuRender.traceResolution =
-        preset == 2 || preset == 3 || preset == 5 ? TraceResolution::Half : TraceResolution::Full;
-    options.gpuRender.directShadows =
-        preset == 2 ? DirectShadows::ShadowMaps : DirectShadows::Traced;
-    options.gpuRender.probes.enabled = preset == 5;
-    options.gpuRender.upscaling.upscaler = preset == 6 ? Upscaler::DlssRr : Upscaler::Off;
-    options.gpuRender.upscaling.quality = UpscalerQuality::Quality;
-    options.gpuRender.upscaling.dlssPreset = DlssPreset::K;
-    options.tracer = {};
-    options.tracer.seed = 29;
-    options.tracer.exposure = 1.0F;
-    options.tracer.toneMapper = ToneMapper::Aces;
-    options.particles = false;
-    options.spaceDust = false;
-    return true;
-}
+/** @brief The name drawn for preset `key` (1-7). Empty for any other key. */
+[[nodiscard]] auto demoPresetName(int key) -> std::string_view;
 
-inline auto matchesDemoPreset(const RenderOptions& options, int preset) -> bool
-{
-    RenderOptions expected;
-    if (!applyDemoPreset(expected, preset)) {
-        return false;
-    }
-    return options.gpu == expected.gpu && options.liveRender == expected.liveRender &&
-           options.rayTracing == expected.rayTracing && !options.adaptiveGpu &&
-           options.gpuBudgetMs == 0.0F && options.gpuRender == expected.gpuRender &&
-           options.tracer == expected.tracer && !options.particles && !options.spaceDust;
-}
+/**
+ * @brief Set `options` to preset `key` (1-7).
+ * @param baseUpscaler Upscaler restored for every preset except 6 (DLSS-RR).
+ *        Quality, effects, the denoiser's history and the probe spacing stay.
+ * @return false when `key` is not a preset.
+ */
+auto applyDemoPreset(RenderOptions& options, int key, starcore::Upscaler baseUpscaler) -> bool;
+
+/**
+ * @brief The preset `options` are, or none when a panel edit has left the rungs
+ *        (a debug view, the radiance cache, probes at full resolution, ...).
+ *        Ray tracing off is preset 1; the path-tracing pipeline is preset 7.
+ */
+[[nodiscard]] auto matchDemoPreset(const RenderOptions& options) -> std::optional<int>;
 
 }  // namespace startraveler

@@ -17,9 +17,9 @@ Without a scene it opens the default one, `StarTraveler/assets/scenes/blue_star.
 | `--quality NAME` | `Native`, `Quality` (default), `Balanced`, `Performance`, `"Ultra performance"` |
 | `--dlss-preset NAME` | the model of DLSS (not DLSS-RR): `Default` (the SDK's choice), `K`, `M` |
 | `--dlss-exposure E` | with `--dlss-preset K`: a fixed exposure for DLSS in place of its auto exposure (0: auto) |
-| `--demo-preset N` | start with a [demo preset](#demo-presets), 1-7 (0: the usual settings) |
 | `--view NAME` | the hybrid pipeline's intermediate images: `Final` (default), `Noisy`, `Albedo`, `Direct`, `Visibility`, `Lighting`, `Specular`, `Glass`, `Variance`, `Motion`, `History` |
 | `--cruise` | fly forward at full thrust, for screenshots of the effects |
+| `--preset N` | start on demo rung N (1-7, the same as the number keys) |
 | `--frames N --screenshot out.png` | exit after N frames, saving the viewport as PNG |
 | `--validation` | Vulkan validation layers (configure with `STARCORE_VULKAN_VALIDATION=ON`) |
 | `--no-vsync` | present without vsync |
@@ -38,9 +38,9 @@ on the view flies on).
 | Space, Ctrl | thrust up, down | fly up, down |
 | Shift | boost | |
 | C | switch to the free camera | back to the cockpit |
-| 1-7 | a [demo preset](#demo-presets) | the same |
-| F2 | show or hide the demo overlay | the same |
 | T | open a portal in front (two portals link up) | |
+| 1-7 | switch a demo render preset (below) | |
+| 0 | hide or show the preset name and GPU time | |
 | Esc | pause menu | |
 | Ctrl+N/O/S, Ctrl+D, Del | new/open/save scene, duplicate, delete (while the mouse is free) | |
 
@@ -65,6 +65,32 @@ The viewport is rendered on the GPU in real time by the hybrid pipeline: rasteri
 paths from a quarter of the pixels per frame, samples reused across frames and denoised (how it
 works: [GPU rendering](gpu-rendering.md#hybrid-pipeline)). Samples per frame follow a GPU time
 budget, 8 ms by default; less for a higher frame rate.
+
+### Demo presets
+
+Keys 1-7 set one rung each, while flying as well (the view hovered or the mouse captured; not
+while a text field has focus, and not together with Ctrl or Alt). The same options can be set
+from the Render panel; a mix the keys do not name (the radiance cache, a debug view, probes at
+full resolution) shows as "Custom". The route and what each rung is for:
+[Demo](demo.md).
+
+| Key | Preset | What changes |
+|---|---|---|
+| 1 | Raster, no rays | ray tracing off: shadow maps, a constant ambient term, no rays |
+| 2 | Hybrid, half, shadow maps | hybrid, one pixel of each 2x2, direct light from shadow maps |
+| 3 | Hybrid, half | the default: hybrid, half resolution, traced shadows |
+| 4 | Hybrid, full | hybrid, every pixel, traced shadows |
+| 5 | Hybrid, half, probes | preset 3 plus irradiance probes (the cockpit's volume included) |
+| 6 | DLSS-RR | hybrid, DLSS Ray Reconstruction (traces every pixel; falls back to DLSS) |
+| 7 | Path tracing | the reference; restarts whenever anything moves |
+
+Upscaler quality, bloom and the other effects stay as they are. Keys 1-5 and 7 put back the
+upscaler that was on before key 6 (DLSS, unless the game was started with another). Key 6 is
+the one that switches to DLSS-RR.
+
+An overlay in the bottom-left of the view shows the preset's name, the GPU time of the last
+frame and the trace pass's (`gpuTimeMs`, `traceTimeMs`, the same numbers as the Render panel).
+Key 0 hides it and shows it again.
 
 The Render panel:
 
@@ -101,31 +127,6 @@ about as much as DLSS at Quality.
 
 While DLSS runs, "DLSS model" picks its model (Default lets the SDK choose) and, with K, "Fixed
 DLSS exposure" replaces its auto exposure; changing either restarts its history.
-
-### Demo presets
-
-The number keys switch the whole renderer to one rung of the project's comparison, while flying
-too (`--demo-preset N` starts with one):
-
-| Key | Preset | Upscaling |
-|---|---|---|
-| 1 | raster pipeline: shadow maps, constant ambient, no rays | Off |
-| 2 | hybrid, Half, shadow maps for the direct light | Off |
-| 3 | hybrid, Half, traced shadows | Off |
-| 4 | hybrid, Full | Off |
-| 5 | hybrid, Half, irradiance probes | Off |
-| 6 | hybrid, Full, denoised by DLSS-RR | Quality |
-| 7 | path tracing (the reference; it restarts whenever anything moves) | Off |
-
-A preset first clears earlier experiments (radiance cache, probes, filter and upscaler
-settings), then sets one sample per frame, seed 29, exposure 1 with ACES, no firefly clamp, no
-effects or particles and no GPU time budget. Keys 1-5 and 7 render at the view's size, key 6 at
-2/3 of it, so their times are not an equal comparison; the evaluations' numbers are
-([direct light](eval-direct-light.md), [denoiser](eval-denoiser.md)).
-
-F2 (or "Demo overlay" in the Render panel) shows over the view the preset's name ("Custom" once
-an option is changed by hand), the last frame's GPU time and trace pass time, the rendered and
-output sizes and the upscaler actually running (a fallback is flagged).
 
 ## Effects
 

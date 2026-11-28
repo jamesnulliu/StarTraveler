@@ -30,7 +30,7 @@ used. The GPU suite is not described as fully passing.
 | Renderer exposure/time inputs and initial transforms | `StarCore/src/gpu/`, `StarCore/include/starcore/gpu/gpu_renderer.hpp`, `StarCore/examples/render.cpp`; frozen production source snapshot and focused GPU regression evidence |
 | Experiment definitions and collection | `StarTraveler/tools/eval/shots.json`, `denoiser-protocol.json`, `check_measurement.py`, `run_formal.py`, `run_production_lag.py`, `run_quality_revalidation.py` |
 | Independent score/state/artifact checks | `metrics.py`, `verify_formal.py`, `verify_production_lag.py`, `verify_quality_revalidation.py` and their saved JSON/CSV records |
-| Demo presets and overlay | `StarTraveler/src/main.cpp`, `game_layer.cpp`, `demo_presets.hpp` and the game tests |
+| DLSS model and exposure in the game | `StarTraveler/src/main.cpp`, the Render panel in `game_layer.cpp` |
 | Results write-up and figures | [Denoiser evaluation](eval-denoiser.md), `docs/eval-denoiser/`; the report, slides and speaker notes drafted for the team are kept outside the repository |
 
 This is an area-level assistance record, not a claim that every listed file was

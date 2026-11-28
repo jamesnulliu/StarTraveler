@@ -5,7 +5,6 @@
 #include <format>
 #include <iterator>
 #include <ranges>
-#include <stdexcept>
 #include <vector>
 
 #include <glm/geometric.hpp>
@@ -23,8 +22,8 @@
 #include <starcore/render/overlay.hpp>
 #include <starcore/scene/serializer.hpp>
 
-#include "game_layer.hpp"
 #include "demo_presets.hpp"
+#include "game_layer.hpp"
 
 import starcore.raster;
 
@@ -141,13 +140,11 @@ void GameLayer::onAttach()
     m_options.rayTracing = !m_gameOptions.raster;
     m_options.gpuRender.view = m_gameOptions.view;
     m_options.gpuRender.upscaling = m_gameOptions.upscaling;
-    if (m_gameOptions.demoPreset > 0) {
-        if (!m_gpuRenderer ||
-            (m_gameOptions.demoPreset != 1 && !m_gpuRenderer->rayTracing())) {
-            throw std::runtime_error("The selected demo preset requires a compatible GPU");
-        }
-        (void)applyDemoPreset(m_options, m_gameOptions.demoPreset);
-        m_demoPreset = m_gameOptions.demoPreset;
+    m_demoUpscaler = m_gameOptions.upscaling.upscaler == Upscaler::DlssRr
+                         ? Upscaler::Dlss
+                         : m_gameOptions.upscaling.upscaler;
+    if (m_gameOptions.preset != 0) {
+        applyDemoPresetKey(m_gameOptions.preset);
     }
     resetCamera();
     if (!m_scenePath.empty()) {
@@ -333,10 +330,6 @@ void GameLayer::handleShortcuts()
     if (io.WantTextInput) {
         return;
     }
-    if (!ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId) &&
-        !io.KeyCtrl && !io.KeyAlt && !io.KeySuper && input::isKeyPressed(ImGuiKey_F2)) {
-        m_showDemoOverlay = !m_showDemoOverlay;
-    }
     // While flying Ctrl goes down: the editing shortcuts wait for the mouse.
     const bool ctrl = io.KeyCtrl && !looking();
     if (ctrl && input::isKeyPressed(ImGuiKey_N)) {
@@ -357,26 +350,6 @@ void GameLayer::handleShortcuts()
     if (m_paused || (!looking() && !m_viewport.hovered)) {
         return;
     }
-    if (!io.KeyCtrl && !io.KeyAlt && !io.KeySuper &&
-        !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId)) {
-        constexpr std::array keys{ImGuiKey_1, ImGuiKey_2, ImGuiKey_3, ImGuiKey_4,
-                                  ImGuiKey_5, ImGuiKey_6, ImGuiKey_7};
-        for (std::size_t i = 0; i < keys.size(); ++i) {
-            if (!input::isKeyPressed(keys[i])) {
-                continue;
-            }
-            const int preset = static_cast<int>(i) + 1;
-            if (!m_gpuRenderer || (preset != 1 && !m_gpuRenderer->rayTracing())) {
-                m_status = "This preset requires a compatible GPU";
-                break;
-            }
-            (void)applyDemoPreset(m_options, preset);
-            m_demoPreset = preset;
-            m_frozen = false;
-            m_gpuRenderer->resetAccumulation();
-            m_status = std::format("Demo preset {}: {}", preset, demoPresetName(preset));
-        }
-    }
     // Legacy: T opens a portal in front of the camera.
     if (!ctrl && input::isKeyPressed(ImGuiKey_T)) {
         Entity portal = m_portals.createPortal(m_scene, m_camera, kPortalLayer);
@@ -385,6 +358,34 @@ void GameLayer::handleShortcuts()
     if (!ctrl && input::isKeyPressed(ImGuiKey_C)) {
         setViewMode(m_viewMode == ViewMode::Pilot ? ViewMode::Free : ViewMode::Pilot);
     }
+    // Demo rungs, while flying as well (the mouse is captured, so the panels are not
+    // taking the keys). Ctrl is thrust-down while flying: a preset is the number alone.
+    // 0 hides the name and the GPU time.
+    if (io.KeyCtrl || io.KeyAlt) {
+        return;
+    }
+    if (input::isKeyPressed(ImGuiKey_0)) {
+        m_demoOverlay = !m_demoOverlay;
+    }
+    constexpr std::array<ImGuiKey, kDemoPresetCount> kPresetKeys = {
+        ImGuiKey_1, ImGuiKey_2, ImGuiKey_3, ImGuiKey_4, ImGuiKey_5, ImGuiKey_6, ImGuiKey_7,
+    };
+    for (int key = 1; key <= kDemoPresetCount; ++key) {
+        if (input::isKeyPressed(kPresetKeys[static_cast<std::size_t>(key - 1)])) {
+            applyDemoPresetKey(key);
+        }
+    }
+}
+
+void GameLayer::applyDemoPresetKey(int key)
+{
+    if (m_options.gpuRender.upscaling.upscaler != Upscaler::DlssRr) {
+        m_demoUpscaler = m_options.gpuRender.upscaling.upscaler;
+    }
+    if (!applyDemoPreset(m_options, key, m_demoUpscaler)) {
+        return;
+    }
+    m_status = std::format("Preset {}: {}", key, demoPresetName(key));
 }
 
 void GameLayer::updateCamera()
@@ -689,10 +690,16 @@ void GameLayer::onUIRender()
             }
         }
         if (usingGpu()) {
-            SC_INFO("Exiting after {} frames ({} accumulated on the GPU, {} pipeline, last "
-                    "{:.2f} ms, {:.2f} tracing, for {} samples per pixel)",
+            const std::optional<int> preset = matchDemoPreset(m_options);
+            const std::string presetName =
+                preset ? std::format("{} {}", *preset, demoPresetName(*preset))
+                       : std::string("Custom");
+            SC_INFO("Exiting after {} frames ({} accumulated on the GPU, {} pipeline, view "
+                    "{}x{}, preset {}, upscaler {}, last {:.2f} ms, {:.2f} tracing, for {} "
+                    "samples per pixel)",
                     m_frameCount, m_gpuRenderer->accumulatedFrames(),
-                    enumToString(gpuPipeline()), m_gpuRenderer->gpuTimeMs(),
+                    enumToString(gpuPipeline()), m_viewport.size.x, m_viewport.size.y, presetName,
+                    enumToString(m_gpuRenderer->activeUpscaler()), m_gpuRenderer->gpuTimeMs(),
                     m_gpuRenderer->traceTimeMs(),
                     m_options.gpuBudgetMs > 0.0F
                         ? m_gpuRenderer->samplesForBudget(m_options.gpuBudgetMs)
@@ -751,33 +758,7 @@ void GameLayer::drawHud(Vec2 origin)
                         {corner.x + textSize.x + 6, corner.y + textSize.y + 4},
                         IM_COL32(0, 0, 0, 120), 4.0F);
     draw->AddText(corner, white, text.c_str());
-
-    if (m_showDemoOverlay) {
-        const bool gpu = usingGpu();
-        const bool matched = matchesDemoPreset(m_options, m_demoPreset);
-        std::string profile = matched
-            ? std::format("{} {}", m_demoPreset, demoPresetName(m_demoPreset)) : "Custom";
-        if (gpu && m_options.gpuRender.upscaling.upscaler != m_gpuRenderer->activeUpscaler()) {
-            profile += " (UPSCALER FALLBACK)";
-        }
-        const std::string details = gpu
-            ? std::format("{}{}\nGPU last {:.2f} ms   trace {:.2f} ms\n"
-                          "Output {}x{}   internal {}x{}   active {}\n1-7 profiles   F2 hide",
-                          profile, m_frozen ? " (frozen)" : "",
-                          m_gpuRenderer->gpuTimeMs(), m_gpuRenderer->traceTimeMs(),
-                          m_viewport.size.x, m_viewport.size.y,
-                          m_gpuRenderer->renderWidth(), m_gpuRenderer->renderHeight(),
-                          enumToString(m_gpuRenderer->activeUpscaler()))
-            : std::format("{}\nCPU fallback / GPU timing unavailable\nF2 hide", profile);
-        const ImVec2 labelOrigin(origin.x + 10.0F, origin.y + 50.0F);
-        const float wrapWidth = std::max(80.0F, size.x - 32.0F);
-        const ImVec2 labelSize = ImGui::CalcTextSize(details.c_str(), nullptr, false, wrapWidth);
-        draw->AddRectFilled({labelOrigin.x - 6, labelOrigin.y - 4},
-                            {labelOrigin.x + labelSize.x + 6, labelOrigin.y + labelSize.y + 4},
-                            IM_COL32(0, 0, 0, 190), 4.0F);
-        draw->AddText(nullptr, 0.0F, labelOrigin, IM_COL32(240, 245, 250, 240),
-                      details.c_str(), nullptr, wrapWidth);
-    }
+    drawDemoOverlay(origin);
 
     if (m_collisionFlash > 0.0F) {
         const auto alpha = static_cast<int>(255.0F * std::min(1.0F, m_collisionFlash / 0.4F));
@@ -788,6 +769,33 @@ void GameLayer::drawHud(Vec2 origin)
         draw->AddText({center.x - warningSize.x * 0.5F, center.y + 30.0F},
                       IM_COL32(255, 80, 60, alpha), warning);
     }
+}
+
+void GameLayer::drawDemoOverlay(Vec2 origin)
+{
+    if (!m_demoOverlay) {
+        return;
+    }
+    const std::optional<int> preset = matchDemoPreset(m_options);
+    const std::string title = preset ? std::format("{}  {}", *preset, demoPresetName(*preset))
+                                     : std::string("Custom");
+    const std::string times =
+        usingGpu() ? std::format("GPU {:.2f} ms    trace {:.2f} ms", m_gpuRenderer->gpuTimeMs(),
+                                 m_gpuRenderer->traceTimeMs())
+                   : std::string("GPU unavailable");
+    const ImVec2 titleSize = ImGui::CalcTextSize(title.c_str());
+    const ImVec2 timeSize = ImGui::CalcTextSize(times.c_str());
+    const float width = std::max(titleSize.x, timeSize.x);
+    const float height = titleSize.y + 2.0F + timeSize.y;
+    const ImVec2 corner(origin.x + 10.0F,
+                        origin.y + static_cast<float>(m_viewport.size.y) - 10.0F - height);
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->AddRectFilled({corner.x - 6.0F, corner.y - 4.0F},
+                        {corner.x + width + 6.0F, corner.y + height + 4.0F},
+                        IM_COL32(0, 0, 0, 140), 4.0F);
+    const ImU32 white = IM_COL32(230, 240, 255, 220);
+    draw->AddText(corner, white, title.c_str());
+    draw->AddText({corner.x, corner.y + titleSize.y + 2.0F}, white, times.c_str());
 }
 
 void GameLayer::drawPauseMenu(Vec2 origin, std::uint32_t platformViewport)
@@ -832,7 +840,8 @@ void GameLayer::drawPauseMenu(Vec2 origin, std::uint32_t platformViewport)
         ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + width);
         ImGui::TextDisabled("Click the view or press Esc to fly on. Mouse: steer. W/S/A/D: "
                             "thrust. Space/Ctrl: up/down. Shift: boost. C: free camera. "
-                            "T: portal. The panels stay usable while paused.");
+                            "T: portal. 1-7: render presets, 0: hide their timing. "
+                            "The panels stay usable while paused.");
         ImGui::PopTextWrapPos();
     }
     ImGui::End();
@@ -1005,7 +1014,6 @@ void GameLayer::drawRenderPanel()
                     usingGpu() ? &m_options.adaptiveGpu : &m_options.adaptiveCpu);
 
     auto& settings = m_options.tracer;
-    ImGui::Checkbox("Demo overlay (F2)", &m_showDemoOverlay);
     enumCombo("Mode", settings.mode);
     ImGui::Checkbox("Accumulate", &settings.accumulate);
     ImGui::SameLine();

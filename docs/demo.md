@@ -147,7 +147,41 @@ how many samples they fit, not in the frame time.
 | 6 | DLSS-RR | 7.66 | 4.05 | 1 | 131 |
 | 7 | Path tracing | 5.88 | 5.48 | 2 | 170 |
 
-`--preset N` starts on that rung, so the runs did not depend on the number keys. Raster
-traces nothing. Path tracing's upscaler is off, so its 5.88 ms is the full 930x844. The
-progress figures in `TODO.md` are a different setup (1280x720, `starcore-render`, no
-budget): they are not these frame rates.
+`--preset N` starts on that rung, so the runs did not depend on the number keys. Each
+column is its own median: the GPU time, the trace time and the sample count of one row
+are not always the same run.
+
+The FPS column is 1000 divided by the GPU time. That is the overlay's number turned
+into a rate, for a frame the GPU limits. Vsync was off. It is not a stopwatch around
+the whole window.
+
+Raster never traces (the trace column is 0). A frame is the shadow maps, the DLSS
+reconstruction and the effects: 2.17 ms, about 460 frames a second.
+
+Presets 2 to 6 all ask for about 8 ms and stop when that budget is spent, so their
+frame times sit between 7.1 and 7.7 ms. The budget is spent on samples after the
+frame's other GPU work, using the previous frame's time per sample. What changes from
+rung to rung is how many samples fit, not the frame rate:
+
+- Half (preset 3) traces one pixel of each 2x2. Four samples fit in 7.10 ms, 3.82 of
+  them tracing.
+- Full (preset 4) traces every pixel. One sample already takes 3.83 ms of tracing, so
+  the budget buys that one sample and the frame is 7.08 ms. Same rate as half, a
+  quarter of the paths.
+- Shadow maps (preset 2) still trace the paths. The maps are extra raster work, and
+  three samples fit in 7.63 ms.
+- Probes (preset 5) shorten the trace (median 2.28 ms, against 3.82 for preset 3): a
+  diffuse hit takes bounced light from the grid. Updating the probes is the rest of
+  the frame, which lands at 7.19 ms. Most runs fit three samples; one fit two.
+- DLSS-RR (preset 6) traces every pixel and denoises while it upscales, so the budget
+  buys one sample. It is the slowest hybrid rung here, 7.66 ms, and the upscaler in
+  the log is DLSS-RR, not a fallback.
+
+Path tracing does not upscale, so 5.88 ms is the full 930x844, and almost all of it
+is the trace (5.48 ms). Two samples fit; a third would have passed the budget. It is
+faster than the hybrid rungs in this still shot because those also denoise, upscale
+and run the effects. Move the view and it throws the image away and starts again,
+which this measurement does not show.
+
+The progress table in `TODO.md` is a different measurement: 1280x720, `starcore-render`,
+no 8 ms budget. Those milliseconds are not these frame rates.

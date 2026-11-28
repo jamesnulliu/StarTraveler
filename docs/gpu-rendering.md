@@ -39,7 +39,8 @@ of every layer.
 ### Reprojection and denoising
 
 Samples are reprojected across frames (motion vectors from each instance's previous transform,
-checked against the previous frame's surfaces; sharp reflections move with their reflected image),
+which a new scene starts at its current one; checked against the previous frame's surfaces; sharp
+reflections move with their reflected image),
 and the lighting, divided by the albedo, goes through SVGF's edge-avoiding a-trous filter, which
 fades out as samples accumulate: a still image converges to the path tracer's (also checked by the
 tests).
@@ -151,7 +152,13 @@ resolutions.
   history, reprojected with the motion of the nearest surface around and clipped to the colors
   around it (Salvi's variance clipping).
 - **FSR 3.1** (AMD, any GPU) and **DLSS** (NVIDIA RTX GPUs), the vendors'. One that cannot run
-  falls back to FSR, then TAAU.
+  falls back to FSR, then TAAU. DLSS's model can be chosen (`UpscalerSettings::dlssPreset`:
+  Default lets the SDK choose, K, M), and with K its auto exposure replaced by a fixed one
+  (`dlssExposure`, a 1x1 exposure texture); changing either recreates it.
+
+The temporal upscalers and post-processing take the time since the last frame: the wall clock
+(clamped to 1-100 ms) unless `GpuRenderOptions::frameTimeMs` fixes it, as offscreen measurements
+do so that waiting for a PNG does not change the next frame.
 
 Upscaled, the hybrid pipeline composes each frame with that frame's albedo, emission and
 unshadowed light (the filtered lighting stays as it is), so the upscaler gets every frame's own
@@ -202,19 +209,33 @@ build\msvc\bin\Release\starcore-render.exe scene.yaml --hybrid --half --frames 6
 | Group | Options |
 |---|---|
 | Output | `-o` (`renders/output.png`), `-W`/`-H` (960x540), `-f` frames (32), `-s` spp, `-b` bounces, `--seed`, `--firefly-clamp`, `-j` threads |
-| Camera | `--camera x y z`, `--look-at x y z`, `--fov`, `--exposure`, `--auto-exposure`, `--tone-mapper None\|Reinhard\|ACES\|AgX` |
-| Pipeline | `--gpu` (path tracing), `--hybrid`, `--raster`, `--validation` |
+| Camera | `--camera x y z`, `--look-at x y z` or `--camera-angles yaw pitch`, `--fov`, `--exposure`, `--auto-exposure`, `--tone-mapper None\|Reinhard\|ACES\|AgX` |
+| Pipeline | `--gpu` (path tracing), `--no-accumulation` (independent GPU path-traced frames), `--hybrid`, `--raster`, `--validation` |
 | Hybrid | `--view`, `--no-spatial`, `--no-temporal`, `--filter-passes`, `--half`, `--shadow-maps`, `--cache`, `--light-candidates N`, `--light-shafts` |
 | Probes | `--probes`, `--probe-spacing`, `--probe-grid x y z`, `--probe-rays`, `--probe-hysteresis`, `--probe-volume` |
 | Raster | `--no-shadows`, `--shadow-distance`, `--shadow-resolution` |
 | Motion | `--move x y z`, `--move-entity name x y z`, `--turn-entity name degrees`, `--still N`, `--dump-every N` |
 | Effects | `--bloom`, `--motion-blur`, `--vignette`, `--lens` |
-| Upscaling | `--upscaler`, `--quality`, `--sharpness` |
+| Upscaling | `--upscaler`, `--quality`, `--sharpness`, `--dlss-preset`, `--dlss-exposure` |
+| Measurement | `--gpu-timings path.csv`, `--frame-stats path.csv`, `--frame-ms`, `--direct-only` |
 
 The motion options move the camera or an entity every frame, for measuring the pipelines while
 things move; `--still N` keeps the last N frames still and `--dump-every N` writes intermediate
 frames.
 
-The [direct-light evaluation](eval-direct-light.md) uses `--gpu-timings` for per-frame GPU
-timestamps, `--camera-angles yaw pitch` for exact endpoints, and `-b 2 --direct-only` for
-emission and direct illumination.
+The options for measuring, which the [direct-light evaluation](eval-direct-light.md) and the
+[denoiser evaluation](eval-denoiser.md) use:
+
+- `--gpu-timings path.csv`: the GPU time of every submitted frame from timestamp queries
+  (one-based frame numbers, the setup frame marked; not with `--dump-every`). The log's line per
+  frame is wall-clock time.
+- `--frame-stats path.csv`: per frame, the seed, samples, accumulated frames, render and output
+  sizes, the active upscaler and whether its history was reset. State, not timing.
+- `--frame-ms N`: a fixed time step for the temporal upscalers and post-processing instead of
+  the wall clock, so that runs repeat.
+- `--gpu --no-accumulation`: every frame an independent path-traced image (the seed advanced by
+  the frame index), the baseline without denoising.
+- `-b 2 --direct-only`: emission and direct light only.
+- `--camera-angles yaw pitch`: an exact end pose.
+- `--dlss-preset Default|K|M`: the model of ordinary DLSS (Default: the SDK's choice);
+  `--dlss-exposure E` with K fixes its exposure in place of its auto exposure.

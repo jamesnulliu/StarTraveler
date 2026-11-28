@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <filesystem>
 #include <format>
@@ -65,8 +66,11 @@ struct GpuOptions
     std::uint32_t still = 0;  // The last frames: nothing moves.
     std::filesystem::path dumpPath;  // Every dumpEvery frames: the image (name_frame.png).
     std::uint32_t dumpEvery = 0;
-    std::filesystem::path gpuTimings;
     bool validation = false;
+    bool noAccumulation = false;  // GPU path tracer: independent samples every frame.
+    std::filesystem::path frameStats;
+    std::filesystem::path gpuTimings;
+    float frameTimeMs = 0.0F;
     // Effects (EffectSettings).
     bool bloom = false;
     bool motionBlur = false;
@@ -76,6 +80,8 @@ struct GpuOptions
     // Upscaling (UpscalerSettings).
     std::string upscaler = "Off";
     std::string quality = "Quality";
+    std::string dlssPreset = "Default";
+    float dlssExposure = 0.0F;
     float sharpness = 0.0F;
 };
 
@@ -88,7 +94,27 @@ auto renderOnGpu([[maybe_unused]] starcore::Scene& scene,
     -> std::optional<starcore::ColorImage>
 {
 #ifdef STARCORE_RENDER_GPU
+    std::ofstream frameStats;
+    std::vector<std::string> statsRows;
+    if (!gpuOptions.frameStats.empty()) {
+        std::error_code error;
+        if (!gpuOptions.frameStats.parent_path().empty()) {
+            std::filesystem::create_directories(gpuOptions.frameStats.parent_path(), error);
+        }
+        if (!error) {
+            frameStats.open(gpuOptions.frameStats);
+        }
+        if (error || !frameStats) {
+            SC_ERROR("Cannot open frame stats: {}", gpuOptions.frameStats.string());
+            return std::nullopt;
+        }
+        frameStats << "frame,seed,spp,accumulated_frames,render_width,render_height,"
+                      "output_width,output_height,active_upscaler,upscaler_history_reset,"
+                      "frame_time_ms,dlss_exposure\n";
+        statsRows.reserve(frames);
+    }
     starcore::GpuRenderOptions options;
+    options.frameTimeMs = gpuOptions.frameTimeMs;
     if (gpuOptions.hybrid) {
         options.pipeline = starcore::GpuPipeline::Hybrid;
         options.denoiser.spatial = gpuOptions.spatial;
@@ -132,6 +158,11 @@ auto renderOnGpu([[maybe_unused]] starcore::Scene& scene,
         return std::nullopt;
     }
     options.upscaling.sharpness = gpuOptions.sharpness;
+    options.upscaling.dlssExposure = gpuOptions.dlssExposure;
+    if (!starcore::enumFromString(gpuOptions.dlssPreset, options.upscaling.dlssPreset)) {
+        SC_ERROR("Unknown DLSS model \"{}\"", gpuOptions.dlssPreset);
+        return std::nullopt;
+    }
     auto context = starcore::vulkan::Context::create(
         {.applicationName = "starcore-render", .enableValidation = gpuOptions.validation});
     if (!context) {
@@ -156,8 +187,27 @@ auto renderOnGpu([[maybe_unused]] starcore::Scene& scene,
     (*tracer)->captureFrameTimings(!gpuOptions.gpuTimings.empty());
     // Incremental: moving an entity reprojects, as in a game.
     starcore::RenderSceneBuilder builder;
+    auto renderFrame = [&](std::uint32_t index) {
+        starcore::PathTracerSettings frameSettings = settings;
+        if (gpuOptions.noAccumulation) {
+            // The path tracer resets its RNG frame index with accumulation. Advance the
+            // seed explicitly so independent frames do not repeat the same noise pattern.
+            frameSettings.accumulate = false;
+            frameSettings.seed += index;
+        }
+        (*tracer)->render(builder.update(scene), camera, frameSettings, options);
+        if (frameStats.is_open()) {
+            statsRows.push_back(std::format("{},{},{},{},{},{},{},{},{},{},{:.9g},{:.9g}\n",
+                index + 1, frameSettings.seed, frameSettings.samplesPerPixel,
+                (*tracer)->accumulatedFrames(), (*tracer)->renderWidth(),
+                (*tracer)->renderHeight(), (*tracer)->width(), (*tracer)->height(),
+                starcore::enumToString((*tracer)->activeUpscaler()),
+                (*tracer)->upscalerHistoryReset() ? 1 : 0, (*tracer)->frameTimeMs(),
+                (*tracer)->dlssExposure()));
+        }
+    };
     // The first frame builds the acceleration structures.
-    (*tracer)->render(builder.update(scene), camera, settings, options);
+    renderFrame(0);
     (*tracer)->waitIdle();
     const auto start = std::chrono::steady_clock::now();
     for (std::uint32_t i = 1; i < frames; ++i) {
@@ -184,7 +234,7 @@ auto renderOnGpu([[maybe_unused]] starcore::Scene& scene,
                 camera.setRotation(camera.yaw() + gpuOptions.entityTurn, camera.pitch());
             }
         }
-        (*tracer)->render(builder.update(scene), camera, settings, options);
+        renderFrame(i);
         if (gpuOptions.dumpEvery > 0 && (i + 1) % gpuOptions.dumpEvery == 0) {
             starcore::ColorImage frame = (*tracer)->readImage();
             starcore::renderOverlay(scene, camera, frame);
@@ -239,6 +289,16 @@ auto renderOnGpu([[maybe_unused]] starcore::Scene& scene,
                 starcore::enumToString((*tracer)->activeUpscaler()), (*tracer)->renderWidth(),
                 (*tracer)->renderHeight(), (*tracer)->width(), (*tracer)->height());
     }
+    if (frameStats.is_open()) {
+        for (const std::string& row : statsRows) {
+            frameStats << row;
+        }
+        frameStats.close();
+        if (!frameStats) {
+            SC_ERROR("Cannot write frame stats: {}", gpuOptions.frameStats.string());
+            return std::nullopt;
+        }
+    }
     return image;
 #else
     SC_ERROR("Built without the GPU path tracer (STARCORE_BUILD_GPU=OFF)");
@@ -282,9 +342,17 @@ auto main(int argc, char** argv) -> int
     app.add_option("--firefly-clamp", settings.fireflyClamp,
                    "Clamp indirect light to this (0 = off; the game uses 8)");
     app.add_option("-j,--threads", threads, "Worker threads (0 = all)");
-    app.add_option("--gpu-timings", gpuOptions.gpuTimings, "GPU timestamp CSV per submitted frame");
     app.add_flag("--direct-only", settings.directOnly, "Keep emission and direct light only");
     app.add_flag("--gpu", gpu, "Path trace on the GPU (Vulkan ray queries)");
+    app.add_flag("--no-accumulation", gpuOptions.noAccumulation,
+                 "GPU path tracer: independent frames, seed + zero-based frame index");
+    app.add_option("--frame-stats", gpuOptions.frameStats,
+                   "GPU: frame state CSV (sizes, accumulation, active upscaler, history reset)");
+    app.add_option("--gpu-timings", gpuOptions.gpuTimings,
+                   "GPU: per-submission timestamp CSV; excludes PNG dumping runs");
+    app.add_option("--frame-ms", gpuOptions.frameTimeMs,
+                   "GPU: fixed simulation step in milliseconds (0: wall clock)")
+        ->check(CLI::Range(0.0F, 1000.0F));
     app.add_flag("--hybrid", gpuOptions.hybrid,
                  "GPU, hybrid pipeline: rasterized first hits, reprojection and denoising");
     app.add_flag("--raster", gpuOptions.raster,
@@ -356,6 +424,10 @@ auto main(int argc, char** argv) -> int
     app.add_option("--quality", gpuOptions.quality,
                    "Upscaler: Native, Quality, Balanced, Performance, \"Ultra performance\"");
     app.add_option("--sharpness", gpuOptions.sharpness, "Upscaler: FSR's sharpening, 0-1");
+    app.add_option("--dlss-exposure", gpuOptions.dlssExposure,
+                   "DLSS K: fixed HDR exposure; 0 retains internal auto exposure");
+    app.add_option("--dlss-preset", gpuOptions.dlssPreset,
+                   "Ordinary DLSS model: Default (SDK chooses), K, M; does not change resolution");
     app.add_option("--camera", cameraPosition, "Camera position x y z")->expected(3);
     auto* lookAtOption =
         app.add_option("--look-at", cameraLookAt, "Camera target x y z")->expected(3);
@@ -380,7 +452,25 @@ auto main(int argc, char** argv) -> int
         gpuOptions.move = {move[0], move[1], move[2]};
     }
     gpu = gpu || gpuOptions.hybrid || gpuOptions.raster;
-
+    if (!std::isfinite(gpuOptions.dlssExposure) || gpuOptions.dlssExposure < 0.0F ||
+        (gpuOptions.dlssExposure > 0.0F &&
+         (!(gpuOptions.hybrid || gpuOptions.raster) || gpuOptions.upscaler != "DLSS" ||
+          gpuOptions.dlssPreset != "K"))) {
+        SC_ERROR("--dlss-exposure requires a finite nonnegative value; fixed needs DLSS and K");
+        return EXIT_FAILURE;
+    }
+    if (!std::isfinite(gpuOptions.frameTimeMs) || (gpuOptions.frameTimeMs > 0.0F && !gpu)) {
+        SC_ERROR("--frame-ms requires a finite value and a GPU pipeline");
+        return EXIT_FAILURE;
+    }
+    if (gpuOptions.noAccumulation && (!gpu || gpuOptions.hybrid || gpuOptions.raster)) {
+        SC_ERROR("--no-accumulation requires --gpu without --hybrid or --raster");
+        return EXIT_FAILURE;
+    }
+    if (!gpuOptions.frameStats.empty() && !gpu) {
+        SC_ERROR("--frame-stats requires a GPU pipeline");
+        return EXIT_FAILURE;
+    }
     if (!gpuOptions.gpuTimings.empty() && (!gpu || gpuOptions.dumpEvery > 0)) {
         SC_ERROR("--gpu-timings requires a GPU pipeline and --dump-every 0");
         return EXIT_FAILURE;
@@ -440,7 +530,6 @@ auto main(int argc, char** argv) -> int
     if (cameraLookAt.size() == 3) {
         camera.lookAt({cameraLookAt[0], cameraLookAt[1], cameraLookAt[2]});
     }
-
     if (cameraAngles.size() == 2) {
         camera.setRotation(cameraAngles[0], cameraAngles[1]);
     }

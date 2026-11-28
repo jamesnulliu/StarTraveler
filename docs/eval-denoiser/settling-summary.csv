@@ -1,0 +1,13 @@
+shot,config,reference,horizon,seeds,settled_seeds,settle_median,settle_min,settle_max,terminal_flip_median,tail_drift_max
+cockpit-anvil-turn,asvgf-dlss-full,primary,512,3,3,116,116,116,0.03697715885937214,0.0050539591529521945
+cockpit-anvil-turn,rr-quality,primary,512,3,3,47,47,47,0.041600292548537254,0.015555500322203611
+cockpit-anvil-turn,asvgf-dlss-full,secondary,512,3,3,116,116,116,0.03693445771932602,0.0050598022011760935
+cockpit-anvil-turn,rr-quality,secondary,512,3,3,47,47,79,0.041567761451005936,0.01560169436980708
+mirror-glass-pass,asvgf-dlss-full,primary,512,3,3,286,286,287,0.010567489080131054,0.01473103933191872
+mirror-glass-pass,rr-quality,primary,512,3,3,1,1,2,0.010523248929530382,0.01379219810937482
+mirror-glass-pass,asvgf-dlss-full,secondary,512,3,3,286,286,287,0.010550301056355238,0.014414310010720972
+mirror-glass-pass,rr-quality,secondary,512,3,3,1,1,2,0.010504906065762043,0.013850733953949597
+fast-star-turn,asvgf-dlss-full,primary,512,3,3,172,168,172,0.032193297520279884,0.0057915681146242645
+fast-star-turn,rr-quality,primary,512,3,3,131,67,131,0.03641538321971893,0.012038863914176526
+fast-star-turn,asvgf-dlss-full,secondary,512,3,3,172,168,172,0.03213370591402054,0.005745015028126002
+fast-star-turn,rr-quality,secondary,512,3,3,131,67,131,0.03633933514356613,0.011949488950549184

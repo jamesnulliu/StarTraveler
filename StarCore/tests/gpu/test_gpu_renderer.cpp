@@ -916,6 +916,42 @@ auto upscaled(GpuRenderOptions options, Upscaler upscaler, UpscalerQuality quali
 
 }  // namespace
 
+TEST_CASE("GPU hybrid: a new scene starts with stationary object motion",
+          "[gpu][hybrid][initial-motion]")
+{
+    const GpuTest gpu;
+    auto tracer = gpu.makeRenderer(128, 96);
+    const Camera camera = makeCamera(128, 96);
+    GpuRenderOptions options = hybridOptions(false);
+    options.view = HybridView::Motion;
+    auto stationary = [](const ColorImage& image) {
+        return std::ranges::all_of(image.pixels(), [](std::uint32_t pixel) {
+            return (pixel & 0x00FFFFFFU) == 0;
+        });
+    };
+    for (float offset : {0.5F, -0.5F}) {
+        Scene scene;
+        Entity ball = scene.createEntity("Ball");
+        ball.get<TransformComponent>().translation = {offset, 0.5F, -2.0F};
+        ball.add<SphereComponent>(2.0F);
+        ball.add<MaterialComponent>();
+        RenderSceneBuilder builder;
+        tracer->render(builder.update(scene), camera, {}, options);
+        CHECK(stationary(tracer->readImage()));
+        const auto ids = tracer->readEntityIds();
+        REQUIRE(std::ranges::count_if(ids.pixels(), [](std::uint32_t id) {
+            return id != kNoEntityId;
+        }) > 100);
+        ball.patch<TransformComponent>([](TransformComponent& transform) {
+            transform.translation.x += 0.5F;
+        });
+        tracer->render(builder.update(scene), camera, {}, options);
+        CHECK_FALSE(stationary(tracer->readImage()));
+        tracer->render(builder.update(scene), camera, {}, options);
+        CHECK(stationary(tracer->readImage()));
+    }
+}
+
 TEST_CASE("GPU hybrid: emissive sphere, sky and white furnace", "[gpu][hybrid]")
 {
     const GpuTest gpu;
@@ -2711,6 +2747,36 @@ auto countPixels(const ColorImage& image, int channelIndex) -> std::size_t
 
 }  // namespace
 
+TEST_CASE("GPU time step: fixed temporal inputs survive readback and timing capture",
+          "[gpu][frame-time]")
+{
+    const GpuTest gpu(false);
+    Scene world;
+    unshadowedScene(world);
+    const auto scene = buildRenderScene(world);
+    const Camera camera = makeCamera(192, 144);
+    GpuRenderOptions options = kRaster;
+    options.upscaling.upscaler = Upscaler::Dlss;
+    options.upscaling.quality = UpscalerQuality::Quality;
+    options.upscaling.dlssPreset = DlssPreset::K;
+    options.frameTimeMs = 1000.0F / 60.0F;
+    auto render = [&](bool readback) {
+        auto renderer = gpu.makeRenderer(192, 144);
+        renderer->captureFrameTimings(!readback);
+        for (int i = 0; i < 32; ++i) {
+            renderer->render(scene, camera, {}, options);
+            REQUIRE(renderer->frameTimeMs() == options.frameTimeMs);
+            if (readback) {
+                (void)renderer->readImage();
+            }
+        }
+        return renderer->readImage();
+    };
+    const auto queued = render(false);
+    const auto drained = render(true);
+    CHECK(std::ranges::equal(queued.pixels(), drained.pixels()));
+}
+
 TEST_CASE("GPU effects: bloom spreads bright light around it", "[gpu][effects]")
 {
     const GpuTest gpu(false);
@@ -2984,6 +3050,98 @@ TEST_CASE("GPU upscaling: fewer pixels rendered, the output's reconstructed", "[
     renderer->render(renderScene, camera, {}, kRaster);
     CHECK(renderer->activeUpscaler() == Upscaler::Off);
     CHECK(renderer->renderWidth() == kWidth);
+}
+
+TEST_CASE("GPU DLSS: explicit model selection resets history and K preserves color",
+          "[gpu][upscaling][dlss-preset]")
+{
+    CHECK(UpscalerSettings{}.dlssPreset == DlssPreset::Default);
+    const GpuTest gpu(false);
+    Scene scene;
+    unshadowedScene(scene);
+    const RenderScene renderScene = buildRenderScene(scene);
+    constexpr std::uint32_t kWidth = 192;
+    constexpr std::uint32_t kHeight = 144;
+    const Camera camera = makeCamera(kWidth, kHeight);
+    auto native = gpu.makeRenderer(kWidth, kHeight);
+    for (int i = 0; i < 64; ++i) {
+        native->render(renderScene, camera, {}, kRaster);
+    }
+    auto renderer = upscalingRenderer(gpu, Upscaler::Dlss, kWidth, kHeight);
+    auto options = upscaled(kRaster, Upscaler::Dlss, UpscalerQuality::Performance);
+    options.upscaling.dlssPreset = DlssPreset::K;
+    for (int i = 0; i < 64; ++i) {
+        renderer->render(renderScene, camera, {}, options);
+        CHECK(renderer->upscalerHistoryReset() == (i == 0));
+    }
+    REQUIRE(renderer->activeUpscaler() == Upscaler::Dlss);
+    CHECK(renderer->renderWidth() == kWidth / 2);
+    CHECK(renderer->renderHeight() == kHeight / 2);
+    const auto difference = blockDifference(renderer->readImage(), native->readImage());
+    INFO("K worst block " << difference.worst << ", mean " << difference.mean);
+    CHECK(difference.worst < 6.0F);
+    CHECK(difference.mean < 0.5F);
+
+    // Two queued frames must finish before the old NGX feature is replaced.
+    renderer->render(renderScene, camera, {}, options);
+    renderer->render(renderScene, camera, {}, options);
+    for (const auto preset : {DlssPreset::M, DlssPreset::Default, DlssPreset::K}) {
+        options.upscaling.dlssPreset = preset;
+        renderer->render(renderScene, camera, {}, options);
+        CHECK(renderer->upscalerHistoryReset());
+        renderer->render(renderScene, camera, {}, options);
+        CHECK_FALSE(renderer->upscalerHistoryReset());
+        CHECK(renderer->activeUpscaler() == Upscaler::Dlss);
+    }
+}
+
+TEST_CASE("GPU DLSS: fixed exposure preserves color and resets only when changed",
+          "[gpu][upscaling][dlss-exposure]")
+{
+    CHECK(UpscalerSettings{}.dlssExposure == 0.0F);
+    const GpuTest gpu(false);
+    Scene scene;
+    unshadowedScene(scene);
+    const auto renderScene = buildRenderScene(scene);
+    constexpr std::uint32_t kWidth = 192;
+    constexpr std::uint32_t kHeight = 144;
+    const auto camera = makeCamera(kWidth, kHeight);
+    auto native = gpu.makeRenderer(kWidth, kHeight);
+    for (int i = 0; i < 64; ++i) {
+        native->render(renderScene, camera, {}, kRaster);
+    }
+    auto queued = upscalingRenderer(gpu, Upscaler::Dlss, kWidth, kHeight);
+    auto dumped = upscalingRenderer(gpu, Upscaler::Dlss, kWidth, kHeight);
+    auto options = upscaled(kRaster, Upscaler::Dlss, UpscalerQuality::Quality);
+    options.upscaling.dlssPreset = DlssPreset::K;
+    options.upscaling.dlssExposure = 1.0F;
+    options.frameTimeMs = 1000.0F / 60.0F;
+    for (int i = 0; i < 64; ++i) {
+        queued->render(renderScene, camera, {}, options);
+        CHECK(queued->upscalerHistoryReset() == (i == 0));
+        CHECK(queued->dlssExposure() == 1.0F);
+    }
+    for (int i = 0; i < 64; ++i) {
+        dumped->render(renderScene, camera, {}, options);
+        (void)dumped->readImage();
+    }
+    const auto image = queued->readImage();
+    const auto other = dumped->readImage();
+    CHECK(std::ranges::equal(image.pixels(), other.pixels()));
+    const auto difference = blockDifference(image, native->readImage());
+    INFO("fixed exposure: worst " << difference.worst << ", mean " << difference.mean);
+    CHECK(difference.worst < 6.0F);
+    CHECK(difference.mean < 0.5F);
+    for (float exposure : {2.0F, 1.0F, 0.0F}) {
+        queued->render(renderScene, camera, {}, options);
+        queued->render(renderScene, camera, {}, options);
+        options.upscaling.dlssExposure = exposure;
+        queued->render(renderScene, camera, {}, options);
+        CHECK(queued->upscalerHistoryReset());
+        CHECK(queued->dlssExposure() == exposure);
+        queued->render(renderScene, camera, {}, options);
+        CHECK_FALSE(queued->upscalerHistoryReset());
+    }
 }
 
 TEST_CASE("GPU upscaling: falls back where the upscaler cannot run", "[gpu][upscaling]")

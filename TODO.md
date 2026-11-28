@@ -136,24 +136,39 @@ folder.
 ### `feature/eval-denoiser`
 
 The second required part: our denoiser (A-SVGF) against no denoising and against
-DLSS-RR, with the scripts of `feature/eval-direct-light` and its three shots. Until
-they land, run `starcore-render` by hand to choose the configurations.
+DLSS-RR, on the same three shots. Results and how to run it:
+[denoiser evaluation](docs/eval-denoiser.md) (RTX 3070 Laptop, driver 610.91, 1280x720,
+seeds 17/29/43).
 
-- [ ] The configurations: no denoising (`--gpu`, one path per pixel), temporal reuse
-  only (`--hybrid --no-spatial`), the spatial filter only (`--hybrid
-  --no-temporal`), A-SVGF (`--hybrid`), DLSS-RR (`--hybrid --upscaler DLSS-RR`).
-  All at the same render resolution and upscaling ratio (ours with DLSS at the
-  `--quality` DLSS-RR has). DLSS-RR traces every pixel, so ours at Full as well as
-  Half.
-- [ ] Error and time: FLIP and GPU time per frame on the three shots.
-- [ ] Lag: a shot that moves, then stands still (`--still N`, every frame written
-  with `--dump-every 1`); FLIP of each still frame against the reference at the end
-  pose. How many frames each denoiser takes to come within 10% of the error it
-  settles at.
-- [ ] Crops for the report: one region without denoising, with ours, with DLSS-RR,
-  and in the reference.
-- [ ] The table, the plot and a paragraph for the report: how much error each
-  denoiser removes, for how many milliseconds, and how long it lags.
+- [x] The configurations (`StarTraveler/tools/eval/denoiser-protocol.json`), in two
+  groups never mixed: native, no upscaler (independent path-traced frames with
+  `--gpu --no-accumulation`, the hybrid pipeline unfiltered, temporal only, spatial
+  only, A-SVGF Full and Half); and Quality (A-SVGF Full or Half + DLSS against
+  DLSS-RR, 853x480 to 1280x720). `--no-temporal` also resets DLSS's history, hence
+  the native group.
+- [x] Error and time on the three shots, with `check_measurement.py` (references)
+  and `run_formal.py` (the runs): A-SVGF Full has 48.6/3.6/48.6% less FLIP than the
+  unfiltered hybrid pipeline for 2.6/1.6/3.0 ms more; DLSS-RR has the least error in
+  the Quality group, for 1.8-2.4 ms more than A-SVGF Full + DLSS (with a fixed time
+  step and DLSS model K at a fixed exposure).
+- [x] Lag: 512 still frames after each shot's motion, FLIP of every one against both
+  references; the frame after which a method stays within 10% of its own final
+  error. DLSS-RR settles first on all three shots (47/1/131 frames against
+  116/286/172), A-SVGF Full + DLSS ends with less error on two of them.
+- [x] Crops (written by `run_formal.py`) and the table, plots and paragraph:
+  `docs/eval-denoiser.md`, summaries in `docs/eval-denoiser/`.
+- [x] Fixes the measurements needed: motion vectors of a new scene start still
+  (`[initial-motion]` test); `--frame-ms` (a fixed time step for the temporal
+  passes); `--dlss-preset` and `--dlss-exposure`; `--frame-stats`.
+- [ ] The settling and fixed-input Quality runs (`run_production_lag.py`,
+  `run_quality_revalidation.py`) only accept the renderer binary that passed their
+  preflight (`validate_temporal_prefix.py`), which starts from captures not in the
+  repository: make them run from a clean checkout, one command.
+- [ ] One tool for both evaluations: `direct_light.py` and `run_formal.py` share
+  the shots and `prepare_shot`, but not the runner or the CSV.
+- [ ] DLSS at Performance with the SDK's default model (M on an RTX 3070 Laptop,
+  driver 610.91) misses its color test (0.5097 against < 0.5); K passes, and the
+  whole suite passes on an RTX 4060 Laptop GPU (driver 617.42).
 
 Done when: one command (the shared scripts) reproduces the denoiser's table, plot
 and lag.

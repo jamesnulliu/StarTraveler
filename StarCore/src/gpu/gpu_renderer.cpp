@@ -462,6 +462,11 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
                          const PathTracerSettings& settings, const GpuRenderOptions& options,
                          std::span<const RenderParticle> particles)
 {
+    SC_VERIFY(std::isfinite(options.upscaling.dlssExposure) &&
+                  options.upscaling.dlssExposure >= 0.0F &&
+                  (options.upscaling.dlssExposure == 0.0F ||
+                   options.upscaling.dlssPreset == DlssPreset::K),
+              "Fixed DLSS exposure requires a finite positive value and explicit K");
     SC_VERIFY(rayTracing() || !tracesRays(options.pipeline),
               "the {} pipeline needs ray queries, which {} does not have",
               enumToString(options.pipeline), m_context->deviceInfo().name);
@@ -500,7 +505,9 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
                 continue;
             }
             const auto index = static_cast<std::size_t>(std::to_underlying(kind));
-            if (m_upscalerRenderSizes[index] != renderSize ||
+            const bool modelChanged = candidate->setDlssPreset(options.upscaling.dlssPreset);
+            const bool exposureChanged = candidate->setDlssExposure(options.upscaling.dlssExposure);
+            if (modelChanged || exposureChanged || m_upscalerRenderSizes[index] != renderSize ||
                 m_upscalerOutputSizes[index] != outputSize) {
                 m_context->waitIdle();
                 waitIdle();
@@ -537,6 +544,7 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
         }
     }
     m_activeUpscaler = upscaling;
+    m_activeDlssExposure = upscaling == Upscaler::Dlss ? options.upscaling.dlssExposure : 0.0F;
 
     // Pipelines are created when first used, at the rendered size.
     if (pipeline == GpuPipeline::PathTracing && !m_pathTracing) {
@@ -573,10 +581,14 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
         m_frameNumber == 0 || pipeline != m_lastPipeline || upscaling != m_lastUpscaler ||
         resized || upscalerResized || scene.contentVersion != m_lastContentVersion ||
         (pipeline == GpuPipeline::Hybrid && m_frameIndex == 0);
+    m_upscalerHistoryReset = upscaler != nullptr && (upscalerReset || !finalImage);
     const double now = secondsNow();
-    const auto frameMs = static_cast<float>(
+    const auto wallClockMs = static_cast<float>(
         m_lastFrameTime > 0.0 ? std::clamp((now - m_lastFrameTime) * 1000.0, 1.0, 100.0)
                               : 1000.0 / 60.0);
+    const float frameMs = options.frameTimeMs > 0.0F && std::isfinite(options.frameTimeMs)
+                              ? options.frameTimeMs : wallClockMs;
+    m_frameTimeMs = frameMs;
     m_lastFrameTime = now;
 
     const VkCommandBuffer commandBuffer = slot.commandBuffer;
@@ -689,7 +701,7 @@ void GpuRenderer::render(const RenderScene& scene, const Camera& camera,
             .output = &m_upscaled,
             // The pipelines' (hybrid: HybridFrame::frameIndex).
             .jitter = gpu::jitter(static_cast<std::uint32_t>(m_frameNumber)),
-            .reset = upscalerReset || !finalImage,
+            .reset = m_upscalerHistoryReset,
             .frameMs = frameMs,
             .verticalFov = glm::radians(camera.verticalFov()),
             .nearPlane = gpu::kNearPlane,

@@ -1261,6 +1261,21 @@ void GameLayer::drawRenderPanel()
             if (m_gpuRenderer->activeUpscaler() == Upscaler::Fsr) {
                 ImGui::SliderFloat("Sharpness", &upscaling.sharpness, 0.0F, 1.0F, "%.2f");
             }
+            if (m_gpuRenderer->activeUpscaler() == Upscaler::Dlss) {
+                enumCombo("DLSS model", upscaling.dlssPreset);
+                if (upscaling.dlssPreset == DlssPreset::K) {
+                    bool fixed = upscaling.dlssExposure > 0.0F;
+                    if (ImGui::Checkbox("Fixed DLSS exposure", &fixed)) {
+                        upscaling.dlssExposure = fixed ? 1.0F : 0.0F;
+                    }
+                    if (fixed) {
+                        ImGui::SliderFloat("DLSS HDR exposure", &upscaling.dlssExposure,
+                                           0.01F, 16.0F, "%.2f");
+                    }
+                } else {
+                    upscaling.dlssExposure = 0.0F;
+                }
+            }
             ImGui::Text("%s: %ux%u -> %ux%u",
                         enumToString(m_gpuRenderer->activeUpscaler()).data(),
                         m_gpuRenderer->renderWidth(), m_gpuRenderer->renderHeight(),

@@ -1,3 +1,4 @@
+#include <cmath>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
@@ -73,14 +74,30 @@ auto main(int argc, char** argv) -> int
                    "Off, TAAU, FSR, DLSS (default; falls back to FSR, then TAAU), DLSS-RR (also "
                    "denoises the hybrid pipeline; falls back to DLSS)");
     std::string quality = "Quality";
+    std::string dlssPreset = "Default";
     cli.add_option("--quality", quality,
                    "Upscaler: Native, Quality, Balanced, Performance, \"Ultra performance\"");
+    cli.add_option("--dlss-preset", dlssPreset, "Ordinary DLSS model: Default, K, M");
+    cli.add_option("--dlss-exposure", options.upscaling.dlssExposure,
+                   "DLSS K: fixed HDR exposure; 0 retains internal auto exposure");
     CLI11_PARSE(cli, argc, argv);
 
     starcore::log::init({.level = spdlog::level::debug});
     SC_INFO("StarTraveler (StarCore {})", starcore::kVersionString);
     if (!starcore::enumFromString(view, options.view)) {
         SC_CRITICAL("Unknown view \"{}\"", view);
+        starcore::log::shutdown();
+        return EXIT_FAILURE;
+    }
+    if (!starcore::enumFromString(dlssPreset, options.upscaling.dlssPreset)) {
+        SC_CRITICAL("Unknown DLSS model \"{}\"", dlssPreset);
+        starcore::log::shutdown();
+        return EXIT_FAILURE;
+    }
+    if (!std::isfinite(options.upscaling.dlssExposure) || options.upscaling.dlssExposure < 0.0F ||
+        (options.upscaling.dlssExposure > 0.0F &&
+         options.upscaling.dlssPreset != starcore::DlssPreset::K)) {
+        SC_CRITICAL("Fixed DLSS exposure requires a finite positive value and explicit K");
         starcore::log::shutdown();
         return EXIT_FAILURE;
     }

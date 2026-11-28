@@ -15,6 +15,8 @@ Without a scene it opens the default one, `StarTraveler/assets/scenes/blue_star.
 | `--raster` | start with ray tracing off: rasterize on the GPU |
 | `--upscaler NAME` | `Off`, `TAAU`, `FSR`, `DLSS` (default), `DLSS-RR` ([Upscaling](#upscaling)) |
 | `--quality NAME` | `Native`, `Quality` (default), `Balanced`, `Performance`, `"Ultra performance"` |
+| `--dlss-preset NAME` | the model of DLSS (not DLSS-RR): `Default` (the SDK's choice), `K`, `M` |
+| `--dlss-exposure E` | with `--dlss-preset K`: a fixed exposure for DLSS in place of its auto exposure (0: auto) |
 | `--view NAME` | the hybrid pipeline's intermediate images: `Final` (default), `Noisy`, `Albedo`, `Direct`, `Visibility`, `Lighting`, `Specular`, `Glass`, `Variance`, `Motion`, `History` |
 | `--cruise` | fly forward at full thrust, for screenshots of the effects |
 | `--preset N` | start on demo rung N (1-7, the same as the number keys) |
@@ -122,6 +124,9 @@ panel's "Upscaling" picks the upscaler (or Off) and how much is rendered, from N
 DLSS-RR (NVIDIA's Ray Reconstruction) also denoises: less noise and lag while flying than the
 engine's denoiser, for more GPU time (every pixel traced); with Balanced or Performance it costs
 about as much as DLSS at Quality.
+
+While DLSS runs, "DLSS model" picks its model (Default lets the SDK choose) and, with K, "Fixed
+DLSS exposure" replaces its auto exposure; changing either restarts its history.
 
 ## Effects
 

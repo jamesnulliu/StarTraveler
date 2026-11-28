@@ -26,6 +26,11 @@ namespace starcore::vulkan
 class Context;
 }
 
+namespace starcore
+{
+enum class DlssPreset : std::uint8_t;
+}
+
 namespace starcore::gpu
 {
 
@@ -69,6 +74,15 @@ public:
      * @return Whether it can upscale between them (DLSS refuses tiny ones).
      */
     virtual auto resize(UVec2 renderSize, UVec2 outputSize) -> bool = 0;
+
+    /** @brief Change the SR model hint; true requires an idle resize before recording. */
+    virtual auto setDlssPreset(DlssPreset /*preset*/) -> bool
+    {
+        return false;
+    }
+
+    /** @brief Fixed K-model exposure (0: internal auto); true requires an idle resize. */
+    virtual auto setDlssExposure(float /*exposure*/) -> bool { return false; }
 
     /**
      * @brief Record the upscaling of a frame: after the pipeline's writes of

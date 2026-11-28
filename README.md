@@ -82,6 +82,8 @@ StarTraveler/                 repository root: a CMake workspace
   post-processing, and offscreen renders with `starcore-render`.
 - [Direct-light evaluation](docs/eval-direct-light.md): reproduce the three-shot comparison,
   reference noise estimates, plots and crops.
+- [Denoiser evaluation](docs/eval-denoiser.md): A-SVGF against no denoising and DLSS-RR on the
+  same shots: error, GPU time, settling after motion; sources and the AI assistance record.
 - [Models and scenes](docs/assets.md): regenerating the ship model and the blue star scene.
 - [StarCore/README.md](StarCore/README.md): the engine on its own, with C++ and Python examples.
 

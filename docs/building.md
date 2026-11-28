@@ -34,7 +34,8 @@ configure, which can wait a long time on vcpkg's lock.
 The clean build is the `msvc` preset: Visual Studio 2026, MSBuild (the Build Tools are enough;
 a full IDE is not required). Where that generator is not installed, `msvc-vs2022` is the same
 build with Visual Studio 2022 (`cmake --preset msvc-vs2022`, then
-`cmake --build --preset msvc-vs2022-release` and `ctest --preset msvc-vs2022-release`). The
+`cmake --build --preset msvc-vs2022-release`, and `ctest --test-dir build/msvc-vs2022 -C Release`:
+it has no test preset). The
 `mingw` preset is not checked.
 
 `VCPKG_ROOT` has to be set to a clone of [vcpkg](https://github.com/microsoft/vcpkg) (`git clone`,

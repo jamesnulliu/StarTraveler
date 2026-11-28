@@ -258,12 +258,29 @@ struct EnumNames<UpscalerQuality>
     return 1.0F;
 }
 
+/** @brief Ordinary DLSS model hint; Default leaves selection to the installed SDK. */
+enum class DlssPreset : std::uint8_t
+{
+    Default,
+    K,
+    M,
+};
+
+template <>
+struct EnumNames<DlssPreset>
+{
+    static constexpr std::array kNames = {"Default", "K", "M"};
+};
+
 struct UpscalerSettings
 {
     // Where it cannot run (GpuRenderer::upscalerError; DLSS also refuses tiny
     // images), FSR, then TAAU.
     Upscaler upscaler = Upscaler::Off;
     UpscalerQuality quality = UpscalerQuality::Quality;
+    DlssPreset dlssPreset = DlssPreset::Default;  // SR only; RR retains its own model.
+    // SR with explicit K: 0 retains internal auto exposure; positive fixes its HDR exposure.
+    float dlssExposure = 0.0F;
     float sharpness = 0.0F;  // FSR's sharpening, 0 to 1 (the others: none).
 
     auto operator==(const UpscalerSettings&) const -> bool = default;
@@ -332,6 +349,9 @@ struct GpuRenderOptions
     HybridView view = HybridView::Final;
     EffectSettings effects;
     UpscalerSettings upscaling;  // Hybrid and Raster.
+    // Positive: fixed simulation step for temporal upscalers/post processing (milliseconds).
+    // Zero: wall clock, clamped to 1..100 ms, for interactive rendering.
+    float frameTimeMs = 0.0F;
 
     auto operator==(const GpuRenderOptions&) const -> bool = default;
 };
@@ -453,6 +473,12 @@ public:
         return m_activeUpscaler;
     }
 
+    /** @brief Reset flag passed to the last frame's upscaler; false with none active. */
+    [[nodiscard]] auto upscalerHistoryReset() const noexcept -> bool
+    {
+        return m_upscalerHistoryReset;
+    }
+
     /** @brief Layout the output image stays in (storage writes and sampling). */
     static constexpr VkImageLayout kOutputLayout = VK_IMAGE_LAYOUT_GENERAL;
     /** @brief Tone-mapped RGBA8 result; recreated by resize(). */
@@ -466,6 +492,9 @@ public:
     {
         return m_frameIndex;
     }
+    /** @brief Time step actually supplied to the last frame's temporal/post passes. */
+    [[nodiscard]] auto frameTimeMs() const noexcept -> float { return m_frameTimeMs; }
+    [[nodiscard]] auto dlssExposure() const noexcept -> float { return m_activeDlssExposure; }
     /** @brief GPU time of the last completed frame in milliseconds (0 if unknown). */
     [[nodiscard]] auto gpuTimeMs() const noexcept -> float
     {
@@ -566,7 +595,10 @@ private:
     std::array<UVec2, kUpscalers> m_upscalerOutputSizes{};
     std::array<bool, kUpscalers> m_upscalerReady{};
     Upscaler m_activeUpscaler = Upscaler::Off;
+    float m_activeDlssExposure = 0.0F;
+    bool m_upscalerHistoryReset = false;
     double m_lastFrameTime = 0.0;  // Seconds (steady clock) of the last render().
+    float m_frameTimeMs = 0.0F;
 
     std::uint32_t m_frameIndex = 0;  // Accumulated frames since the last reset.
     float m_gpuTimeMs = 0.0F;

@@ -84,7 +84,8 @@ shadow-method comparisons, eight fell within their reference-pair FLIP, two favo
 traced shadows and two favored shadow maps beyond that threshold. The four group medians
 for traced shadows were 0.16–0.86 ms faster in this run. The Windows desktop was running
 normally during the sweep. [PR #2](https://github.com/jamesnulliu/StarTraveler/pull/2)
-records the results and collection conditions.
+records the results and collection conditions. The per-configuration medians and reference
+noise estimates are in [summary.csv](eval-direct-light/summary.csv).
 
 The Visual Studio 2022 Release build passed 156 CTest cases and the four evaluation script
 tests. Three upscaling cases were skipped with the optional FSR and DLSS SDKs disabled.

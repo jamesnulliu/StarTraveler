@@ -1,0 +1,22 @@
+# From (0,0,3), the mirror reflects the white receiver behind the camera.
+# Only the receiver sees the off-axis lamp. The middle of the mirror has
+# no direct radiance, but is bright when a second scattering is allowed.
+StarCoreScene: 1
+Environment:
+  SkyColor: [0, 0, 0]
+Entities:
+  - Id: 1
+    Name: Mirror
+    Transform: {Translation: [0, 0, 0]}
+    Sphere: {Radius: 1}
+    Material: {Albedo: [1, 1, 1], Metallic: 1, Roughness: 0}
+  - Id: 2
+    Name: Receiver
+    Transform: {Translation: [0, 0, 18]}
+    Sphere: {Radius: 12}
+    Material: {Albedo: [0.8, 0.8, 0.8], Metallic: 0, Roughness: 1}
+  - Id: 3
+    Name: Lamp
+    Transform: {Translation: [4, 0, 1]}
+    Sphere: {Radius: 0.7}
+    Material: {Albedo: [0, 0, 0], EmissionColor: [1, 1, 1], EmissionPower: 20}

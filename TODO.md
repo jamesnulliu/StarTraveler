@@ -94,38 +94,29 @@ live with their name and time on screen.
 
 ### `feature/eval-direct-light`
 
-The measuring scripts, which `feature/eval-denoiser` uses as well, then the first
-required part. Agree with the owner of `feature/eval-denoiser` on day 1 on the
-configuration file and the CSV's columns.
+The measuring scripts share the shot schema and first six CSV columns with the
+denoiser evaluation.
 
-- [ ] The scripts that made the progress figures, into `StarTraveler/tools/eval/`
-  (they are not in the repository yet: the branch starts by adding them), made
-  into a tool:
-  - shots and configurations in one file, so that `feature/eval-denoiser` adds its
-    own without touching the code. A shot: the scene, the camera and look-at, the
-    motion (`--turn-entity Ship 0.5`, `--move`, `--still`), the frames. A
-    configuration: a name and its `starcore-render` flags;
-  - nothing hard-coded: the exe, the scenes and the output folder are arguments;
-  - one command runs it all: the scenes (the game's ship put into `blue_star.yaml`
-    at a pose), the renders (3 seeds each, configurations alternated), the
-    references, FLIP, one CSV (shot, config, seed, gpu_ms, trace_ms, flip), plots
-    of error against GPU time, image crops;
-  - FLIP: NVIDIA's `flip-evaluator` (pip), LDR-FLIP on the PNGs.
-- [ ] Three shots, with the moves `starcore-render` has (no keyframed camera
-  paths): the cockpit turning toward the Anvil (the progress shot), a slow pass by
-  the mirror and the glass, a fast turn past the star (the light changes).
-- [ ] A reference per shot: the GPU path tracer at the shot's last pose, 8192 spp
-  (`--gpu -f 2048 -s 4`, about 22 s at 1280x720). Score a second seed of it against
-  it for its own noise (the progress shot: FLIP 0.034); differences below that mean
-  nothing.
-- [ ] Direct light on the three shots, FLIP and GPU time per frame: the raster
+- [x] One command prepares scenes with the game's ship, alternates configurations across
+  three seeds, renders references, and writes NVIDIA LDR-FLIP on the PNGs, GPU timings,
+  a CSV, error/time plots and image crops. The JSON holds the shots and named render
+  flags. Executable, assets and output paths are CLI arguments.
+  See [reproduction instructions](docs/eval-direct-light.md).
+- [x] Three fixed-motion shots. The cockpit turns toward the Anvil from a reproducible
+  replacement for the progress shot's undocumented pose, the camera passes the mirror
+  and glass slowly, and the cockpit turns quickly past the star.
+- [x] Two independent GPU path-traced references per shot and mode at the last
+  pose, 8192 spp each (`--gpu -f 2048 -s 4`). Their pairwise FLIP estimates the
+  reference noise.
+- [x] Direct light on the three shots, FLIP and GPU time per frame: the raster
   pipeline (shadow maps, no rays), the hybrid pipeline with traced shadows and with
   shadow maps (both at Half and Full). Once on the whole image, once on direct light
-  alone: `-b 2` is direct light only in the path tracer (the tests use it so);
-  check that the hybrid pipeline honours it on a case whose answer is known before
-  trusting the numbers.
-- [ ] The table, the plot, crops and a paragraph for the report: what traced shadows
-  buy over shadow maps, and for how many milliseconds.
+  alone. The tool uses `-b 2 --direct-only` to exclude second-scatter light sampling
+  and checks direct illumination and an indirect mirror reflection before measuring.
+- [x] The generated report includes the table, plots, crops and paired results
+  for traced shadows versus shadow maps.
+- [x] Record the RTX 4090 timing results and the normal Windows desktop
+  conditions in [PR #2](https://github.com/jamesnulliu/StarTraveler/pull/2).
 
 Done when: one command reproduces the direct light's table and plot into an empty
 folder.

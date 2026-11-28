@@ -214,3 +214,7 @@ build\msvc\bin\Release\starcore-render.exe scene.yaml --hybrid --half --frames 6
 The motion options move the camera or an entity every frame, for measuring the pipelines while
 things move; `--still N` keeps the last N frames still and `--dump-every N` writes intermediate
 frames.
+
+The [direct-light evaluation](eval-direct-light.md) uses `--gpu-timings` for per-frame GPU
+timestamps, `--camera-angles yaw pitch` for exact endpoints, and `-b 2 --direct-only` for
+emission and direct illumination.

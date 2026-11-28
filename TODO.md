@@ -98,22 +98,11 @@ The measuring scripts, which `feature/eval-denoiser` uses as well, then the firs
 required part. Agree with the owner of `feature/eval-denoiser` on day 1 on the
 configuration file and the CSV's columns.
 
-- [ ] The scripts that made the progress figures, into `StarTraveler/tools/eval/`
-  (they are not in the repository yet: the branch starts by adding them), made
-  into a tool:
-  - shots and configurations in one file, so that `feature/eval-denoiser` adds its
-    own without touching the code. A shot: the scene, the camera and look-at, the
-    motion (`--turn-entity Ship 0.5`, `--move`, `--still`), the frames. A
-    configuration: a name and its `starcore-render` flags;
-  - nothing hard-coded: the exe, the scenes and the output folder are arguments;
-  - one command runs it all: the scenes (the game's ship put into `blue_star.yaml`
-    at a pose), the renders (3 seeds each, configurations alternated), the
-    references, FLIP, one CSV (shot, config, seed, gpu_ms, trace_ms, flip), plots
-    of error against GPU time, image crops;
-  - FLIP: NVIDIA's `flip-evaluator` (pip), LDR-FLIP on the PNGs.
-- [ ] Three shots, with the moves `starcore-render` has (no keyframed camera
-  paths): the cockpit turning toward the Anvil (the progress shot), a slow pass by
-  the mirror and the glass, a fast turn past the star (the light changes).
+- [x] One-command measuring tool in `StarTraveler/tools/eval/`, with a shared shot/configuration
+  file, alternating seeds, GPU timestamps, NVIDIA LDR-FLIP, CSV, plots and crops.
+  See [reproduction instructions](docs/eval-direct-light.md).
+- [x] The three shots use the denoiser branch's reproducible Anvil turn (the original
+  progress pose was unavailable), mirror/glass pass and fast star turn, with explicit end poses.
 - [ ] A reference per shot: the GPU path tracer at the shot's last pose, 8192 spp
   (`--gpu -f 2048 -s 4`, about 22 s at 1280x720). Score a second seed of it against
   it for its own noise (the progress shot: FLIP 0.034); differences below that mean
@@ -121,9 +110,8 @@ configuration file and the CSV's columns.
 - [ ] Direct light on the three shots, FLIP and GPU time per frame: the raster
   pipeline (shadow maps, no rays), the hybrid pipeline with traced shadows and with
   shadow maps (both at Half and Full). Once on the whole image, once on direct light
-  alone: `-b 2` is direct light only in the path tracer (the tests use it so);
-  check that the hybrid pipeline honours it on a case whose answer is known before
-  trusting the numbers.
+  alone: use `-b 2 --direct-only` to exclude second-surface light sampling. The tool
+  checks the receiver and its mirror reflection before collecting the measurements.
 - [ ] The table, the plot, crops and a paragraph for the report: what traced shadows
   buy over shadow maps, and for how many milliseconds.
 

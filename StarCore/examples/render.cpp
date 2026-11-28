@@ -16,8 +16,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <filesystem>
-#include <fstream>
 #include <format>
+#include <fstream>
 #include <optional>
 #include <string>
 #include <vector>
@@ -169,6 +169,11 @@ auto renderOnGpu([[maybe_unused]] starcore::Scene& scene,
         SC_ERROR("Vulkan: {}", context.error());
         return std::nullopt;
     }
+    VkPhysicalDeviceDriverProperties driver{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES};
+    VkPhysicalDeviceProperties2 device{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2, &driver};
+    vkGetPhysicalDeviceProperties2((*context)->physicalDevice(), &device);
+    SC_INFO("Vulkan device: {} | {} | {} ({})", device.properties.deviceName, driver.driverName,
+            driver.driverInfo, device.properties.driverVersion);
     auto tracer = starcore::GpuRenderer::create(**context);
     if (!tracer) {
         SC_ERROR("{}", tracer.error());
@@ -250,6 +255,7 @@ auto renderOnGpu([[maybe_unused]] starcore::Scene& scene,
                 (*tracer)->traceTimeMs());
     }
     if (!gpuOptions.gpuTimings.empty()) {
+        SC_INFO("Endpoint accumulation: {} frames", (*tracer)->accumulatedFrames());
         auto samples = (*tracer)->takeFrameTimings();
         std::ranges::sort(samples, {}, &starcore::GpuRenderer::FrameTiming::frameNumber);
         if (samples.size() != frames) {
@@ -268,8 +274,9 @@ auto renderOnGpu([[maybe_unused]] starcore::Scene& scene,
                 SC_ERROR("GPU timestamp frame numbering is incomplete");
                 return std::nullopt;
             }
+            const float traceMs = starcore::tracesRays(options.pipeline) ? sample.traceMs : 0.0F;
             output << std::format("{},{:.6f},{:.6f},{}\n", i + 1,
-                sample.gpuMs, sample.traceMs, i == 0 ? 1 : 0);
+                                  sample.gpuMs, traceMs, i == 0 ? 1 : 0);
         }
         output.close();
         if (error || !output) {
@@ -335,6 +342,7 @@ auto main(int argc, char** argv) -> int
     app.add_option("--firefly-clamp", settings.fireflyClamp,
                    "Clamp indirect light to this (0 = off; the game uses 8)");
     app.add_option("-j,--threads", threads, "Worker threads (0 = all)");
+    app.add_flag("--direct-only", settings.directOnly, "Keep emission and direct light only");
     app.add_flag("--gpu", gpu, "Path trace on the GPU (Vulkan ray queries)");
     app.add_flag("--no-accumulation", gpuOptions.noAccumulation,
                  "GPU path tracer: independent frames, seed + zero-based frame index");
@@ -465,6 +473,10 @@ auto main(int argc, char** argv) -> int
     }
     if (!gpuOptions.gpuTimings.empty() && (!gpu || gpuOptions.dumpEvery > 0)) {
         SC_ERROR("--gpu-timings requires a GPU pipeline and --dump-every 0");
+        return EXIT_FAILURE;
+    }
+    if (settings.directOnly && (gpuOptions.radianceCache || gpuOptions.probes.enabled)) {
+        SC_ERROR("--direct-only requires the indirect cache and probes to be off");
         return EXIT_FAILURE;
     }
 

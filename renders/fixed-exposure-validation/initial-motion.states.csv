@@ -1,2 +1,0 @@
-frame,seed,spp,accumulated_frames,render_width,render_height,output_width,output_height,active_upscaler,upscaler_history_reset,frame_time_ms,dlss_exposure
-1,29,1,1,1280,720,1280,720,Off,0,16.666666,0

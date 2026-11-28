@@ -53,6 +53,8 @@ struct PathTracerSettings
     // Largest radiance one sample may add after the first bounce (0 = off).
     // Clamping removes caustic fireflies at the cost of some bias.
     float fireflyClamp = 0.0F;
+    // Evaluation: retain emission and paths with at most one scattering event.
+    bool directOnly = false;
 
     auto operator==(const PathTracerSettings&) const -> bool = default;
 };

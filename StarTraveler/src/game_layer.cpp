@@ -149,20 +149,6 @@ void GameLayer::onAttach()
         (void)applyDemoPreset(m_options, m_gameOptions.demoPreset);
         m_demoPreset = m_gameOptions.demoPreset;
     }
-    if (m_gameOptions.rehearsalSeconds > 0.0F) {
-        ImGui::GetIO().IniFilename = nullptr;  // Do not save the temporary recording layout.
-        m_options.gpuBudgetMs = 0.0F;
-        m_options.tracer.samplesPerPixel = 1;
-        m_options.tracer.seed = 29;
-        m_options.tracer.autoExposure = false;
-        m_options.tracer.exposure = 1.0F;
-        m_options.tracer.toneMapper = ToneMapper::Aces;
-        m_options.tracer.fireflyClamp = 0.0F;
-        m_options.gpuRender.frameTimeMs = 1000.0F / 60.0F;
-        m_options.gpuRender.effects = {};
-        m_options.particles = false;
-        m_options.spaceDust = false;
-    }
     resetCamera();
     if (!m_scenePath.empty()) {
         openScene(m_scenePath);
@@ -466,71 +452,6 @@ void GameLayer::updateCamera()
     }
 }
 
-void GameLayer::updateRehearsal()
-{
-    if (!usingGpu() || !m_ship.isValid()) {
-        throw std::runtime_error("Window rehearsal requires a GPU renderer and a ship");
-    }
-    // Warm up the real window before starting the route; cap stalls out of flight physics.
-    if (m_frameCount < 16) {
-        return;
-    }
-    const int phase = static_cast<int>(m_rehearsalTime / m_gameOptions.rehearsalSeconds);
-    if (phase >= 7) {
-        SC_INFO("Rehearsal complete: seven automatic windowed phases");
-        Application::get().close();
-        return;
-    }
-    const bool mirror = phase == 3 || phase == 4;
-    const bool star = phase >= 5;
-    if (phase != m_rehearsalPhase) {
-        m_rehearsalPhase = phase;
-        m_options.gpuRender.upscaling.upscaler =
-            (phase == 2 || phase == 4 || phase == 6) ? Upscaler::DlssRr : Upscaler::Dlss;
-        m_options.gpuRender.upscaling.quality = UpscalerQuality::Quality;
-        m_options.gpuRender.upscaling.dlssPreset = DlssPreset::K;
-        m_options.gpuRender.upscaling.dlssExposure = 1.0F;
-        m_options.gpuRender.traceResolution =
-            phase == 1 ? TraceResolution::Half : TraceResolution::Full;
-        ShipComponent state;
-        state.yaw = star ? -175.0F : -90.0F;
-        state.pitch = star ? 15.0F : 0.0F;
-        m_ship.patch<ShipComponent>([&](auto& current) { current = state; });
-        m_ship.patch<TransformComponent>([&](auto& transform) {
-            transform.translation = mirror ? Vec3(-3.0F, 5.0F, -15.0F) : Vec3(0.0F);
-            transform.rotation = ShipSystem::orientation(state.yaw, state.pitch);
-        });
-        setViewMode(mirror ? ViewMode::Free : ViewMode::Pilot);
-        if (mirror) {
-            m_camera.setVerticalFov(70.0F);
-            m_camera.setPosition({-3.0F, 8.0F, -25.0F});
-            m_camera.setRotation(-89.0F, 0.0F);
-        }
-        m_gpuRenderer->resetAccumulation();
-        SC_INFO("Rehearsal phase {}: {} / {} / Quality / automatic flight", phase,
-                mirror ? "mirror-glass" : (star ? "star-turn" : "cockpit-anvil"),
-                enumToString(m_options.gpuRender.upscaling.upscaler));
-    }
-    const float dt = std::clamp(Application::get().deltaTime(), 0.0F, 0.1F);
-    const float local = m_rehearsalTime - phase * m_gameOptions.rehearsalSeconds;
-    // End each pass with a still interval, making history settling visible.
-    if (local < m_gameOptions.rehearsalSeconds * 0.8F) {
-        if (mirror) {
-            const Vec3 step = Vec3(0.25F, 0.0F, -0.75F) * dt;
-            m_camera.setPosition(m_camera.position() + step);
-            m_ship.patch<TransformComponent>([&](auto& t) { t.translation += step; });
-        } else {
-            const float turn = (star ? 7.5F : -2.5F) * dt;
-            const ShipInput controls{.thrust = {0.0F, 0.0F, 0.01F},
-                                     .look = {turn / m_ships.settings.lookSensitivity, 0.0F}};
-            const PhysicsWorld physics = PhysicsWorld::build(m_scene);
-            (void)m_ships.update(m_scene, m_ship, physics, controls, dt);
-            m_ships.attachCamera(m_camera, m_ship);
-        }
-    }
-    m_rehearsalTime += dt;
-}
-
 void GameLayer::updateParticles(float deltaSeconds)
 {
     m_particles.update(m_scene, deltaSeconds);
@@ -740,62 +661,24 @@ void GameLayer::buildDefaultLayoutIfNeeded()
 
 void GameLayer::onUIRender()
 {
-    const bool rehearsal = m_gameOptions.rehearsalSeconds > 0.0F;
-    if (rehearsal) {
-        updateRehearsal();
-    } else {
-        buildDefaultLayoutIfNeeded();
-        updateMouseCapture();
-        handleShortcuts();
-        updateCamera();
-    }
+    buildDefaultLayoutIfNeeded();
+    updateMouseCapture();
+    handleShortcuts();
+    updateCamera();
     if (!m_paused) {
         updateParticles(Application::get().deltaTime());
     }
 
     drawViewport();
-    if (rehearsal) {
-        const int sample = static_cast<int>(m_rehearsalTime);
-        if (sample != m_rehearsalSample && m_rehearsalPhase >= 0) {
-            m_rehearsalSample = sample;
-            const Vec3 p = m_camera.position();
-            SC_INFO("Rehearsal sample: t={:.2f} phase={} camera=({:.3f},{:.3f},{:.3f}) "
-                    "yaw={:.2f} active={} internal={}x{} output={}x{} "
-                    "dlss_exposure={} tone_exposure={} auto_exposure={} temporal_ms={:.6f} "
-                    "tone={} spp={} trace={} seed={} effects_off={}", m_rehearsalTime,
-                    m_rehearsalPhase, p.x, p.y, p.z, m_camera.yaw(),
-                    enumToString(m_gpuRenderer->activeUpscaler()),
-                    m_gpuRenderer->renderWidth(), m_gpuRenderer->renderHeight(),
-                    m_viewport.size.x, m_viewport.size.y,
-                    m_options.gpuRender.upscaling.dlssExposure,
-                    m_options.tracer.exposure, m_options.tracer.autoExposure,
-                    m_options.gpuRender.frameTimeMs, enumToString(m_options.tracer.toneMapper),
-                    m_options.tracer.samplesPerPixel,
-                    m_options.gpuRender.traceResolution == TraceResolution::Half ? "Half" : "Full",
-                    m_options.tracer.seed, m_options.gpuRender.effects == EffectSettings{});
-        }
-    }
-    if (!rehearsal) {
-        drawToolsPanel();
-        drawRenderPanel();
-        drawStatusPanel();
-        drawHierarchyPanel();
-        drawInspectorPanel();
-        drawLayersPanel();
-        drawFileDialog();
-    }
+    drawToolsPanel();
+    drawRenderPanel();
+    drawStatusPanel();
+    drawHierarchyPanel();
+    drawInspectorPanel();
+    drawLayersPanel();
+    drawFileDialog();
 
     ++m_frameCount;
-    if (m_gameOptions.demoPreset > 0 && m_frameCount == 24 && usingGpu()) {
-        SC_INFO("Demo state: preset={} matched={} pipeline={} active={} output={}x{} "
-                "internal={}x{} tone_exposure={} auto_exposure={} spp={} overlay={}",
-                m_demoPreset, matchesDemoPreset(m_options, m_demoPreset),
-                enumToString(gpuPipeline()), enumToString(m_gpuRenderer->activeUpscaler()),
-                m_viewport.size.x, m_viewport.size.y,
-                m_gpuRenderer->renderWidth(), m_gpuRenderer->renderHeight(),
-                m_options.tracer.exposure, m_options.tracer.autoExposure,
-                m_options.tracer.samplesPerPixel, m_showDemoOverlay);
-    }
     if (m_gameOptions.exitAfterFrames != 0 &&
         m_frameCount >= m_gameOptions.exitAfterFrames) {
         if (!m_gameOptions.screenshotPath.empty()) {
@@ -837,19 +720,7 @@ void GameLayer::drawHud(Vec2 origin)
         draw->AddLine({center.x, center.y - 12}, {center.x, center.y - 4}, white, 1.5F);
         draw->AddLine({center.x, center.y + 4}, {center.x, center.y + 12}, white, 1.5F);
     }
-    if (m_gameOptions.rehearsalSeconds > 0.0F) {
-        const std::string label = std::format(
-            "AUTO FLIGHT {}/7 | {} {} | {} Quality {} | exposure 1 | illustrative",
-            std::max(0, m_rehearsalPhase) + 1,
-            m_rehearsalPhase >= 5 ? "Star" :
-                (m_rehearsalPhase == 3 || m_rehearsalPhase == 4 ? "Mirror/glass" : "Cockpit"),
-            m_options.gpuRender.traceResolution == TraceResolution::Half ? "Half" : "Full",
-            enumToString(m_options.gpuRender.upscaling.upscaler),
-            m_options.gpuRender.upscaling.upscaler == Upscaler::Dlss ? "K" : "RR model");
-        draw->AddRectFilled({origin.x, origin.y + 40.0F},
-                            {origin.x + size.x, origin.y + 69.0F}, IM_COL32(0, 0, 0, 200));
-        draw->AddText({origin.x + 12.0F, origin.y + 47.0F}, white, label.c_str());
-    } else if (!m_captured && !m_paused && m_toolKind == ToolKind::None) {
+    if (!m_captured && !m_paused && m_toolKind == ToolKind::None) {
         const char* prompt = "Click to fly";
         const ImVec2 promptSize = ImGui::CalcTextSize(prompt);
         const ImVec2 corner(center.x - promptSize.x * 0.5F, center.y + 24.0F);
@@ -881,7 +752,7 @@ void GameLayer::drawHud(Vec2 origin)
                         IM_COL32(0, 0, 0, 120), 4.0F);
     draw->AddText(corner, white, text.c_str());
 
-    if (m_showDemoOverlay && m_gameOptions.rehearsalSeconds <= 0.0F) {
+    if (m_showDemoOverlay) {
         const bool gpu = usingGpu();
         const bool matched = matchesDemoPreset(m_options, m_demoPreset);
         std::string profile = matched
@@ -971,17 +842,8 @@ void GameLayer::drawPauseMenu(Vec2 origin, std::uint32_t platformViewport)
 
 void GameLayer::drawViewport()
 {
-    ImGuiWindowFlags flags = 0;
-    if (m_gameOptions.rehearsalSeconds > 0.0F) {
-        const ImGuiViewport* viewport = ImGui::GetMainViewport();
-        ImGui::SetNextWindowPos(viewport->WorkPos);
-        ImGui::SetNextWindowSize(viewport->WorkSize);
-        ImGui::SetNextWindowDockID(0);
-        flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
-                ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings;
-    }
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0F, 0.0F));
-    ImGui::Begin("Viewport", nullptr, flags);
+    ImGui::Begin("Viewport");
 
     const ImVec2 available = ImGui::GetContentRegionAvail();
     const ImVec2 origin = ImGui::GetCursorScreenPos();

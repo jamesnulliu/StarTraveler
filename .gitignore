@@ -31,9 +31,3 @@ imgui.ini
 /renders/
 
 /.tmp
-
-# Local team handoff archives and staging
-/handoff/
-/.handoff-build/
-/.final-materials-build/
-/.chart-data-*/

@@ -39,7 +39,7 @@ auto main(int argc, char** argv) -> int
     CLI::App app{"Prepare initial/end evaluation scenes with the game's pilot-view ship"};
     std::filesystem::path scenePath, modelPath, output;
     std::vector<float> position{0.0F, 0.0F, 0.0F}, move{0.0F, 0.0F, 0.0F};
-    std::vector<float> freeCamera;
+    std::vector<float> freeCamera, lookAt;
     float viewYaw = -90.0F, viewPitch = 0.0F, fov = 70.0F;
     float yaw = -90.0F, pitch = 0.0F, turn = 0.0F;
     std::uint32_t frames = 81;
@@ -51,10 +51,11 @@ auto main(int argc, char** argv) -> int
     app.add_option("--pitch", pitch)->check(CLI::Range(-89.0F, 89.0F));
     app.add_option("--move", move)->expected(3);
     app.add_option("--turn", turn, "Yaw degrees per update, as --turn-entity Ship");
-    app.add_option("--frames", frames)->check(CLI::Range(2U, 100000U));
-    app.add_option("--free-camera", freeCamera)->expected(3);
-    app.add_option("--view-yaw", viewYaw);
-    app.add_option("--view-pitch", viewPitch)->check(CLI::Range(-89.0F, 89.0F));
+    app.add_option("--frames", frames)->check(CLI::Range(1U, 100000U));
+    auto* freeView = app.add_option("--free-camera", freeCamera)->expected(3);
+    auto* target = app.add_option("--look-at", lookAt)->expected(3)->needs(freeView);
+    app.add_option("--view-yaw", viewYaw)->excludes(target);
+    app.add_option("--view-pitch", viewPitch)->check(CLI::Range(-89.0F, 89.0F))->excludes(target);
     app.add_option("--fov", fov)->check(CLI::Range(1.0F, 179.0F));
     CLI11_PARSE(app, argc, argv);
     try {
@@ -83,7 +84,11 @@ auto main(int argc, char** argv) -> int
         ships.attachCamera(camera, ship);
         if (freeCamera.size() == 3) {
             camera.setPosition(Vec3(freeCamera[0], freeCamera[1], freeCamera[2]));
-            camera.setRotation(viewYaw, viewPitch);
+            if (lookAt.size() == 3) {
+                camera.lookAt({lookAt[0], lookAt[1], lookAt[2]});
+            } else {
+                camera.setRotation(viewYaw, viewPitch);
+            }
             camera.setVerticalFov(fov);
         }
         const std::string initialCamera = cameraJson(camera);

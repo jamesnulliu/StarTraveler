@@ -1,2 +1,0 @@
-# Optional: only for real-window presentation recordings, not formal evaluation.
-imageio-ffmpeg==0.8.1

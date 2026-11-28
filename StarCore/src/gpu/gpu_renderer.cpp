@@ -386,6 +386,7 @@ auto GpuRenderer::needsReset(const RenderScene& scene, const Camera& camera,
     case GpuPipeline::Raster:
         // Frames are tone mapped from the average, display settings may change.
         return scene.version != m_lastVersion || cameraMoved ||
+               settings.directOnly != m_lastSettings.directOnly ||
                settings.instanceMask != m_lastSettings.instanceMask ||
                options.shadows != m_lastShadows;
     case GpuPipeline::Hybrid:
@@ -413,6 +414,9 @@ void GpuRenderer::recordPathTracing(VkCommandBuffer commandBuffer, std::uint32_t
     std::uint32_t flags = 0;
     if (settings.mode == RenderMode::Preview) {
         flags |= kFlagPreview;
+    }
+    if (settings.directOnly) {
+        flags |= gpu::kFlagDirectOnly;
     }
     if (settings.nextEventEstimation) {
         flags |= kFlagNextEvent;

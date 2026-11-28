@@ -20,6 +20,7 @@ layout(set = 0, binding = 3, r32ui) uniform writeonly uimage2D entityIds;
 const uint kFlagPreview = 1u;
 const uint kFlagNextEvent = 2u;
 const uint kFlagWriteIds = 8u;
+const uint kFlagDirectOnly = 256u;
 
 /** gpu::PathTraceParams (112 bytes). */
 layout(push_constant) uniform Params
@@ -57,6 +58,11 @@ vec3 skyAmbient()
 uint maxBounces()
 {
     return params.frame.w;
+}
+
+bool directOnly()
+{
+    return (params.options.x & kFlagDirectOnly) != 0u;
 }
 
 bool nextEventEnabled()

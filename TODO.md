@@ -77,17 +77,17 @@ time; what is missing is switching them fast and showing which one is on.
   `docs/building.md`. MinGW is not checked: say so there.
 - [x] Demo presets: keys 1-7 set the Render panel's options in one press, while
   flying as well: 1 raster, no rays; 2 hybrid, Half, shadow maps; 3 hybrid, Half
-  (the default); 4 hybrid, Full; 5 hybrid, Half, irradiance probes; 6 DLSS-RR;
-  7 path tracing (the reference; it restarts whenever anything moves). The number
-  keys are free (`game_layer.cpp` takes WASD, Space, Ctrl, Shift, C, T, Esc and
-  Ctrl+N/O/S/D).
-- [x] An overlay in a corner of the view: the preset's name, the GPU time per frame
-  and the trace pass's (`gpuTimeMs()`, `traceTimeMs()`, shown in the Render panel
-  today); a key hides it.
-- [x] `docs/playing.md`: the keys and the overlay. F2 toggles live status;
-  actual dimensions/upscaler and fallback are shown. All seven CLI profiles and
-  screenshots pass, with 17 game cases / 286 assertions; physical keys remain
-  part of the person's final rehearsal. See [profiles](docs/demo-presets.md).
+  (traced shadows); 4 hybrid, Full; 5 hybrid, Half, irradiance probes; 6 DLSS-RR
+  (Quality); 7 path tracing. `--demo-preset N` starts with one (landed with
+  `feature/eval-denoiser`, PR #3).
+- [x] An overlay in a corner of the view: the preset's name ("Custom" after a
+  change by hand), the GPU time per frame and the trace pass's, the rendered and
+  output sizes and the upscaler running (fallbacks flagged). F2 or the Render panel
+  shows it; off by default.
+- [x] `docs/playing.md`: the keys and the overlay.
+- [ ] Decide what the presets do to the look: today they also switch the effects and
+  particles off and set exposure 1 with ACES (the evaluations' settings), so the
+  demo does not look like the game.
 - [ ] On the demo machine: each preset's frame rate at the demo's resolution, and a
   route through `blue_star.yaml` for the 10-15 minutes (the cockpit, the mirror,
   the glass, the glowing rocks).
@@ -97,43 +97,29 @@ live with their name and time on screen.
 
 ### `feature/eval-direct-light`
 
-The measuring scripts, which `feature/eval-denoiser` uses as well, then the first
-required part. Agree with the owner of `feature/eval-denoiser` on day 1 on the
-configuration file and the CSV's columns.
+The measuring scripts share the shot schema and first six CSV columns with the
+denoiser evaluation.
 
-- [ ] The scripts that made the progress figures, into `StarTraveler/tools/eval/`
-  (they are not in the repository yet: the branch starts by adding them), made
-  into a tool:
-  - shots and configurations in one file, so that `feature/eval-denoiser` adds its
-    own without touching the code. A shot: the scene, the camera and look-at, the
-    motion (`--turn-entity Ship 0.5`, `--move`, `--still`), the frames. A
-    configuration: a name and its `starcore-render` flags;
-  - nothing hard-coded: the exe, the scenes and the output folder are arguments;
-  - one command runs it all: the scenes (the game's ship put into `blue_star.yaml`
-    at a pose), the renders (3 seeds each, configurations alternated), the
-    references, FLIP, one CSV (shot, config, seed, gpu_ms, trace_ms, flip), plots
-    of error against GPU time, image crops;
-  - FLIP: NVIDIA's `flip-evaluator` (pip), LDR-FLIP on the PNGs.
-- [x] Three fixed shots with the moves `starcore-render` has (no keyframed camera
-  paths), in `StarTraveler/tools/eval/shots.json`: an 81-frame cockpit turn toward
-  the Anvil (a documented replacement: the old progress pose is unavailable), an
-  81-frame free-camera pass by mirror and glass, and a 61-frame fast cockpit turn
-  across the star. All motion updates are retained in the low-resolution smoke
-  runs; each explicit end pose matches its moving raw sample exactly.
-- [x] Two independent references per selected shot at its explicit end pose:
-  1280x720, `--gpu -f 2048 -s 4`, exactly 8192 spp, seeds 1009 and 2027.
-  Reference-pair LDR-FLIP: Anvil 0.01957, mirror/glass 0.00188, star turn 0.01926
-  (RTX 3070 Laptop, driver 610.91, 67 PPD). State/timestamp CSVs verify all 2048
-  frames; same-image scores are zero. These are empirical noise estimates, not
-  exact truth; avoid claims about differences below them. See measurement validation.
-- [ ] Direct light on the three shots, FLIP and GPU time per frame: the raster
+- [x] One command prepares scenes with the game's ship, alternates configurations across
+  three seeds, renders references, and writes NVIDIA LDR-FLIP on the PNGs, GPU timings,
+  a CSV, error/time plots and image crops. The JSON holds the shots and named render
+  flags. Executable, assets and output paths are CLI arguments.
+  See [reproduction instructions](docs/eval-direct-light.md).
+- [x] Three fixed-motion shots. The cockpit turns toward the Anvil from a reproducible
+  replacement for the progress shot's undocumented pose, the camera passes the mirror
+  and glass slowly, and the cockpit turns quickly past the star.
+- [x] Two independent GPU path-traced references per shot and mode at the last
+  pose, 8192 spp each (`--gpu -f 2048 -s 4`). Their pairwise FLIP estimates the
+  reference noise.
+- [x] Direct light on the three shots, FLIP and GPU time per frame: the raster
   pipeline (shadow maps, no rays), the hybrid pipeline with traced shadows and with
   shadow maps (both at Half and Full). Once on the whole image, once on direct light
-  alone: `-b 2` is direct light only in the path tracer (the tests use it so);
-  check that the hybrid pipeline honours it on a case whose answer is known before
-  trusting the numbers.
-- [ ] The table, the plot, crops and a paragraph for the report: what traced shadows
-  buy over shadow maps, and for how many milliseconds.
+  alone. The tool uses `-b 2 --direct-only` to exclude second-scatter light sampling
+  and checks direct illumination and an indirect mirror reflection before measuring.
+- [x] The generated report includes the table, plots, crops and paired results
+  for traced shadows versus shadow maps.
+- [x] Record the RTX 4090 timing results and the normal Windows desktop
+  conditions in [PR #2](https://github.com/jamesnulliu/StarTraveler/pull/2).
 
 Done when: one command reproduces the direct light's table and plot into an empty
 folder.
@@ -141,163 +127,44 @@ folder.
 ### `feature/eval-denoiser`
 
 The second required part: our denoiser (A-SVGF) against no denoising and against
-DLSS-RR, with the scripts of `feature/eval-direct-light` and its three shots. Until
-they land, run `starcore-render` by hand to choose the configurations.
+DLSS-RR, on the same three shots. Results and how to run it:
+[denoiser evaluation](docs/eval-denoiser.md) (RTX 3070 Laptop, driver 610.91, 1280x720,
+seeds 17/29/43).
 
-Preflight findings and environment gates: [denoiser preflight](docs/eval-denoiser-preflight.md).
-
-- [x] Resolve the preflight's build gates and verify an actual DLSS-RR render
-  (RTX 3070 Laptop, driver 610.91, 853x480 -> 1280x720, Quality, 16 frames).
-- [ ] Reject fallback upscalers and NGX evaluation errors in the shared evaluation tool.
-- [x] Prepare three shots and a local handoff runner (`run_shots.ps1`), using the
-  game's ship spawn, explicit end scenes, existing configuration groups, and the
-  shared CSV's required first six columns. Nine selected motion runs plus three
-  endpoint checks passed at 384x216; the runner rejects fallback/error/size and
-  frame-state mismatches. See [shot handoff](docs/evaluation-shots.md).
-- [ ] Integrate with the actual upstream evaluator when published: the checked
-  remote branch and main still point to `dde6e1b` after the full GPU regression;
-  no shared evaluation scripts are present. The smoke runner retains empty
-  `unmeasured_smoke` fields; the separate local formal runner has complete data.
-- [ ] Clear the GPU regression before the PR. All 50 GPU cases were executed:
-  49 passed, one ordinary-DLSS reconstruction mean-difference assertion failed
-  (0.509729445 versus <0.5), zero skipped; two isolated reruns reproduce it.
-  The prior glossy-pane timeout is resolved (passed in 155 s); 109 CPU/game cases
-  also pass. Diagnose the DLSS discrepancy without weakening the threshold.
-  See [full regression](docs/gpu-regression.md).
-  [Diagnosis](docs/dlss-diagnosis.md): linear/exposure probes localize the local
-  Performance bias to M; longer history and DLL 310.9.16 do not resolve it.
-  Explicit K passes original bounds and is selectable; defaults and the 81-run
-  Quality dataset remain unchanged. Fresh CPU: 109 pass; focused GPU: 6 pass /
-  1 unchanged M failure / 0 skipped. M remains open.
-  On 2026-11-26 the user accepted deferring further M investigation to continue
-  evaluation/presentation work; this is not a passing test or a changed threshold.
-- [x] Expose ordinary DLSS model selection (Default/K/M) in both CLIs and the
-  Render panel; validate K color preservation and safe history-resetting switches.
-- [x] Replay all three fixed paths at 1280x720 with Quality: Full+K, Half+K and
-  RR, seed 17. All nine runs pass; 669 frame states/timestamps and 66 artifact
-  hashes verify, and all nine endpoint PNGs equal the original formal outputs.
-  This is a functional rehearsal, not a new timing comparison. See
-  [presentation outline](docs/denoiser-demo.md).
-- [x] Run the real game window through a seven-phase automatic flight rehearsal
-  and record a silent backup: 139.9 s, 1280x720/30 fps, 4197 decoded frames.
-  Cockpit Full/Half/RR, mirror/glass K/RR and star-turn K/RR all appear; sampled
-  actual-upscaler logs reject fallback. Complete decoding, scene-change checks
-  and visual review of all seven phases pass. Actual viewport 1280x698,
-  internal 853x465; this illustrative recording is not formal timing data.
-  See [recording and chapters](docs/denoiser-demo.md#window-recording).
-- [ ] Verify manual keyboard/mouse flight and projection on the final presentation
-  setup. Native input control is unavailable in this agent session; automatic
-  windowed flight does not certify manual operation or a full spoken rehearsal.
-- [x] Establish an independent one-frame-sample baseline (`--gpu --no-accumulation`)
-  and comparison groups with matching internal/output sizes. The minimal protocol
-  check validates 11 configurations and confirms that `--no-temporal` also resets
-  DLSS history every frame; see [comparison protocol](docs/denoiser-protocol.md).
-- [x] Validate moving-frame counts and explicit end scenes: 80/80/60 updates for
-  the three shots; each final independent raw frame matches a standalone end
-  scene's one-sample render at the matching seed, byte for byte. Camera angles
-  can be restored without a look-at round trip (`--camera-angles`).
-- [x] Correct frame-associated GPU timing: per-slot submission IDs, chronological
-  latest getter, opt-in `--gpu-timings` CSV, setup marker, and no PNG dumping in
-  timing runs. GPU slot-drain and workload controls passed; capture does not
-  change image bytes. Appending 128 still frames preserves the 80-update endpoint
-  (verified with an independent raw sample). Frame 1 remains absent from PNG
-  dumps, but is in state/timing CSV; the complete still range starts at frame 82.
-- [x] Connect NVIDIA LDR-FLIP 1.7 at explicit 67 PPD on equal-sized sRGB PNGs;
-  known-image, PNG/array, and dimension checks passed. No resizing or extra gamma
-  conversion. Reference images, hashes, noise table, and 256 still-frame scores
-  are in `renders/measurement/`; [method and results](docs/measurement-validation.md).
-- [x] Define and validate the finite-capture lag rule: final 64-frame median,
-  half-tail drift <=3%, threshold 110% of terminal error, with at least 16
-  observations sustained through the captured suffix. Unsteady tails get no
-  settling-frame number. Synthetic curves and a real 128-still-frame case passed.
-- [x] Extend the lag capture with the unchanged convergence rule: both methods
-  pass a shared 512-still-frame Anvil capture at 384x216, seed 17. A-SVGF+DLSS
-  enters its terminal band at frame 101 (0.947% tail drift), RR at frame 47
-  (0.495%). The longer capture supersedes the earlier 128-frame estimates.
-
-- [x] The configurations, in `StarTraveler/tools/eval/denoiser-protocol.json`:
-  native-resolution ablation with independent raw paths, an unfiltered hybrid
-  control, temporal-only Full, spatial-only Full, and A-SVGF Full/Half, all with
-  upscaling Off. A separate end-to-end group compares A-SVGF Full/Half plus DLSS
-  with DLSS-RR, all at Quality and matching internal/output dimensions. RR traces
-  every internal pixel. Keep the two groups' tables separate: the raw path tracer
-  ignores upscaling, and no-temporal also resets DLSS, so mixing those rows into
-  the Quality table would confound the comparison. All 11 minimal static
-  configurations (including diagnostic controls) passed on the preflight GPU.
-- [x] Error and time: 81 controlled AC runs on the three shots, three seeds,
-  nine configurations; 27-row median/range summary. GPU isolation, actual
-  upscaler/history/dimensions, 6021 timestamps, artifact hashes and AC state
-  passed validation. Earlier mixed-power runs remain diagnostic only. Three
-  identical AC controls had 0.278% relative timing range. Independent-reference
-  re-scoring preserved within-group order. See [results](docs/denoiser-results.md).
-- [x] Lag: a shot that moves, then stands still (`--still N`, every frame written
-  with `--dump-every 1`); FLIP of each still frame against the reference at the end
-  pose. How many frames each denoiser takes to come within 10% of the error it
-  settles at. The local result is the one-seed, 384x216 Anvil capture above;
-  it is not a claim for every shot or production resolution.
-- [x] Validate production-resolution lag and seed variability before generalizing
-  the small one-shot lag result to 1280x720 or all camera paths.
-  The first production batch is diagnostic: endpoint mismatch at mirror/glass,
-  seed 29 (FLIP 0.0000583), plus a discovered wall-clock temporal input. Nine
-  completed captures/curves are retained; none are final fixed-step results.
-  [Protocol v3](docs/production-lag.md) fixes temporal input and DLSS K exposure.
-  All 18 production captures / 36 reference outcomes pass unchanged criteria
-  at a shared 512-frame horizon per shot, including exact motion endpoints.
-  Independent verification checks 10536 PNG hashes, 10554 state rows and
-  36 direct FLIP samples (maximum deviation 0). See [results](docs/production-lag-results.md).
-- [x] Expose fixed GPU temporal input (`--frame-ms`, default 0 = wall clock),
-  record actual `frame_time_ms`, and test queued versus per-frame readback
-  equivalence. 109 CPU/game cases and two focused GPU cases pass.
-- [x] Initialize previous object transforms on full scene uploads and verify
-  stationary first-frame motion plus real timed/dumped motion-prefix equality.
-  Frozen fixed-step renderer shows 372273 nonzero Motion-view pixels in the
-  stationary mirror first frame; the fix reduces this to zero. The new GPU
-  regression passes with synchronization validation, and 109 CPU/game cases pass.
-  Auto-exposure controls still differed, so that repair alone was insufficient.
-  With fixed K exposure1, the clean81/593-frame check now passes: all80 moving
-  PNGs, timed endpoint, reference controls and state/time/exposure checks agree.
-- [x] Integrate explicit fixed DLSS K exposure and complete the clean production
-  prefix/settling validation. `--dlss-exposure 1` is implemented in both CLIs,
-  Render panel and frame CSV. 109 CPU/game cases and three GPU regressions pass
-  with synchronization validation. Clean 81/593-frame preflight and complete
-  formal collection/audit pass under `renders/production-lag-fixed-exposure`.
-- [x] Revalidate the 27 historical Quality-group runs in a separate fixed-time,
-  fixed-exposure batch. All 27 runs, three calibration sequences, three exact
-  repeats and 54 independently recomputed reference scores pass unchanged limits.
-  See [new results](docs/quality-fixed-exposure-results.md).
-  Preserve the original AC results; native upscaler-Off/manual-exposure rows are
-  unaffected by this particular temporal-upscaler input.
-- [x] Crops for the report: fixed regions in all three shots, raw paths, native
-  A-SVGF Full, Full+DLSS, RR, and the reference; median-FLIP seeds are labelled.
-- [x] The local table, plots and report paragraph: [results](docs/denoiser-results.md)
-  include error/time tradeoffs, negative findings, reference sensitivity, lag
-  and scope limits. Shared upstream integration remains a separate open item.
+- [x] The configurations (`StarTraveler/tools/eval/denoiser-protocol.json`), in two
+  groups never mixed: native, no upscaler (independent path-traced frames with
+  `--gpu --no-accumulation`, the hybrid pipeline unfiltered, temporal only, spatial
+  only, A-SVGF Full and Half); and Quality (A-SVGF Full or Half + DLSS against
+  DLSS-RR, 853x480 to 1280x720). `--no-temporal` also resets DLSS's history, hence
+  the native group.
+- [x] Error and time on the three shots, with `check_measurement.py` (references)
+  and `run_formal.py` (the runs): A-SVGF Full has 48.6/3.6/48.6% less FLIP than the
+  unfiltered hybrid pipeline for 2.6/1.6/3.0 ms more; DLSS-RR has the least error in
+  the Quality group, for 1.8-2.4 ms more than A-SVGF Full + DLSS (with a fixed time
+  step and DLSS model K at a fixed exposure).
+- [x] Lag: 512 still frames after each shot's motion, FLIP of every one against both
+  references; the frame after which a method stays within 10% of its own final
+  error. DLSS-RR settles first on all three shots (47/1/131 frames against
+  116/286/172), A-SVGF Full + DLSS ends with less error on two of them.
+- [x] Crops (written by `run_formal.py`) and the table, plots and paragraph:
+  `docs/eval-denoiser.md`, summaries in `docs/eval-denoiser/`.
+- [x] Fixes the measurements needed: motion vectors of a new scene start still
+  (`[initial-motion]` test); `--frame-ms` (a fixed time step for the temporal
+  passes); `--dlss-preset` and `--dlss-exposure`; `--frame-stats`.
+- [ ] The settling and fixed-input Quality runs (`run_production_lag.py`,
+  `run_quality_revalidation.py`) only accept the renderer binary that passed their
+  preflight (`validate_temporal_prefix.py`), which starts from captures not in the
+  repository: make them run from a clean checkout, one command.
+- [ ] One tool for both evaluations: `direct_light.py` and `run_formal.py` share
+  the shots and `prepare_shot`, but not the runner or the CSV.
+- [ ] DLSS at Performance with the SDK's default model (M on an RTX 3070 Laptop,
+  driver 610.91) misses its color test (0.5097 against < 0.5); K passes, and the
+  whole suite passes on an RTX 4060 Laptop GPU (driver 617.42).
 
 Done when: one command (the shared scripts) reproduces the denoiser's table, plot
 and lag.
 
 ## After the branches (everyone)
-
-- [x] Local denoiser primary bibliography and AI assistance draft are linked
-  from the final report. Reconciliation with the original proposal, other
-  members' contributions and instructor-specific submission rules remains open.
-
-- [x] Prepare verified source/full team handoff archives, with Chinese receiving
-  instructions, runtime dependencies and an explicit open-issue list. See
-  [handoff](HANDOFF.md) and [open issues](OPEN_ISSUES.md).
-
-- [x] Step 5, local denoiser materials: integrate fixed-exposure production
-  results into the [final denoiser report](docs/final-denoiser-report.md),
-  dual-reference figures, editable 12-main-slide presentation with two Quality appendices and timed English script
-  with Chinese rehearsal cues. Preserve historical timings and all thresholds.
-  This completes the denoiser material integration, not the team's unified report.
-- [x] Step 6, automatic real-window rehearsal and backup: final fixed-exposure
-  configuration recorded and accepted. The new 139.87-second video, full decode,
-  141 configuration samples, per-phase motion/holds and visual review pass.
-  See [current recording](docs/final-window-rehearsal.md). Preserve the old take.
-- [ ] Step 6, person on the presentation setup: verify manual controls,
-  projection, spoken/audio timing and video playback. Automatic flight does not
-  certify these checks.
 
 - [ ] The final numbers: both evaluations on one machine, in one go.
 - [ ] The report: the question, each method and what it took to learn it

@@ -215,6 +215,10 @@ TEST_CASE("Sphere lights: NEE and BSDF sampling agree with the analytic result",
     REQUIRE(unclamped > kExpectedFloor * 1.2F);  // The mirror adds a caustic.
     REQUIRE(clamped < unclamped * 0.95F);
     REQUIRE(clamped > kExpectedFloor * 0.95F);
+    settings.directOnly = true;
+    settings.fireflyClamp = 0.0F;
+    REQUIRE_THAT(meanRadiance(withWall, kFloorRay, settings, 20000).r,
+                 WithinRel(withNee.r, 0.06F));
 }
 
 TEST_CASE("Mesh lights light as the sphere they approximate, by NEE or BSDF sampling",
